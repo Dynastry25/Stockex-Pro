@@ -1,0 +1,305 @@
+[25-Dec-2025 13:19:00 America/Boise] PHP Warning:  session_start(): Session cannot be started after headers have already been sent in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 9
+[25-Dec-2025 13:19:00 America/Boise] PHP Warning:  session_start(): Session cannot be started after headers have already been sent in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 4
+[25-Dec-2025 13:19:00 America/Boise] PHP Fatal error:  Uncaught Error: Call to undefined function is_logged_in() in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:70
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(5): require_login()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 70
+[25-Dec-2025 13:19:23 America/Boise] PHP Warning:  session_start(): Session cannot be started after headers have already been sent in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 9
+[25-Dec-2025 13:19:23 America/Boise] PHP Warning:  session_start(): Session cannot be started after headers have already been sent in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 4
+[25-Dec-2025 13:19:23 America/Boise] PHP Fatal error:  Uncaught Error: Call to undefined function is_logged_in() in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:70
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(5): require_login()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 70
+[25-Dec-2025 13:32:54 America/Boise] PHP Fatal error:  Uncaught Error: Call to undefined function is_logged_in() in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:70
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(5): require_login()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 70
+[25-Dec-2025 13:36:12 America/Boise] PHP Fatal error:  Uncaught Error: Call to undefined function is_logged_in() in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:70
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(5): require_login()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 70
+[25-Dec-2025 13:39:23 America/Boise] PHP Fatal error:  Uncaught Error: Call to undefined function is_logged_in() in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:70
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(5): require_login()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 70
+[25-Dec-2025 13:39:25 America/Boise] PHP Fatal error:  Uncaught Error: Call to undefined function is_logged_in() in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:70
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(5): require_login()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 70
+[25-Dec-2025 13:39:26 America/Boise] PHP Fatal error:  Uncaught Error: Call to undefined function is_logged_in() in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:70
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(5): require_login()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 70
+[25-Dec-2025 13:39:28 America/Boise] PHP Fatal error:  Uncaught Error: Call to undefined function is_logged_in() in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:70
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(5): require_login()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 70
+[25-Dec-2025 13:39:29 America/Boise] PHP Fatal error:  Uncaught Error: Call to undefined function is_logged_in() in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:70
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(5): require_login()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 70
+[25-Dec-2025 13:55:06 America/Boise] PHP Fatal error:  Uncaught Error: Call to undefined function is_logged_in() in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:70
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(5): require_login()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 70
+[25-Dec-2025 13:56:33 America/Boise] PHP Fatal error:  Uncaught Error: Call to undefined function is_logged_in() in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:70
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(5): require_login()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 70
+[25-Dec-2025 13:56:35 America/Boise] PHP Fatal error:  Uncaught Error: Call to undefined function is_logged_in() in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:70
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(5): require_login()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 70
+[25-Dec-2025 14:07:27 America/Boise] PHP Warning:  require_once(/home1/jrozqhmy/public_html/website_02cf635f/auth/config.php): Failed to open stream: No such file or directory in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 13
+[25-Dec-2025 14:07:27 America/Boise] PHP Fatal error:  Uncaught Error: Failed opening required '/home1/jrozqhmy/public_html/website_02cf635f/auth/config.php' (include_path='.:/opt/cpanel/ea-php84/root/usr/share/pear') in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:13
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(3): require_once()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 13
+[25-Dec-2025 14:07:29 America/Boise] PHP Warning:  require_once(/home1/jrozqhmy/public_html/website_02cf635f/auth/config.php): Failed to open stream: No such file or directory in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 13
+[25-Dec-2025 14:07:29 America/Boise] PHP Fatal error:  Uncaught Error: Failed opening required '/home1/jrozqhmy/public_html/website_02cf635f/auth/config.php' (include_path='.:/opt/cpanel/ea-php84/root/usr/share/pear') in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:13
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(3): require_once()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 13
+[25-Dec-2025 14:07:30 America/Boise] PHP Warning:  require_once(/home1/jrozqhmy/public_html/website_02cf635f/auth/config.php): Failed to open stream: No such file or directory in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 13
+[25-Dec-2025 14:07:30 America/Boise] PHP Fatal error:  Uncaught Error: Failed opening required '/home1/jrozqhmy/public_html/website_02cf635f/auth/config.php' (include_path='.:/opt/cpanel/ea-php84/root/usr/share/pear') in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:13
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(3): require_once()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 13
+[25-Dec-2025 14:07:31 America/Boise] PHP Warning:  require_once(/home1/jrozqhmy/public_html/website_02cf635f/auth/config.php): Failed to open stream: No such file or directory in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 13
+[25-Dec-2025 14:07:31 America/Boise] PHP Fatal error:  Uncaught Error: Failed opening required '/home1/jrozqhmy/public_html/website_02cf635f/auth/config.php' (include_path='.:/opt/cpanel/ea-php84/root/usr/share/pear') in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:13
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(3): require_once()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 13
+[25-Dec-2025 21:15:23 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function getCompanyDetails() in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php:38
+Stack trace:
+#0 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 38
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 720
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 720
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 720
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 720
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 795
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 797
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 806
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 807
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 834
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 795
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 797
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 806
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 807
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 834
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 795
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 797
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 806
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 807
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 834
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 795
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 797
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 806
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 807
+[25-Dec-2025 21:16:13 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 834
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined variable $current_user in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 634
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Trying to access array offset on null in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 634
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 720
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 720
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 720
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 720
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 795
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 797
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 806
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 807
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 834
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 795
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 797
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 806
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 807
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 834
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 795
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 797
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 806
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 807
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 834
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 795
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 797
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 806
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 807
+[25-Dec-2025 21:16:28 UTC] PHP Warning:  Undefined array key "type" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 834
+[25-Dec-2025 21:17:04 UTC] PHP Warning:  Undefined variable $current_user in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 634
+[25-Dec-2025 21:17:04 UTC] PHP Warning:  Trying to access array offset on null in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 634
+[25-Dec-2025 21:17:37 UTC] PHP Warning:  Undefined variable $current_user in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 634
+[25-Dec-2025 21:17:37 UTC] PHP Warning:  Trying to access array offset on null in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 634
+[25-Dec-2025 21:17:51 UTC] PHP Warning:  Undefined variable $current_user in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 634
+[25-Dec-2025 21:17:51 UTC] PHP Warning:  Trying to access array offset on null in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 634
+[25-Dec-2025 21:19:03 UTC] PHP Warning:  Undefined variable $current_user in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 634
+[25-Dec-2025 21:19:03 UTC] PHP Warning:  Trying to access array offset on null in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 634
+[25-Dec-2025 21:19:39 UTC] PHP Warning:  Undefined variable $current_user in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 634
+[25-Dec-2025 21:19:39 UTC] PHP Warning:  Trying to access array offset on null in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 634
+[25-Dec-2025 21:20:08 UTC] PHP Warning:  Undefined variable $current_user in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 634
+[25-Dec-2025 21:20:08 UTC] PHP Warning:  Trying to access array offset on null in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 634
+[25-Dec-2025 21:20:28 UTC] PHP Warning:  Undefined variable $current_user in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 634
+[25-Dec-2025 21:20:28 UTC] PHP Warning:  Trying to access array offset on null in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 634
+[25-Dec-2025 21:27:29 UTC] Database error in handleDocumentGeneration: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'full_name' in 'where clause'
+[25-Dec-2025 21:27:56 UTC] Database error in handleDocumentGeneration: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'full_name' in 'where clause'
+[25-Dec-2025 14:31:06 America/Boise] PHP Warning:  session_start(): Session cannot be started after headers have already been sent in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 9
+[25-Dec-2025 14:31:06 America/Boise] PHP Warning:  session_start(): Session cannot be started after headers have already been sent in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 4
+[25-Dec-2025 14:31:06 America/Boise] PHP Fatal error:  Uncaught Error: Call to undefined function is_logged_in() in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:70
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(5): require_login()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 70
+[25-Dec-2025 14:31:18 America/Boise] PHP Fatal error:  Uncaught Error: Call to undefined function is_logged_in() in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:70
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(5): require_login()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 70
+[25-Dec-2025 14:31:29 America/Boise] PHP Fatal error:  Uncaught Error: Call to undefined function is_logged_in() in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:70
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(5): require_login()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 70
+[25-Dec-2025 14:31:40 America/Boise] PHP Fatal error:  Uncaught Error: Call to undefined function is_logged_in() in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:70
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(5): require_login()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 70
+[25-Dec-2025 14:31:50 America/Boise] PHP Fatal error:  Uncaught Error: Call to undefined function is_logged_in() in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:70
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(5): require_login()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 70
+[25-Dec-2025 14:32:01 America/Boise] PHP Fatal error:  Uncaught Error: Call to undefined function is_logged_in() in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:70
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(5): require_login()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 70
+[25-Dec-2025 21:32:12 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function getCompanyDetails() in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php:38
+Stack trace:
+#0 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 38
+[25-Dec-2025 14:38:13 America/Boise] PHP Fatal error:  Uncaught Error: Call to undefined function is_logged_in() in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:70
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(5): require_login()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 70
+[25-Dec-2025 21:41:33 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'full_name' in 'where clause' in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php:160
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(160): PDOStatement->execute(Array)
+#1 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(46): processMessage('client info for...', Object(PDO))
+#2 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 160
+[25-Dec-2025 21:42:25 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'full_name' in 'where clause' in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php:160
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(160): PDOStatement->execute(Array)
+#1 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(46): processMessage('client info for...', Object(PDO))
+#2 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 160
+[25-Dec-2025 21:44:26 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'full_name' in 'where clause' in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php:160
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(160): PDOStatement->execute(Array)
+#1 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(46): processMessage('client info for...', Object(PDO))
+#2 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 160
+[25-Dec-2025 14:46:11 America/Boise] PHP Fatal error:  Uncaught Error: Call to undefined function is_logged_in() in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:70
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(5): require_login()
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 70
+[25-Dec-2025 21:52:18 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'full_name' in 'where clause' in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php:160
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(160): PDOStatement->execute(Array)
+#1 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(46): processMessage('client info for...', Object(PDO))
+#2 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 160
+[25-Dec-2025 21:52:33 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'full_name' in 'where clause' in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php:88
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(88): PDOStatement->execute(Array)
+#1 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(46): processMessage('Generate contra...', Object(PDO))
+#2 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 88
+[25-Dec-2025 22:20:30 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.securities' doesn't exist in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php:106
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(106): PDOStatement->execute(Array)
+#1 /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php(46): processMessage('Generate contra...', Object(PDO))
+#2 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 106
+[25-Dec-2025 22:30:06 UTC] Trades table error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 't.security_type' in 'field list'
+[25-Dec-2025 22:33:26 UTC] Trades table error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 't.security_type' in 'field list'
+[25-Dec-2025 22:41:41 UTC] Trades table error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 't.security_type' in 'field list'
+[25-Dec-2025 22:52:01 UTC] Trades table error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 't.security_type' in 'field list'
+[25-Dec-2025 22:56:20 UTC] Trades table error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 't.security_type' in 'field list'
+[25-Dec-2025 22:58:35 UTC] Trades table error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 't.security_type' in 'field list'
+[25-Dec-2025 23:17:27 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[25-Dec-2025 23:17:27 UTC] Client metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'client_id' in 'field list'
+[25-Dec-2025 23:17:36 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[25-Dec-2025 23:17:36 UTC] Client metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'client_id' in 'field list'
+[25-Dec-2025 23:17:36 UTC] PHP Deprecated:  htmlspecialchars(): Passing null to parameter #1 ($string) of type string is deprecated in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 1304
+[25-Dec-2025 23:17:59 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[25-Dec-2025 23:17:59 UTC] Client metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'client_id' in 'field list'
+[25-Dec-2025 23:17:59 UTC] PHP Warning:  Undefined array key "commission" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 466
+[25-Dec-2025 23:17:59 UTC] PHP Deprecated:  number_format(): Passing null to parameter #1 ($num) of type float is deprecated in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 466
+[25-Dec-2025 23:17:59 UTC] PHP Warning:  Undefined array key "vat" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 467
+[25-Dec-2025 23:17:59 UTC] PHP Deprecated:  number_format(): Passing null to parameter #1 ($num) of type float is deprecated in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 467
+[25-Dec-2025 23:17:59 UTC] PHP Warning:  Undefined array key "commission" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 468
+[25-Dec-2025 23:17:59 UTC] PHP Warning:  Undefined array key "vat" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 468
+[25-Dec-2025 23:17:59 UTC] PHP Warning:  Undefined array key "active_trading_clients" in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 473
+[25-Dec-2025 23:17:59 UTC] PHP Deprecated:  number_format(): Passing null to parameter #1 ($num) of type float is deprecated in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 473
+[25-Dec-2025 23:17:59 UTC] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php:466) in /home1/jrozqhmy/public_html/website_02cf635f/chatbot/chatbot_interface.php on line 56
+[25-Dec-2025 23:29:45 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[25-Dec-2025 23:30:05 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[25-Dec-2025 23:30:09 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[25-Dec-2025 23:30:16 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[25-Dec-2025 23:30:21 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[25-Dec-2025 23:40:59 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[25-Dec-2025 23:41:15 UTC] Trades table error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 't.security_type' in 'field list'
+[25-Dec-2025 23:41:16 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[25-Dec-2025 23:41:25 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[25-Dec-2025 23:41:29 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[25-Dec-2025 23:41:32 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[26-Dec-2025 13:13:32 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[26-Dec-2025 13:13:39 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[26-Dec-2025 13:14:00 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[26-Dec-2025 13:14:05 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[26-Dec-2025 13:14:15 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[26-Dec-2025 13:14:24 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[26-Dec-2025 13:14:41 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[26-Dec-2025 13:14:41 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[26-Dec-2025 13:24:30 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[26-Dec-2025 13:25:41 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[27-Dec-2025 06:09:29 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[27-Dec-2025 08:34:30 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[27-Dec-2025 08:34:33 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[27-Dec-2025 08:34:39 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[27-Dec-2025 08:35:23 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[27-Dec-2025 08:55:04 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[27-Dec-2025 18:46:27 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[27-Dec-2025 18:46:39 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[27-Dec-2025 21:09:08 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[27-Dec-2025 21:09:08 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[27-Dec-2025 21:09:08 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[27-Dec-2025 21:09:09 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[28-Dec-2025 09:22:02 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[29-Dec-2025 16:37:37 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[29-Dec-2025 16:37:43 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[29-Dec-2025 16:37:50 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[29-Dec-2025 16:37:54 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[29-Dec-2025 16:38:03 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[29-Dec-2025 16:38:20 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[29-Dec-2025 16:38:30 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[29-Dec-2025 16:38:30 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[29-Dec-2025 16:41:52 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'

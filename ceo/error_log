@@ -1,0 +1,31 @@
+[21-Dec-2025 08:24:09 UTC] PHP Fatal error:  Cannot redeclare function require_ceo() (previously declared in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:92) in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 311
+[21-Dec-2025 08:28:17 UTC] PHP Fatal error:  Cannot redeclare function require_ceo() (previously declared in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php:92) in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 311
+[21-Dec-2025 08:31:26 UTC] PHP Fatal error:  Cannot redeclare function is_logged_in() (previously declared in /home1/jrozqhmy/public_html/website_02cf635f/config/config.php:115) in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 60
+[21-Dec-2025 08:31:29 UTC] PHP Fatal error:  Cannot redeclare function is_logged_in() (previously declared in /home1/jrozqhmy/public_html/website_02cf635f/config/config.php:115) in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 60
+[21-Dec-2025 08:32:57 UTC] PHP Fatal error:  Cannot redeclare function is_logged_in() (previously declared in /home1/jrozqhmy/public_html/website_02cf635f/config/config.php:115) in /home1/jrozqhmy/public_html/website_02cf635f/auth/auth_middleware.php on line 60
+[21-Dec-2025 08:42:12 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.securities' doesn't exist in /home1/jrozqhmy/public_html/website_02cf635f/ceo/dashboard.php:85
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/ceo/dashboard.php(85): PDO->query('\n    SELECT t.*...')
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/ceo/dashboard.php on line 85
+[21-Dec-2025 08:47:40 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S22]: Column not found: 1054 Unknown column 's.security_name' in 'field list' in /home1/jrozqhmy/public_html/website_02cf635f/ceo/dashboard.php:85
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/ceo/dashboard.php(85): PDO->query('\n    SELECT t.*...')
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/ceo/dashboard.php on line 85
+[21-Dec-2025 09:24:35 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'gl.reference_id' in 'where clause' in /home1/jrozqhmy/public_html/website_02cf635f/ceo/dashboard.php:76
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/ceo/dashboard.php(76): PDO->query('\n    SELECT COU...')
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/ceo/dashboard.php on line 76
+[21-Dec-2025 09:27:09 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[HY000]: General error: 1267 Illegal mix of collations (utf8mb4_0900_ai_ci,IMPLICIT) and (utf8mb4_general_ci,IMPLICIT) for operation '=' in /home1/jrozqhmy/public_html/website_02cf635f/ceo/dashboard.php:76
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/ceo/dashboard.php(76): PDO->query('\n    SELECT COU...')
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/ceo/dashboard.php on line 76
+[21-Dec-2025 09:27:43 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[HY000]: General error: 1267 Illegal mix of collations (utf8mb4_0900_ai_ci,IMPLICIT) and (utf8mb4_general_ci,IMPLICIT) for operation '=' in /home1/jrozqhmy/public_html/website_02cf635f/ceo/dashboard.php:76
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/ceo/dashboard.php(76): PDO->query('\n    SELECT COU...')
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/ceo/dashboard.php on line 76
+[21-Dec-2025 13:16:46 UTC] Payment approval error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'ceo_approval_notes' in 'field list'

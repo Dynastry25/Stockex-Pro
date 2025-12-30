@@ -1,0 +1,691 @@
+/* Professional Stock Exchange System Styles */
+
+:root {
+  /* Updated to professional financial color palette */
+  --primary-color: #164e63;
+  --primary-light: #0891b2;
+  --secondary-color: #475569;
+  --accent-color: #ec4899;
+  --success-color: #059669;
+  --danger-color: #dc2626;
+  --warning-color: #d97706;
+  --info-color: #0284c7;
+
+  /* Added sophisticated neutral palette */
+  --background-primary: #ffffff;
+  --background-secondary: #ecfeff;
+  --background-muted: #f8fafc;
+  --text-primary: #475569;
+  --text-secondary: #64748b;
+  --text-muted: #94a3b8;
+  --border-color: #e2e8f0;
+  --border-light: #f1f5f9;
+
+  /* Professional shadows and spacing */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+}
+
+/* Professional typography and layout */
+body {
+  background-color: var(--background-muted);
+  font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+/* Enhanced navigation styling */
+.navbar {
+  background: var(--background-primary) !important;
+  border-bottom: 1px solid var(--border-color);
+  box-shadow: var(--shadow-sm);
+  padding: 0.5rem 0; /* Reduced from 1rem */
+}
+
+.navbar-brand {
+  font-weight: 700;
+  font-size: 1rem; /* Reduced from 1.25rem */
+  color: var(--primary-color) !important;
+  letter-spacing: -0.025em;
+}
+
+.navbar-nav .nav-link {
+  color: var(--text-primary) !important;
+  font-weight: 500;
+  padding: 0.25rem 0.75rem !important; /* Reduced padding */
+  border-radius: var(--radius-sm);
+  transition: all 0.2s ease;
+}
+
+.navbar-nav .nav-link:hover {
+  background-color: var(--background-secondary);
+  color: var(--primary-color) !important;
+}
+
+/* Professional card design */
+.card {
+  border: 1px solid var(--border-light);
+  box-shadow: var(--shadow-md);
+  border-radius: var(--radius-lg);
+  background: var(--background-primary);
+  transition: all 0.3s ease;
+}
+
+.card:hover {
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-1px);
+}
+
+.card-header {
+  background: linear-gradient(135deg, var(--background-secondary) 0%, var(--background-primary) 100%);
+  border-bottom: 1px solid var(--border-color);
+  font-weight: 600;
+  color: var(--text-primary);
+  padding: 0.75rem 1rem; /* Reduced from 1.25rem 1.5rem */
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+.card-body {
+  padding: 1rem; /* Reduced from 1.5rem */
+}
+
+/* Enhanced table styling */
+.table {
+  margin-bottom: 0;
+}
+
+.table th {
+  background: linear-gradient(135deg, var(--background-secondary) 0%, var(--background-muted) 100%);
+  border-top: none;
+  border-bottom: 2px solid var(--border-color);
+  font-weight: 600;
+  color: var(--text-primary);
+  padding: 1rem 0.75rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.table td {
+  padding: 0.875rem 0.75rem;
+  border-bottom: 1px solid var(--border-light);
+  color: var(--text-primary);
+}
+
+.table tbody tr:hover {
+  background-color: var(--background-secondary);
+}
+
+/* Professional button styling */
+.btn {
+  border-radius: var(--radius-md);
+  font-weight: 600;
+  padding: 0.625rem 1.25rem;
+  font-size: 0.875rem;
+  transition: all 0.2s ease;
+  border: none;
+  text-transform: none;
+  letter-spacing: 0.025em;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-light) 100%);
+  color: white;
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-primary:hover {
+  background: linear-gradient(135deg, var(--primary-light) 0%, var(--primary-color) 100%);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.btn-secondary {
+  background-color: var(--secondary-color);
+  color: white;
+}
+
+.btn-success {
+  background-color: var(--success-color);
+  color: white;
+}
+
+.btn-danger {
+  background-color: var(--danger-color);
+  color: white;
+}
+
+.btn-warning {
+  background-color: var(--warning-color);
+  color: white;
+}
+
+.btn-info {
+  background-color: var(--info-color);
+  color: white;
+}
+
+/* Enhanced form controls */
+.form-control,
+.form-select {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  transition: all 0.2s ease;
+  background-color: var(--background-primary);
+}
+
+.form-control:focus,
+.form-select:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px rgba(22, 78, 99, 0.1);
+}
+
+.form-label {
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+}
+
+/* Professional alert styling */
+.alert {
+  border-radius: var(--radius-lg);
+  border: none;
+  padding: 1rem 1.25rem;
+  font-weight: 500;
+  box-shadow: var(--shadow-sm);
+}
+
+.alert-success {
+  background: linear-gradient(135deg, #ecfdf5 0%, #f0fdf4 100%);
+  color: var(--success-color);
+  border-left: 4px solid var(--success-color);
+}
+
+.alert-danger {
+  background: linear-gradient(135deg, #fef2f2 0%, #fef2f2 100%);
+  color: var(--danger-color);
+  border-left: 4px solid var(--danger-color);
+}
+
+.alert-warning {
+  background: linear-gradient(135deg, #fffbeb 0%, #fefce8 100%);
+  color: var(--warning-color);
+  border-left: 4px solid var(--warning-color);
+}
+
+.alert-info {
+  background: linear-gradient(135deg, #eff6ff 0%, #f0f9ff 100%);
+  color: var(--info-color);
+  border-left: 4px solid var(--info-color);
+}
+/* In your style.css file */
+
+
+/* Professional dashboard cards */
+.dashboard-card {
+  transition: all 0.3s ease;
+  border: 1px solid var(--border-light);
+  background: var(--background-primary);
+}
+
+.dashboard-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-xl);
+}
+
+.stat-card {
+  background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-light) 100%);
+  color: white;
+  border-radius: var(--radius-xl);
+  border: none;
+  overflow: hidden;
+  position: relative;
+}
+
+.stat-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 100px;
+  height: 100px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 50%;
+  transform: translate(30px, -30px);
+}
+
+.stat-card .card-body {
+  padding: 2rem;
+  position: relative;
+  z-index: 1;
+}
+
+.stat-number {
+  font-size: 2rem;
+  font-weight: 800;
+  margin-bottom: 0.5rem;
+  line-height: 1;
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  opacity: 0.9;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Professional status badges */
+.badge {
+  font-weight: 600;
+  padding: 0.375rem 0.75rem;
+  border-radius: var(--radius-md);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.status-active {
+  background-color: var(--success-color);
+  color: white;
+}
+
+.status-cancelled {
+  background-color: var(--danger-color);
+  color: white;
+}
+
+.status-pending {
+  background-color: var(--warning-color);
+  color: white;
+}
+
+.status-settled {
+  background-color: var(--info-color);
+  color: white;
+}
+
+/* Enhanced login page design */
+.login-container {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-light) 50%, var(--accent-color) 100%);
+  position: relative;
+
+    /* Existing styles, e.g., background, padding, box-shadow */
+   
+
+}
+
+.login-container::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grid" width="10" height="10" patternUnits="userSpaceOnUse"><path d="M 10 0 L 0 0 0 10" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/></pattern></defs><rect width="100" height="100" fill="url(%23grid)"/></svg>');
+}
+
+.login-card {
+  width: 100%;
+  max-width: 520px;
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xl);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(10px);
+  background: rgba(255, 255, 255, 0.95);
+  position: relative;
+  z-index: 1;
+}
+
+.login-header {
+  background: transparent;
+  border-bottom: 1px solid var(--border-light);
+  text-align: center;
+  padding: 2.5rem 2rem 1.5rem;
+}
+
+.login-header h3 {
+  color: var(--primary-color);
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+
+.login-body {
+  padding: 1.5rem 2rem 2.5rem;
+}
+
+/* Professional data visualization */
+.chart-container {
+  background: var(--background-primary);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem;
+  box-shadow: var(--shadow-md);
+  border: 1px solid var(--border-light);
+}
+
+/* Enhanced responsive design */
+@media (max-width: 768px) {
+  .container-fluid {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .stat-number {
+    font-size: 1.75rem;
+  }
+
+  .card-body {
+    padding: 1rem;
+  }
+
+  .table-responsive {
+    font-size: 0.75rem;
+  }
+
+  .btn {
+    padding: 0.5rem 1rem;
+    font-size: 0.8125rem;
+  }
+}
+
+@media (max-width: 576px) {
+  .login-card {
+    margin: 1rem;
+    max-width: none;
+  }
+
+  .login-header,
+  .login-body {
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
+}
+
+/* Professional print styles */
+@media print {
+  .navbar,
+  .btn,
+  .no-print {
+    display: none !important;
+  }
+
+  .container-fluid {
+    margin: 0;
+    padding: 0;
+  }
+
+  .card {
+    border: 2px solid var(--border-color);
+    box-shadow: none;
+    break-inside: avoid;
+  }
+
+  .card-header {
+    background: var(--background-muted) !important;
+    -webkit-print-color-adjust: exact;
+    color-adjust: exact;
+  }
+
+  body {
+    background: white !important;
+    color: black !important;
+  }
+}
+
+/* Additional professional enhancements */
+.page-header {
+  background: linear-gradient(135deg, var(--background-primary) 0%, var(--background-secondary) 100%);
+  border-bottom: 1px solid var(--border-color);
+  padding: 1rem 0; /* Reduced from 2rem */
+  margin-bottom: 1rem; /* Reduced from 2rem */
+}
+
+.page-title {
+  color: var(--primary-color);
+  font-weight: 700;
+  font-size: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.page-subtitle {
+  color: var(--text-secondary);
+  font-size: 1rem;
+  margin-bottom: 0;
+}
+
+.section-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, var(--border-color) 50%, transparent 100%);
+  margin: 2rem 0;
+}
+
+/* Reduced spacing between cards and elements */
+.row > [class*="col-"] {
+  margin-bottom: 1rem; /* Reduced spacing between columns */
+}
+
+.mb-4 {
+  margin-bottom: 1rem !important; /* Override Bootstrap spacing */
+}
+
+.mb-3 {
+  margin-bottom: 0.75rem !important;
+}
+
+/* Sidebar Navigation Styles */
+.sidebar {
+  position: fixed;
+  top: 0;
+  left: -280px;
+  width: 280px;
+  height: 100vh;
+  background: linear-gradient(180deg, var(--primary-color) 0%, #0f172a 100%);
+  color: white;
+  z-index: 1050;
+  transition: left 0.3s ease;
+  overflow-y: auto;
+  box-shadow: var(--shadow-xl);
+}
+
+.sidebar.show {
+  left: 0;
+}
+
+.sidebar-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1040;
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.3s ease;
+}
+
+.sidebar-overlay.show {
+  opacity: 1;
+  visibility: visible;
+}
+
+.sidebar-header {
+  padding: 1.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-weight: 700;
+  font-size: 1.25rem;
+  color: white;
+}
+
+.sidebar-brand i {
+  font-size: 1.5rem;
+  color: var(--accent-color);
+}
+
+.sidebar-close {
+  background: none;
+  border: none;
+  color: white;
+  font-size: 1.25rem;
+  padding: 0.5rem;
+  border-radius: var(--radius-md);
+  transition: all 0.2s ease;
+}
+
+.sidebar-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.sidebar-content {
+  padding: 1rem 0;
+}
+
+.sidebar-nav {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.sidebar-nav .nav-item {
+  margin: 0.25rem 1rem;
+}
+
+.sidebar-nav .nav-link {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  color: rgba(255, 255, 255, 0.8);
+  text-decoration: none;
+  border-radius: var(--radius-md);
+  transition: all 0.2s ease;
+  font-weight: 500;
+}
+
+.sidebar-nav .nav-link:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  transform: translateX(4px);
+}
+
+.sidebar-nav .nav-link.active {
+  background: var(--accent-color);
+  color: white;
+}
+
+.sidebar-nav .nav-link i {
+  font-size: 1.125rem;
+  width: 20px;
+  text-align: center;
+}
+
+.nav-section {
+  margin: 1.5rem 1rem 0.5rem;
+}
+
+.nav-section-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.6);
+  padding: 0 1rem;
+}
+
+.sidebar-toggle {
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 1.25rem;
+  padding: 0.5rem;
+  border-radius: var(--radius-md);
+  transition: all 0.2s ease;
+}
+
+.sidebar-toggle:hover {
+  background: var(--background-secondary);
+  color: var(--primary-color);
+}
+
+/* Updated main content area to accommodate sidebar */
+.main-content {
+  transition: margin-left 0.3s ease;
+  min-height: calc(100vh - 80px);
+  padding-top: 1rem;
+}
+
+.main-content.sidebar-open {
+  margin-left: 280px;
+}
+
+/* Updated navbar to work with sidebar */
+.professional-navbar {
+  position: sticky;
+  top: 0;
+  z-index: 1030;
+  transition: margin-left 0.3s ease;
+}
+
+.professional-navbar.sidebar-open {
+  margin-left: 280px;
+}
+
+/* Enhanced responsive design for sidebar */
+@media (min-width: 992px) {
+  .sidebar {
+    left: 0;
+  }
+
+  .sidebar-overlay {
+    display: none;
+  }
+
+  .main-content {
+    margin-left: 280px;
+  }
+
+  .professional-navbar {
+    margin-left: 280px;
+  }
+
+  .sidebar-toggle {
+    display: none;
+  }
+}
+
+@media (max-width: 991px) {
+  .sidebar {
+    left: -280px;
+  }
+
+  .main-content {
+    margin-left: 0;
+  }
+
+  .professional-navbar {
+    margin-left: 0;
+  }
+}

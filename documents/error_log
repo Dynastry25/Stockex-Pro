@@ -1,0 +1,110 @@
+[15-Nov-2025 16:07:58 UTC] PHP Warning:  Undefined variable $success_message in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 135
+[15-Nov-2025 16:07:58 UTC] PHP Warning:  Undefined variable $error_message in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 142
+[15-Nov-2025 16:08:05 UTC] PHP Warning:  Undefined variable $success_message in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 135
+[15-Nov-2025 16:08:05 UTC] PHP Warning:  Undefined variable $error_message in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 142
+[15-Nov-2025 16:14:20 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function get_file_icon() in /home1/jrozqhmy/public_html/website_02cf635f/documents/folder_contents.php:96
+Stack trace:
+#0 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/documents/folder_contents.php on line 96
+[15-Nov-2025 16:14:36 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function get_file_icon() in /home1/jrozqhmy/public_html/website_02cf635f/documents/folder_contents.php:96
+Stack trace:
+#0 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/documents/folder_contents.php on line 96
+[15-Nov-2025 16:15:17 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function get_file_icon() in /home1/jrozqhmy/public_html/website_02cf635f/documents/folder_contents.php:96
+Stack trace:
+#0 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/documents/folder_contents.php on line 96
+[15-Nov-2025 16:18:32 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function get_file_icon() in /home1/jrozqhmy/public_html/website_02cf635f/documents/folder_contents.php:96
+Stack trace:
+#0 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/documents/folder_contents.php on line 96
+[15-Nov-2025 16:34:30 UTC] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/includes/header.php:1) in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 115
+[15-Nov-2025 16:34:30 UTC] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/includes/header.php:1) in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 116
+[15-Nov-2025 16:34:30 UTC] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/includes/header.php:1) in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 117
+[15-Nov-2025 16:34:30 UTC] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/includes/header.php:1) in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 118
+[15-Nov-2025 16:34:30 UTC] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/includes/header.php:1) in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 119
+[15-Nov-2025 16:34:30 UTC] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/includes/header.php:1) in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 120
+[15-Nov-2025 16:34:30 UTC] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/includes/header.php:1) in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 121
+[15-Nov-2025 16:34:45 UTC] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/includes/header.php:1) in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 115
+[15-Nov-2025 16:34:45 UTC] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/includes/header.php:1) in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 116
+[15-Nov-2025 16:34:45 UTC] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/includes/header.php:1) in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 117
+[15-Nov-2025 16:34:45 UTC] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/includes/header.php:1) in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 118
+[15-Nov-2025 16:34:45 UTC] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/includes/header.php:1) in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 119
+[15-Nov-2025 16:34:45 UTC] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/includes/header.php:1) in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 120
+[15-Nov-2025 16:34:45 UTC] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/includes/header.php:1) in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 121
+[15-Nov-2025 16:50:46 UTC] PHP Warning:  Undefined array key "user_role" in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 514
+[15-Nov-2025 16:50:46 UTC] PHP Warning:  Undefined array key "user_role" in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 514
+[15-Nov-2025 16:51:21 UTC] PHP Warning:  Undefined array key "user_role" in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 514
+[15-Nov-2025 17:03:40 UTC] Upload form submitted
+[15-Nov-2025 17:03:40 UTC] Form data - Folder: ghcgh, Department: Human Resources, Document: jhg
+[15-Nov-2025 17:03:40 UTC] Upload directory: /home1/jrozqhmy/public_html/website_02cf635f/documents/uploads/
+[15-Nov-2025 17:04:52 UTC] Upload form submitted
+[15-Nov-2025 17:04:52 UTC] Form data - Folder: hvhj, Department: Human Resources, Document: kubgu
+[15-Nov-2025 17:04:52 UTC] Upload directory: /home1/jrozqhmy/public_html/website_02cf635f/documents/uploads/
+[15-Nov-2025 17:07:02 UTC] Upload form submitted
+[15-Nov-2025 17:07:02 UTC] Form data - Folder: hfh, Department: Human Resources, Document: jgu
+[15-Nov-2025 17:07:02 UTC] Upload directory: /home1/jrozqhmy/public_html/website_02cf635f/documents/uploads/
+[15-Nov-2025 17:09:23 UTC] Upload form submitted
+[15-Nov-2025 17:09:23 UTC] Form data - Folder: jkn, Department: IT Department, Document: dfj
+[15-Nov-2025 17:09:23 UTC] Upload directory: /home1/jrozqhmy/public_html/website_02cf635f/documents/uploads/
+[15-Nov-2025 17:15:26 UTC] === UPLOAD PROCESS STARTED ===
+[15-Nov-2025 17:15:26 UTC] Form data received - Folder: 'kjjnuio', Department: 'Human Resources', Document: 'kopm'
+[15-Nov-2025 17:15:26 UTC] File info: Array
+(
+    [name] => Monthly report-1.pdf
+    [full_path] => Monthly report-1.pdf
+    [type] => application/pdf
+    [tmp_name] => /tmp/phpgdb5hlk26hg2epepo0s
+    [error] => 0
+    [size] => 11978
+)
+
+[15-Nov-2025 17:15:26 UTC] Upload directory path: /home1/jrozqhmy/public_html/website_02cf635f/documents/uploads/
+[15-Nov-2025 17:15:26 UTC] Directory exists: YES
+[15-Nov-2025 17:15:26 UTC] Directory writable: YES
+[15-Nov-2025 17:21:15 UTC] === UPLOAD PROCESS STARTED ===
+[15-Nov-2025 17:21:15 UTC] Form data received - Folder: 'ghdf', Department: 'Human Resources', Document: 'hfvh'
+[15-Nov-2025 17:21:15 UTC] File info: Array
+(
+    [name] => Safari-14.11.2025.pdf
+    [full_path] => Safari-14.11.2025.pdf
+    [type] => application/pdf
+    [tmp_name] => /tmp/phpk7fkv5tkvvrucJ8RHW6
+    [error] => 0
+    [size] => 76602
+)
+
+[15-Nov-2025 17:21:15 UTC] Upload directory path: /home1/jrozqhmy/public_html/website_02cf635f/documents/uploads/
+[15-Nov-2025 17:21:15 UTC] Directory exists: YES
+[15-Nov-2025 17:21:15 UTC] Directory writable: YES
+[15-Nov-2025 17:30:00 UTC] === UPLOAD PROCESS STARTED ===
+[15-Nov-2025 17:30:00 UTC] Form data received - Folder: 'hjfvh', Department: 'IT Department', Document: 'hj'
+[15-Nov-2025 17:30:00 UTC] File validation passed
+[15-Nov-2025 17:30:00 UTC] File info: Array
+(
+    [name] => SOR Historical Transactions Report-241.pdf
+    [full_path] => SOR Historical Transactions Report-241.pdf
+    [type] => application/pdf
+    [tmp_name] => /tmp/phpa9q9ehs1aeff27jxZwL
+    [error] => 0
+    [size] => 12081
+)
+
+[15-Nov-2025 17:30:00 UTC] Upload directory path: /home1/jrozqhmy/public_html/website_02cf635f/documents/uploads/
+[15-Nov-2025 17:30:00 UTC] Directory exists: YES
+[15-Nov-2025 17:30:00 UTC] Directory writable: YES
+[15-Nov-2025 17:34:37 UTC] === UPLOAD PROCESS STARTED ===
+[15-Nov-2025 17:34:37 UTC] Form data received - Folder: 'vhnfv', Department: 'Operations', Document: 'jg'
+[15-Nov-2025 17:34:37 UTC] File validation passed
+[15-Nov-2025 17:34:37 UTC] Upload directory path: /home1/jrozqhmy/public_html/website_02cf635f/documents/uploads/
+[15-Nov-2025 17:34:37 UTC] Directory exists: YES
+[15-Nov-2025 17:34:37 UTC] Directory writable: YES
+[15-Nov-2025 17:39:09 UTC] PHP Warning:  Undefined variable $success_message in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 135
+[15-Nov-2025 17:39:09 UTC] PHP Warning:  Undefined variable $error_message in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 142
+[15-Nov-2025 17:40:46 UTC] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/includes/header.php:1) in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 115
+[15-Nov-2025 17:40:46 UTC] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/includes/header.php:1) in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 116
+[15-Nov-2025 17:40:46 UTC] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/includes/header.php:1) in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 117
+[15-Nov-2025 17:40:46 UTC] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/includes/header.php:1) in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 118
+[15-Nov-2025 17:40:46 UTC] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/includes/header.php:1) in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 119
+[15-Nov-2025 17:40:46 UTC] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/includes/header.php:1) in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 120
+[15-Nov-2025 17:40:46 UTC] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/includes/header.php:1) in /home1/jrozqhmy/public_html/website_02cf635f/documents/department_docs.php on line 121
