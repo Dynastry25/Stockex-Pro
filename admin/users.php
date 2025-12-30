@@ -87,6 +87,32 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['create_user'])) {
             $mandate_enabled = ($role == 'system_admin') ? 1 : 0;
             
             if ($stmt->execute([$username, $email, $password_hash, $role, $full_name, $mandate_enabled])) {
+                $user_id = $db->lastInsertId();
+                
+                // Automatically create employee record for the new user
+                $name_parts = explode(' ', $full_name, 2);
+                $first_name = $name_parts[0];
+                $last_name = isset($name_parts[1]) ? $name_parts[1] : '';
+                
+                // Generate employee ID
+                $employee_id = strtoupper(substr($username, 0, 3)) . '-' . $user_id;
+                
+                // Get current admin user ID for created_by
+                $current_user_id = $_SESSION['user_id'];
+                
+                // Create employee record with default values
+                $emp_stmt = $db->prepare("
+                    INSERT INTO employees (
+                        employee_id, user_id, first_name, last_name, email, 
+                        department_id, position_id, hire_date, basic_salary, 
+                        employment_type, status, created_by
+                    ) VALUES (?, ?, ?, ?, ?, 1, 1, CURDATE(), 0.00, 'full_time', 'active', ?)
+                ");
+                
+                $emp_stmt->execute([
+                    $employee_id, $user_id, $first_name, $last_name, $email, $current_user_id
+                ]);
+                
                 show_alert('User created successfully.', 'success');
                 redirect('admin/users.php');
             } else {
@@ -259,6 +285,8 @@ include '../includes/header.php';
                             <option value="trader">Trader</option>
                             <option value="ceo">CEO</option>
                             <option value="finance_officer">Finance Officer</option>
+                            <option value="hr_manager">HR Manager</option>
+                            <option value="hr_officer">HR Officer</option>
                             <option value="system_admin">System Admin</option>
                         </select>
                     </div>

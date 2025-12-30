@@ -72,6 +72,22 @@
                         </a>
                     </li>
                     
+                    <!-- Leave Request - Available for all users -->
+                    <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>leave_request.php">
+                            <i class="bi bi-calendar-check"></i>
+                            <span>Request Leave</span>
+                        </a>
+                    </li>
+                    
+                    <!-- Your Performance Targets - Available for employees -->
+                    <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>my_targets.php">
+                            <i class="bi bi-bullseye"></i>
+                            <span>My Performance Targets</span>
+                        </a>
+                    </li>
+                    
                     <?php if ($current_user['role'] == 'system_admin' || $current_user['role'] == 'ceo'): ?>
                     <!-- Admin/CEO Features -->
                     <li class="nav-item">
@@ -160,7 +176,7 @@
                             <span>Payment</span>
                         </a>
                     </li>
-                       <li class="nav-item">
+                    <li class="nav-item">
                         <a class="nav-link" href="<?php echo BASE_URL; ?>finance/upload_mtp.php">
                             <i class="bi bi-cash-stack"></i>
                             <span>MTP Upload</span>
@@ -204,7 +220,7 @@
                     </li>
                     <?php endif; ?>
 
-                    <?php if ($current_user['role'] == 'human_resource' || $current_user['role'] == 'hr' || $current_user['role'] == 'system_admin'): ?>
+                    <?php if ($current_user['role'] == 'human_resource' || $current_user['role'] == 'hr' || $current_user['role'] == 'hr_manager' || $current_user['role'] == 'system_admin'): ?>
                     <!-- HR Department Features -->
                     <li class="nav-section">
                         <span class="nav-section-title">Human Resources</span>
@@ -234,9 +250,28 @@
                         </a>
                     </li>
                     <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>hr/targets.php">
+                            <i class="bi bi-bullseye"></i>
+                            <span>Performance Targets</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link" href="<?php echo BASE_URL; ?>hr/reports.php">
                             <i class="bi bi-graph-up"></i>
                             <span>HR Reports</span>
+                        </a>
+                    </li>
+                    <?php endif; ?>
+
+                    <?php if ($current_user['role'] == 'ceo' || $current_user['role'] == 'system_admin'): ?>
+                    <!-- CEO Features -->
+                    <li class="nav-section">
+                        <span class="nav-section-title">CEO Approvals</span>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/approvals_dashboard.php">
+                            <i class="bi bi-check-circle"></i>
+                            <span>Approval Dashboard</span>
                         </a>
                     </li>
                     <?php endif; ?>
@@ -273,6 +308,18 @@
                         <a class="nav-link" href="<?php echo BASE_URL; ?>reports/">
                             <i class="bi bi-house"></i>
                             <span>Reports Dashboard</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>reports/receipts.php">
+                            <i class="bi bi-receipt"></i>
+                            <span>Receipts</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>reports/invoices.php">
+                            <i class="bi bi-file-earmark-invoice"></i>
+                            <span>Invoices</span>
                         </a>
                     </li>
                 </ul>

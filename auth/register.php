@@ -97,7 +97,41 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 ");
                 
                 if ($insert_stmt->execute([$username, $email, $password_hash, $role_to_insert, $full_name])) {
-                    $success_message = 'Registration successful! Your account has been created but requires admin approval to enable your mandate. Please contact the system administrator.';
+                    // Get the newly created user ID
+                    $user_id = $db->lastInsertId();
+                    
+                    // Auto-create employee record
+                    try {
+                        $names = explode(' ', $full_name, 2);
+                        $first_name = $names[0] ?? '';
+                        $last_name = $names[1] ?? '';
+                        $employee_id = strtoupper(substr($username, 0, 3)) . '-' . $user_id;
+                        
+                        // Get default department (or create one if doesn't exist)
+                        $dept_stmt = $db->query("SELECT id FROM departments LIMIT 1");
+                        $dept = $dept_stmt->fetch();
+                        $dept_id = $dept ? $dept['id'] : 1;
+                        
+                        // Get default position (or create one if doesn't exist)
+                        $pos_stmt = $db->query("SELECT id FROM job_positions LIMIT 1");
+                        $pos = $pos_stmt->fetch();
+                        $pos_id = $pos ? $pos['id'] : 1;
+                        
+                        // Create employee record with minimal required info
+                        $emp_stmt = $db->prepare("
+                            INSERT INTO employees (employee_id, user_id, first_name, last_name, email, 
+                                                 department_id, position_id, hire_date, basic_salary, 
+                                                 employment_type, status, created_by)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), 0.00, 'full_time', 'active', ?)
+                        ");
+                        $emp_stmt->execute([$employee_id, $user_id, $first_name, $last_name, $email, 
+                                           $dept_id, $pos_id, $user_id]);
+                    } catch (Exception $e) {
+                        // Log but don't fail registration if employee creation fails
+                        error_log("Warning: Could not auto-create employee record for user {$user_id}: " . $e->getMessage());
+                    }
+                    
+                    $success_message = 'Registration successful! Your account has been created and you are now registered as an employee. You can access the system immediately.';
                     // Clear form data
                     $_POST = array();
                 } else {
@@ -113,7 +147,36 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     ");
                     
                     if ($insert_stmt->execute([$username, $email, $password_hash, $full_name])) {
-                        $success_message = 'Registration successful! Your account has been created with basic trader role. Please contact the system administrator to update your role and enable your mandate.';
+                        $user_id = $db->lastInsertId();
+                        
+                        // Also create employee record in fallback
+                        try {
+                            $names = explode(' ', $full_name, 2);
+                            $first_name = $names[0] ?? '';
+                            $last_name = $names[1] ?? '';
+                            $employee_id = strtoupper(substr($username, 0, 3)) . '-' . $user_id;
+                            
+                            $dept_stmt = $db->query("SELECT id FROM departments LIMIT 1");
+                            $dept = $dept_stmt->fetch();
+                            $dept_id = $dept ? $dept['id'] : 1;
+                            
+                            $pos_stmt = $db->query("SELECT id FROM job_positions LIMIT 1");
+                            $pos = $pos_stmt->fetch();
+                            $pos_id = $pos ? $pos['id'] : 1;
+                            
+                            $emp_stmt = $db->prepare("
+                                INSERT INTO employees (employee_id, user_id, first_name, last_name, email, 
+                                                     department_id, position_id, hire_date, basic_salary, 
+                                                     employment_type, status, created_by)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), 0.00, 'full_time', 'active', ?)
+                            ");
+                            $emp_stmt->execute([$employee_id, $user_id, $first_name, $last_name, $email, 
+                                               $dept_id, $pos_id, $user_id]);
+                        } catch (Exception $emp_e) {
+                            error_log("Warning: Could not auto-create employee record in fallback for user {$user_id}: " . $emp_e->getMessage());
+                        }
+                        
+                        $success_message = 'Registration successful! Your account has been created and you are now registered as an employee.';
                         $_POST = array();
                     } else {
                         $error_message = 'Registration failed due to database constraints. Please contact the system administrator.';

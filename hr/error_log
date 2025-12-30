@@ -1,0 +1,27 @@
+[15-Nov-2025 18:49:38 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function require_hr() in /home1/jrozqhmy/public_html/website_02cf635f/hr/leave_management.php:5
+Stack trace:
+#0 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/hr/leave_management.php on line 5
+[15-Nov-2025 18:50:30 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function require_hr() in /home1/jrozqhmy/public_html/website_02cf635f/hr/payroll.php:5
+Stack trace:
+#0 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/hr/payroll.php on line 5
+[16-Nov-2025 07:06:50 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'u.status' in 'field list' in /home1/jrozqhmy/public_html/website_02cf635f/hr/employees.php:21
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/hr/employees.php(21): PDO->query('\r\n    SELECT e....')
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/hr/employees.php on line 21
+[16-Nov-2025 09:17:59 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'terminated,
+        COUNT(*) as total,
+        ROUND((COUNT(CASE WHEN status =' at line 2 in /home1/jrozqhmy/public_html/website_02cf635f/hr/reports.php:20
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/hr/reports.php(20): PDO->query('\r\n    SELECT \r\n...')
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/hr/reports.php on line 20
+[28-Nov-2025 16:27:24 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'terminated,
+        COUNT(*) as total,
+        ROUND((COUNT(CASE WHEN status =' at line 2 in /home1/jrozqhmy/public_html/website_02cf635f/hr/reports.php:20
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/hr/reports.php(20): PDO->query('\r\n    SELECT \r\n...')
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/hr/reports.php on line 20
