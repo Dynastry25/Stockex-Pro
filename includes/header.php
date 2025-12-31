@@ -57,6 +57,8 @@
                                 break;
                             case 'hr':
                             case 'human_resource':
+                            case 'hr_manager':
+                            case 'hr_officer':
                                 $dashboard_link = 'hr/dashboard.php';
                                 break;
                             case 'ceo':
@@ -243,6 +245,12 @@
                             <span>Payroll</span>
                         </a>
                     </li>
+                      <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>hr/hr_payment_request.php">
+                            <i class="bi bi-folder-fill"></i>
+                            <span>HR PAY</span>
+                        </a>
+                    </li>
                     <li class="nav-item">
                         <a class="nav-link" href="<?php echo BASE_URL; ?>hr/recruitment.php">
                             <i class="bi bi-person-badge"></i>
@@ -287,12 +295,7 @@
                         </a>
                     </li>
                     
-                    <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>hr/hr_payment_request.php">
-                            <i class="bi bi-folder-fill"></i>
-                            <span>HR PAY</span>
-                        </a>
-                    </li>
+                  
                     
                     <!-- Reports -->
                     <li class="nav-section">

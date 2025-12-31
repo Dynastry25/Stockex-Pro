@@ -10,7 +10,7 @@ include '../includes/header.php';
 
 // Get statistics with proper error handling
 try {
-    $total_employees = $db->query("SELECT COUNT(*) FROM employees WHERE status = 'active'")->fetchColumn();
+    $total_employees = $db->query("SELECT COUNT(*) FROM users WHERE status = 'active' AND role IN ('trader', 'finance_officer', 'ceo', 'hr_manager', 'hr_officer')")->fetchColumn();
 } catch (Exception $e) {
     $total_employees = 0;
 }
@@ -73,7 +73,7 @@ try {
 // Check if we need to show database setup warning
 $show_setup_warning = false;
 try {
-    $db->query("SELECT 1 FROM employees LIMIT 1");
+    $db->query("SELECT 1 FROM users LIMIT 1");
 } catch (Exception $e) {
     $show_setup_warning = true;
 }
@@ -258,11 +258,12 @@ try {
                     <?php
                     try {
                         $stmt = $db->query("
-                            SELECT e.*, d.name as department_name, jp.title as position_title
-                            FROM employees e
-                            LEFT JOIN departments d ON e.department_id = d.id
-                            LEFT JOIN job_positions jp ON e.position_id = jp.id
-                            ORDER BY e.created_at DESC LIMIT 10
+                            SELECT u.*, d.name as department_name, jp.title as position_title
+                            FROM users u
+                            LEFT JOIN departments d ON u.department_id = d.id
+                            LEFT JOIN job_positions jp ON u.position_id = jp.id
+                            WHERE u.role IN ('trader', 'finance_officer', 'ceo', 'hr_manager', 'hr_officer')
+                            ORDER BY u.created_at DESC LIMIT 10
                         ");
                         $employees = $stmt->fetchAll();
                     } catch (Exception $e) {
@@ -280,7 +281,6 @@ try {
                                     <th>Department</th>
                                     <th>Position</th>
                                     <th>Status</th>
-                                    <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -294,16 +294,6 @@ try {
                                         <span class="badge bg-<?php echo ($employee['status'] ?? '') == 'active' ? 'success' : 'danger'; ?>">
                                             <?php echo ucfirst($employee['status'] ?? 'Unknown'); ?>
                                         </span>
-                                    </td>
-                                    <td>
-                                        <div class="btn-group btn-group-sm">
-                                            <a href="employee_details.php?id=<?php echo $employee['id']; ?>" class="btn btn-info">
-                                                <i class="bi bi-eye"></i>
-                                            </a>
-                                            <a href="#" class="btn btn-warning" data-bs-toggle="modal" data-bs-target="#editEmployeeModal<?php echo $employee['id']; ?>">
-                                                <i class="bi bi-pencil"></i>
-                                            </a>
-                                        </div>
                                     </td>
                                 </tr>
                                 <?php endforeach; ?>
@@ -335,7 +325,7 @@ try {
                             SELECT lr.*, e.first_name, e.last_name, e.employee_id,
                                    lt.name as leave_type
                             FROM leave_requests lr
-                            JOIN employees e ON lr.employee_id = e.id
+                            JOIN users e ON lr.employee_id = e.id
                             JOIN leave_types lt ON lr.leave_type_id = lt.id
                             ORDER BY lr.created_at DESC LIMIT 5
                         ");
@@ -465,11 +455,12 @@ try {
                     <?php
                     try {
                         $stmt = $db->query("
-                            SELECT first_name, last_name, date_of_birth
-                            FROM employees 
-                            WHERE MONTH(date_of_birth) = MONTH(CURDATE())
-                            AND DAY(date_of_birth) >= DAY(CURDATE())
-                            ORDER BY DAY(date_of_birth) ASC
+                            SELECT first_name, last_name, hire_date as date_of_birth
+                            FROM users 
+                            WHERE MONTH(hire_date) = MONTH(CURDATE())
+                            AND DAY(hire_date) >= DAY(CURDATE())
+                            AND role IN ('trader', 'finance_officer', 'ceo', 'hr_manager', 'hr_officer')
+                            ORDER BY DAY(hire_date) ASC
                             LIMIT 5
                         ");
                         $upcoming_birthdays = $stmt->fetchAll();
@@ -612,7 +603,7 @@ try {
                             <option value="">Select Manager</option>
                             <?php
                             try {
-                                $managers = $db->query("SELECT id, first_name, last_name FROM employees WHERE status='active'")->fetchAll();
+                                $managers = $db->query("SELECT id, first_name, last_name FROM users WHERE status='active' AND role IN ('hr_manager', 'ceo')")->fetchAll();
                                 foreach ($managers as $mgr): ?>
                                 <option value="<?php echo $mgr['id']; ?>">
                                     <?php echo htmlspecialchars($mgr['first_name'] . ' ' . $mgr['last_name']); ?>

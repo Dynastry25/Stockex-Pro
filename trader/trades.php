@@ -13,10 +13,10 @@ $error_message = '';
 // Get company details from database
 $company_stmt = $db->query("SELECT * FROM companies WHERE status = 'active' ORDER BY id LIMIT 1");
 $company = $company_stmt->fetch();
-$company_name = $company ? $company['company_name'] : 'Victory Financial Services LTD';
+$company_name = $company ? $company['company_name'] : 'Neovam LTD';
 $company_phone = $company ? $company['phone'] : '0767676767';
 $company_address = $company ? $company['address'] : 'P.O Box 675, Dar es Salaam, Tanzania';
-$company_email = $company ? $company['email'] : 'info@vfsl.co.tz';
+$company_email = $company ? $company['email'] : 'info@neovam.com';
 
 // Handle CSV export
 if (isset($_GET['export']) && $_GET['export'] == 'csv') {

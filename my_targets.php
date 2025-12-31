@@ -10,10 +10,10 @@ $page_title = 'My Performance Targets';
 
 // Get employee record for this user
 $emp_stmt = $db->prepare("
-    SELECT e.id as employee_id, e.first_name, e.last_name, d.name as department_name
-    FROM employees e
-    LEFT JOIN departments d ON e.department_id = d.id
-    WHERE e.user_id = ?
+    SELECT u.id as employee_id, u.first_name, u.last_name, d.name as department_name
+    FROM users u
+    LEFT JOIN departments d ON u.department_id = d.id
+    WHERE u.id = ? AND u.employee_id IS NOT NULL
     LIMIT 1
 ");
 $emp_stmt->execute([$user['id']]);

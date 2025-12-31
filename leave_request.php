@@ -17,7 +17,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     try {
         if (isset($_POST['request_leave'])) {
             // Get employee record for logged-in user (should always exist)
-            $emp_stmt = $db->prepare("SELECT id FROM employees WHERE user_id = ?");
+            $emp_stmt = $db->prepare("SELECT id FROM users WHERE id = ? AND employee_id IS NOT NULL");
             $emp_stmt->execute([$_SESSION['user_id']]);
             $employee = $emp_stmt->fetch();
             
@@ -107,7 +107,7 @@ try {
 
 // Get user's leave history
 try {
-    $emp_id_stmt = $db->prepare("SELECT id FROM employees WHERE user_id = ?");
+    $emp_id_stmt = $db->prepare("SELECT id FROM users WHERE id = ? AND employee_id IS NOT NULL");
     $emp_id_stmt->execute([$_SESSION['user_id']]);
     $emp = $emp_id_stmt->fetch();
     

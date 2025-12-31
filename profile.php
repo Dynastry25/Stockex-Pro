@@ -175,12 +175,12 @@ include 'includes/header.php';
             <div class="card-body">
                 <?php 
                 try {
-                    // Check if user is an employee by looking for employee record
+                    // Check if user is an employee by looking for employee_id in users table
                     $db = getDBConnection();
                     $emp_stmt = $db->prepare("
-                        SELECT e.id as employee_id 
-                        FROM employees e 
-                        WHERE e.user_id = ? 
+                        SELECT id as user_id, id as employee_id 
+                        FROM users 
+                        WHERE id = ? AND employee_id IS NOT NULL
                         LIMIT 1
                     ");
                     $emp_stmt->execute([$user['id']]);

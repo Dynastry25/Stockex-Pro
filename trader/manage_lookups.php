@@ -2,7 +2,7 @@
 require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
 
-require_admin();
+require_trader();
 require_mandate();
 
 $db = getDBConnection();

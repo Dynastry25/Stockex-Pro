@@ -16,17 +16,17 @@ if (!$employee_id) {
 // Fetch employee details
 try {
     $stmt = $db->prepare("
-        SELECT e.*,
+        SELECT u.*,
                d.name as department_name,
                jp.title as position_title,
-               u.full_name as created_by_name,
-               au.full_name as approved_by_name
-        FROM employees e
-        LEFT JOIN departments d ON e.department_id = d.id
-        LEFT JOIN job_positions jp ON e.position_id = jp.id
-        LEFT JOIN users u ON e.created_by = u.id
-        LEFT JOIN users au ON e.approved_by = au.id
-        WHERE e.id = ?
+               u_created.full_name as created_by_name,
+               u_approved.full_name as approved_by_name
+        FROM users u
+        LEFT JOIN departments d ON u.department_id = d.id
+        LEFT JOIN job_positions jp ON u.position_id = jp.id
+        LEFT JOIN users u_created ON u.created_by = u_created.id
+        LEFT JOIN users u_approved ON u.approved_by = u_approved.id
+        WHERE u.id = ?
     ");
     $stmt->execute([$employee_id]);
     $employee = $stmt->fetch();
@@ -187,7 +187,7 @@ include '../includes/header.php';
                             <div class="mb-3">
                                 <label class="form-label fw-bold">Basic Salary</label>
                                 <p class="form-control-plaintext">
-                                    <?php echo $employee['basic_salary'] ? number_format($employee['basic_salary'], 2) . ' ' . ($employee['currency'] ?? 'TZS') : 'N/A'; ?>
+                                    <?php echo $employee['salary'] ? number_format($employee['salary'], 2) . ' ' . ($employee['currency'] ?? 'TZS') : 'N/A'; ?>
                                 </p>
                             </div>
                         </div>

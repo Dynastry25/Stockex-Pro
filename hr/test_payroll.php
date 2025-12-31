@@ -50,17 +50,17 @@ if (isset($_POST['generate_payroll'])) {
 
             // Get employee basic salary and benefits
             $emp_stmt = $db->prepare("
-                SELECT e.basic_salary, e.currency,
+                SELECT u.salary, u.currency,
                        COALESCE(SUM(CASE WHEN eb.benefit_type IN ('allowance', 'bonus')
                                         THEN eb.amount ELSE 0 END), 0) as total_allowances,
                        COALESCE(SUM(CASE WHEN eb.benefit_type NOT IN ('allowance', 'bonus')
                                         THEN eb.amount ELSE 0 END), 0) as total_deductions
-                FROM employees e
-                LEFT JOIN employee_benefits eb ON e.id = eb.employee_id
+                FROM users u
+                LEFT JOIN employee_benefits eb ON u.id = eb.employee_id
                     AND eb.is_active = 1
                     AND (eb.end_date IS NULL OR eb.end_date >= ?)
-                WHERE e.id = ?
-                GROUP BY e.id
+                WHERE u.id = ?
+                GROUP BY u.id
             ");
             $emp_stmt->execute([$pay_period_start, $employee_id]);
             $employee = $emp_stmt->fetch();
@@ -68,7 +68,7 @@ if (isset($_POST['generate_payroll'])) {
             if ($employee) {
                 echo "Employee data found: " . json_encode($employee) . "\n";
 
-                $basic_salary = $employee['basic_salary'];
+                $basic_salary = $employee['salary'];
                 $total_allowances = $employee['total_allowances'];
                 $total_deductions = $employee['total_deductions'];
 

@@ -42,17 +42,18 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 try {
     $stmt = $db->query("
         SELECT lr.*, 
-               CONCAT(e.first_name, ' ', e.last_name) as employee_name,
-               e.employee_id as employee_code,
+               CONCAT(u.first_name, ' ', u.last_name) as employee_name,
+               u.full_name,
+               u.employee_id as employee_code,
                d.name as department_name, 
                jp.title as position_name,
                lt.name as leave_type_name,
                hr_user.full_name as hr_escalated_by_name,
                aw.hr_action_reason as escalation_reason
         FROM leave_requests lr
-        JOIN employees e ON lr.employee_id = e.id
-        JOIN departments d ON e.department_id = d.id
-        JOIN job_positions jp ON e.position_id = jp.id
+        JOIN users u ON lr.employee_id = u.id
+        JOIN departments d ON u.department_id = d.id
+        JOIN job_positions jp ON u.position_id = jp.id
         JOIN leave_types lt ON lr.leave_type_id = lt.id
         LEFT JOIN approval_workflows aw ON aw.entity_type = 'leave_request' AND aw.entity_id = lr.id
         LEFT JOIN users hr_user ON aw.hr_action_by = hr_user.id

@@ -115,17 +115,17 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 try {
     $targets_stmt = $db->query("
         SELECT pt.*, 
-               CONCAT(e.first_name, ' ', e.last_name) as employee_name,
+               CONCAT(u.first_name, ' ', u.last_name) as employee_name,
                jp.title as employee_position,
                d.name as department_name,
-               u.full_name as created_by_name,
+               uc.full_name as created_by_name,
                AVG(tr.rating) as avg_rating,
                COUNT(tr.id) as review_count
         FROM performance_targets pt
-        JOIN employees e ON pt.employee_id = e.id
-        JOIN departments d ON e.department_id = d.id
-        JOIN job_positions jp ON e.position_id = jp.id
-        LEFT JOIN users u ON pt.created_by = u.id
+        JOIN users u ON pt.employee_id = u.id
+        JOIN departments d ON u.department_id = d.id
+        JOIN job_positions jp ON u.position_id = jp.id
+        LEFT JOIN users uc ON pt.created_by = uc.id
         LEFT JOIN target_reviews tr ON pt.id = tr.target_id
         GROUP BY pt.id
         ORDER BY pt.created_at DESC
@@ -139,13 +139,13 @@ try {
 // Get employees for dropdown
 try {
     $emp_stmt = $db->query("
-        SELECT e.id, CONCAT(e.first_name, ' ', e.last_name) as name, 
+        SELECT u.id, CONCAT(u.first_name, ' ', u.last_name) as name, 
                jp.title as position, d.name as department
-        FROM employees e
-        JOIN departments d ON e.department_id = d.id
-        JOIN job_positions jp ON e.position_id = jp.id
-        WHERE e.status = 'active'
-        ORDER BY e.first_name, e.last_name
+        FROM users u
+        JOIN departments d ON u.department_id = d.id
+        JOIN job_positions jp ON u.position_id = jp.id
+        WHERE u.status = 'active'
+        ORDER BY u.first_name, u.last_name
     ");
     $employees = $emp_stmt->fetchAll();
 } catch (Exception $e) {

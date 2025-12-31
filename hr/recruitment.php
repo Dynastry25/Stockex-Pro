@@ -99,12 +99,11 @@ try {
         SELECT jp.*, d.name as department_name,
                COUNT(ja.id) as application_count,
                SUM(CASE WHEN ja.status = 'received' THEN 1 ELSE 0 END) as new_applications,
-               COALESCE(CONCAT(e.first_name, ' ', e.last_name), u.full_name) as created_by_name
+               u.full_name as created_by_name
         FROM job_positions jp
         JOIN departments d ON jp.department_id = d.id
         LEFT JOIN job_applications ja ON jp.id = ja.position_id
         LEFT JOIN users u ON jp.created_by = u.id
-        LEFT JOIN employees e ON u.id = e.user_id
         GROUP BY jp.id
         ORDER BY jp.created_at DESC
     ");
@@ -118,12 +117,11 @@ try {
 try {
     $applications_stmt = $db->query("
         SELECT ja.*, jp.title as position_title, d.name as department_name,
-               COALESCE(CONCAT(e.first_name, ' ', e.last_name), u.full_name) as interviewer_name
+               u.full_name as interviewer_name
         FROM job_applications ja
         JOIN job_positions jp ON ja.position_id = jp.id
         JOIN departments d ON jp.department_id = d.id
         LEFT JOIN users u ON ja.interviewer_id = u.id
-        LEFT JOIN employees e ON u.id = e.user_id
         ORDER BY ja.created_at DESC
         LIMIT 50
     ");

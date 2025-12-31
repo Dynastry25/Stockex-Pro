@@ -106,7 +106,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 UPDATE leave_requests 
                 SET status = 'cancelled' 
                 WHERE id = ? AND status = 'pending' AND employee_id IN (
-                    SELECT e.id FROM employees e WHERE e.id = ? 
+                    SELECT u.id FROM users u WHERE u.id = ? 
                     OR ? IN (SELECT user_id FROM users WHERE role IN ('hr_manager', 'hr_officer'))
                 )
             ");
@@ -155,7 +155,7 @@ if (isset($_GET['action']) && isset($_GET['id'])) {
                        approver.full_name as approved_by_name,
                        ceo_user.full_name as ceo_approved_by_name
                 FROM leave_requests lr
-                JOIN employees e ON lr.employee_id = e.id
+                JOIN users e ON lr.employee_id = e.id
                 JOIN departments d ON e.department_id = d.id
                 JOIN job_positions jp ON e.position_id = jp.id
                 JOIN leave_types lt ON lr.leave_type_id = lt.id
@@ -195,7 +195,7 @@ try {
                    ELSE lr.status
                END as display_status
         FROM leave_requests lr
-        JOIN employees e ON lr.employee_id = e.id
+        JOIN users e ON lr.employee_id = e.id
         JOIN departments d ON e.department_id = d.id
         JOIN job_positions jp ON e.position_id = jp.id
         JOIN leave_types lt ON lr.leave_type_id = lt.id
@@ -213,9 +213,9 @@ try {
 try {
     $emp_stmt = $db->query("
         SELECT e.id, e.employee_id, CONCAT(e.first_name, ' ', e.last_name) as full_name, d.name as department_name
-        FROM employees e
+        FROM users e
         JOIN departments d ON e.department_id = d.id
-        WHERE e.status = 'active'
+        WHERE e.status = 'active' AND e.role IN ('trader', 'finance_officer', 'ceo', 'hr_manager', 'hr_officer')
         ORDER BY e.first_name, e.last_name
     ");
     $employees = $emp_stmt->fetchAll();

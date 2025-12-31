@@ -10,14 +10,14 @@ include '../includes/header.php';
 
 // Get report data
 $department_stats = $db->query("
-    SELECT d.name, COUNT(e.id) as employee_count,
-           AVG(e.basic_salary) as avg_salary
+    SELECT d.name, COUNT(u.id) as employee_count,
+           AVG(u.salary) as avg_salary
     FROM departments d
-    LEFT JOIN employees e ON d.id = e.department_id AND e.status = 'active'
+    LEFT JOIN users u ON d.id = u.department_id AND u.status = 'active'
     GROUP BY d.id
 ")->fetchAll();
 
-$turnover_rate = $db->query("SELECT COUNT(CASE WHEN status = 'terminated' THEN 1 END) as `terminated_count`, COUNT(*) as `total_employees`, ROUND((COUNT(CASE WHEN status = 'terminated' THEN 1 END) * 100.0 / COUNT(*)), 2) as `turnover_rate` FROM employees")->fetch();
+$turnover_rate = $db->query("SELECT COUNT(CASE WHEN status = 'terminated' THEN 1 END) as `terminated_count`, COUNT(*) as `total_employees`, ROUND((COUNT(CASE WHEN status = 'terminated' THEN 1 END) * 100.0 / COUNT(*)), 2) as `turnover_rate` FROM users")->fetch();
 ?>
 
 <div class="container-fluid pt-4 px-4">

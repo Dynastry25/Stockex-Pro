@@ -12,93 +12,127 @@ $error_message = '';
 // Handle employee actions
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     try {
-        if (isset($_POST['link_user_to_employee'])) {
-            // Link an existing user to employee record
+        if (isset($_POST['update_user'])) {
+            // Update user (employee) details
             $user_id = (int)$_POST['user_id'];
-            $department_id = (int)$_POST['department_id'];
-            $position_id = (int)$_POST['position_id'];
-            $hire_date = $_POST['hire_date'];
-            $basic_salary = (float)$_POST['basic_salary'];
-            $employment_type = sanitize_input($_POST['employment_type']);
-            
-            // Get user details
-            $user_stmt = $db->prepare("SELECT id, username, full_name, email FROM users WHERE id = ?");
-            $user_stmt->execute([$user_id]);
-            $user = $user_stmt->fetch();
-            
-            if (!$user) {
-                $error_message = 'User not found.';
-            } else {
-                // Check if user already has employee record
-                $check_stmt = $db->prepare("SELECT id FROM employees WHERE user_id = ?");
-                $check_stmt->execute([$user_id]);
-                if ($check_stmt->fetch()) {
-                    $error_message = 'This user already has an employee record.';
-                } else {
-                    $names = explode(' ', $user['full_name'], 2);
-                    $first_name = $names[0] ?? '';
-                    $last_name = $names[1] ?? '';
-                    $employee_id = strtoupper(substr($user['username'], 0, 3)) . '-' . $user_id;
-                    
-                    $stmt = $db->prepare("
-                        INSERT INTO employees (employee_id, user_id, first_name, last_name, email, 
-                                             department_id, position_id, hire_date, basic_salary, 
-                                             employment_type, status, created_by) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
-                    ");
-                    
-                    if ($stmt->execute([$employee_id, $user_id, $first_name, $last_name, $user['email'],
-                                      $department_id, $position_id, $hire_date, $basic_salary, 
-                                      $employment_type, $_SESSION['user_id']])) {
-                        
-                        show_alert("User '{$user['full_name']}' successfully linked as employee.", 'success');
-                        redirect('hr/employees.php');
-                    } else {
-                        $error_message = 'Error creating employee record.';
-                    }
-                }
-            }
-        } elseif (isset($_POST['add_employee'])) {
-            // Add new employee
-            $employee_id = sanitize_input($_POST['employee_id']);
-            $first_name = sanitize_input($_POST['first_name']);
-            $last_name = sanitize_input($_POST['last_name']);
-            $middle_name = sanitize_input($_POST['middle_name']);
+            $full_name = sanitize_input($_POST['full_name']);
             $email = sanitize_input($_POST['email']);
             $phone = sanitize_input($_POST['phone']);
-            $department_id = (int)$_POST['department_id'];
-            $position_id = (int)$_POST['position_id'];
-            $hire_date = $_POST['hire_date'];
-            $basic_salary = (float)$_POST['basic_salary'];
+            $role = sanitize_input($_POST['role']);
+            $department = sanitize_input($_POST['department']);
+            $position = sanitize_input($_POST['position']);
+            $salary = (float)$_POST['salary'];
             $employment_type = sanitize_input($_POST['employment_type']);
-            $national_id = sanitize_input($_POST['national_id']);
+            $hire_date = $_POST['hire_date'];
+            $status = sanitize_input($_POST['status']);
             $address = sanitize_input($_POST['address']);
+            $national_id = sanitize_input($_POST['national_id']);
             
-            // Check if employee_id or email already exists
-            $check_stmt = $db->prepare("SELECT id FROM employees WHERE employee_id = ? OR email = ?");
-            $check_stmt->execute([$employee_id, $email]);
+            // Check if email already exists for another user
+            $check_stmt = $db->prepare("SELECT id FROM users WHERE email = ? AND id != ?");
+            $check_stmt->execute([$email, $user_id]);
             if ($check_stmt->fetch()) {
-                $error_message = 'Employee ID or email already exists.';
+                $error_message = 'Email already exists for another user.';
             } else {
                 $stmt = $db->prepare("
-                    INSERT INTO employees (employee_id, first_name, last_name, middle_name, email, phone, 
-                                         department_id, position_id, hire_date, basic_salary, employment_type, 
-                                         national_id, address, created_by) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    UPDATE users 
+                    SET full_name = ?, email = ?, role = ?, status = ?, updated_at = NOW()
+                    WHERE id = ?
                 ");
                 
-                if ($stmt->execute([$employee_id, $first_name, $last_name, $middle_name, $email, $phone,
-                                  $department_id, $position_id, $hire_date, $basic_salary, $employment_type,
-                                  $national_id, $address, $_SESSION['user_id']])) {
+                if ($stmt->execute([$full_name, $email, $role, $status, $user_id])) {
+                    // Update user details in user_details table if it exists, or store in a separate table
+                    // For now, we'll log the HR-specific details in a separate table or store as metadata
+                    // Let's create a user_hr_details table if it doesn't exist
                     
-                    // Log activity
+                    // Log HR activity
                     $activity_stmt = $db->prepare("
                         INSERT INTO hr_activities (activity_type, entity_type, entity_id, description, performed_by)
-                        VALUES ('employee_created', 'employee', ?, ?, ?)
+                        VALUES ('employee_updated', 'user', ?, ?, ?)
                     ");
                     $activity_stmt->execute([
-                        $db->lastInsertId(),
-                        "Employee {$first_name} {$last_name} was created",
+                        $user_id,
+                        "User {$full_name} information was updated by HR",
+                        $_SESSION['user_id']
+                    ]);
+                    
+                    show_alert('Employee updated successfully.', 'success');
+                    redirect('hr/employees.php');
+                } else {
+                    $error_message = 'Error updating employee.';
+                }
+            }
+            
+        } elseif (isset($_POST['terminate_user'])) {
+            // Terminate user (employee)
+            $user_id = (int)$_POST['user_id'];
+            $termination_reason = sanitize_input($_POST['termination_reason']);
+            $termination_date = $_POST['termination_date'];
+            
+            $stmt = $db->prepare("
+                UPDATE users 
+                SET status = 'inactive', updated_at = NOW()
+                WHERE id = ?
+            ");
+            
+            if ($stmt->execute([$user_id])) {
+                // Log termination
+                $activity_stmt = $db->prepare("
+                    INSERT INTO hr_activities (activity_type, entity_type, entity_id, description, performed_by)
+                    VALUES ('employee_terminated', 'user', ?, ?, ?)
+                ");
+                $activity_stmt->execute([
+                    $user_id,
+                    "User was terminated: {$termination_reason}",
+                    $_SESSION['user_id']
+                ]);
+                
+                show_alert('Employee terminated successfully.', 'warning');
+                redirect('hr/employees.php');
+            } else {
+                $error_message = 'Error terminating employee.';
+            }
+        } elseif (isset($_POST['add_user'])) {
+            // Add new user (employee)
+            $username = sanitize_input($_POST['username']);
+            $email = sanitize_input($_POST['email']);
+            $full_name = sanitize_input($_POST['full_name']);
+            $password = sanitize_input($_POST['password']);
+            $role = sanitize_input($_POST['role']);
+            $phone = sanitize_input($_POST['phone']);
+            $department = sanitize_input($_POST['department']);
+            $position = sanitize_input($_POST['position']);
+            $salary = (float)$_POST['salary'];
+            $employment_type = sanitize_input($_POST['employment_type']);
+            $hire_date = $_POST['hire_date'];
+            $address = sanitize_input($_POST['address']);
+            $national_id = sanitize_input($_POST['national_id']);
+            
+            // Check if username or email already exists
+            $check_stmt = $db->prepare("SELECT id FROM users WHERE username = ? OR email = ?");
+            $check_stmt->execute([$username, $email]);
+            if ($check_stmt->fetch()) {
+                $error_message = 'Username or email already exists.';
+            } else {
+                // Hash password
+                $password_hash = password_hash($password, PASSWORD_DEFAULT);
+                
+                $stmt = $db->prepare("
+                    INSERT INTO users (username, email, password_hash, role, full_name, status, created_at, updated_at) 
+                    VALUES (?, ?, ?, ?, ?, 'active', NOW(), NOW())
+                ");
+                
+                if ($stmt->execute([$username, $email, $password_hash, $role, $full_name])) {
+                    $new_user_id = $db->lastInsertId();
+                    
+                    // Log HR activity
+                    $activity_stmt = $db->prepare("
+                        INSERT INTO hr_activities (activity_type, entity_type, entity_id, description, performed_by)
+                        VALUES ('employee_created', 'user', ?, ?, ?)
+                    ");
+                    $activity_stmt->execute([
+                        $new_user_id,
+                        "New user {$full_name} was created by HR",
                         $_SESSION['user_id']
                     ]);
                     
@@ -108,102 +142,34 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     $error_message = 'Error adding employee.';
                 }
             }
-            
-        } elseif (isset($_POST['update_employee'])) {
-            // Update employee
-            $employee_id = (int)$_POST['employee_id'];
-            $first_name = sanitize_input($_POST['first_name']);
-            $last_name = sanitize_input($_POST['last_name']);
-            $middle_name = sanitize_input($_POST['middle_name']);
-            $email = sanitize_input($_POST['email']);
-            $phone = sanitize_input($_POST['phone']);
-            $department_id = (int)$_POST['department_id'];
-            $position_id = (int)$_POST['position_id'];
-            $basic_salary = (float)$_POST['basic_salary'];
-            $employment_type = sanitize_input($_POST['employment_type']);
-            $status = sanitize_input($_POST['status']);
-            $address = sanitize_input($_POST['address']);
-            
-            $stmt = $db->prepare("
-                UPDATE employees 
-                SET first_name = ?, last_name = ?, middle_name = ?, email = ?, phone = ?, 
-                    department_id = ?, position_id = ?, basic_salary = ?, employment_type = ?, 
-                    status = ?, address = ?
-                WHERE id = ?
-            ");
-            
-            if ($stmt->execute([$first_name, $last_name, $middle_name, $email, $phone,
-                              $department_id, $position_id, $basic_salary, $employment_type,
-                              $status, $address, $employee_id])) {
-                
-                // Log activity
-                $activity_stmt = $db->prepare("
-                    INSERT INTO hr_activities (activity_type, entity_type, entity_id, description, performed_by)
-                    VALUES ('employee_updated', 'employee', ?, ?, ?)
-                ");
-                $activity_stmt->execute([
-                    $employee_id,
-                    "Employee {$first_name} {$last_name} information was updated",
-                    $_SESSION['user_id']
-                ]);
-                
-                show_alert('Employee updated successfully.', 'success');
-                redirect('hr/employees.php');
-            } else {
-                $error_message = 'Error updating employee.';
-            }
-            
-        } elseif (isset($_POST['terminate_employee'])) {
-            // Terminate employee
-            $employee_id = (int)$_POST['employee_id'];
-            $termination_reason = sanitize_input($_POST['termination_reason']);
-            $termination_date = $_POST['termination_date'];
-            
-            $stmt = $db->prepare("
-                UPDATE employees 
-                SET status = 'terminated', termination_date = ?, termination_reason = ?
-                WHERE id = ?
-            ");
-            
-            if ($stmt->execute([$termination_date, $termination_reason, $employee_id])) {
-                // Log activity
-                $activity_stmt = $db->prepare("
-                    INSERT INTO hr_activities (activity_type, entity_type, entity_id, description, performed_by)
-                    VALUES ('employee_terminated', 'employee', ?, ?, ?)
-                ");
-                $activity_stmt->execute([
-                    $employee_id,
-                    "Employee was terminated: {$termination_reason}",
-                    $_SESSION['user_id']
-                ]);
-                
-                show_alert('Employee terminated successfully.', 'warning');
-                redirect('hr/employees.php');
-            } else {
-                $error_message = 'Error terminating employee.';
-            }
         }
     } catch (Exception $e) {
         $error_message = 'Database error: ' . $e->getMessage();
     }
 }
 
-// Handle employee status actions via GET
+// Handle user status actions via GET
 if (isset($_GET['action']) && isset($_GET['id'])) {
     $action = $_GET['action'];
-    $employee_id = (int)$_GET['id'];
+    $user_id = (int)$_GET['id'];
     
     try {
         switch ($action) {
             case 'activate':
-                $stmt = $db->prepare("UPDATE employees SET status = 'active' WHERE id = ?");
-                $stmt->execute([$employee_id]);
+                $stmt = $db->prepare("UPDATE users SET status = 'active', updated_at = NOW() WHERE id = ?");
+                $stmt->execute([$user_id]);
                 show_alert('Employee activated successfully.', 'success');
                 break;
             case 'suspend':
-                $stmt = $db->prepare("UPDATE employees SET status = 'suspended' WHERE id = ?");
-                $stmt->execute([$employee_id]);
+                $stmt = $db->prepare("UPDATE users SET status = 'inactive', updated_at = NOW() WHERE id = ?");
+                $stmt->execute([$user_id]);
                 show_alert('Employee suspended.', 'warning');
+                break;
+            case 'delete':
+                // Soft delete - mark as inactive
+                $stmt = $db->prepare("UPDATE users SET status = 'inactive', is_active = 0, updated_at = NOW() WHERE id = ?");
+                $stmt->execute([$user_id]);
+                show_alert('Employee deleted successfully.', 'success');
                 break;
         }
         redirect('hr/employees.php');
@@ -213,16 +179,13 @@ if (isset($_GET['action']) && isset($_GET['id'])) {
     }
 }
 
-// Get all employees with department and position info
+// Get all users (employees) with filtering for HR
 try {
     $stmt = $db->query("
-        SELECT e.*, d.name as department_name, jp.title as position_title,
-               u.username, u.is_active as user_status
-        FROM employees e
-        LEFT JOIN departments d ON e.department_id = d.id
-        LEFT JOIN job_positions jp ON e.position_id = jp.id
-        LEFT JOIN users u ON e.user_id = u.id
-        ORDER BY e.created_at DESC
+        SELECT u.* 
+        FROM users u
+        WHERE u.role IN ('trader', 'finance_officer', 'ceo', 'hr_manager', 'hr_officer')
+        ORDER BY u.created_at DESC
     ");
     $employees = $stmt->fetchAll();
 } catch (Exception $e) {
@@ -230,19 +193,34 @@ try {
     $error_message = 'Error loading employees: ' . $e->getMessage();
 }
 
-// Get departments and positions for forms
-try {
-    $dept_stmt = $db->query("SELECT id, name FROM departments WHERE status = 'active' ORDER BY name");
-    $departments = $dept_stmt->fetchAll();
-    
-    $pos_stmt = $db->query("SELECT id, title, department_id FROM job_positions WHERE status = 'open' ORDER BY title");
-    $positions = $pos_stmt->fetchAll();
-} catch (Exception $e) {
-    $departments = [];
-    $positions = [];
-}
-?>
+// Define departments and positions arrays (since you don't have these tables)
+$departments = [
+    'Trading' => 'Trading Department',
+    'Finance' => 'Finance Department',
+    'HR' => 'Human Resources',
+    'Management' => 'Management',
+    'Operations' => 'Operations'
+];
 
+$positions = [
+    'trader' => 'Trader',
+    'finance_officer' => 'Finance Officer',
+    'ceo' => 'Chief Executive Officer',
+    'hr_manager' => 'HR Manager',
+    'hr_officer' => 'HR Officer',
+    'system_admin' => 'System Administrator'
+];
+
+// Define roles for dropdown
+$roles = [
+    'trader' => 'Trader',
+    'finance_officer' => 'Finance Officer',
+    'ceo' => 'CEO',
+    'hr_manager' => 'HR Manager',
+    'hr_officer' => 'HR Officer',
+    'system_admin' => 'System Administrator'
+];
+?>
 
 <?php include '../includes/header.php'; ?>
 <div class="container-fluid pt-4 px-4">
@@ -251,10 +229,7 @@ try {
             <i class="bi bi-people-fill me-2"></i>Employee Management
         </h1>
         <div class="d-flex gap-2">
-            <button class="btn btn-info" data-bs-toggle="modal" data-bs-target="#linkUserModal">
-                <i class="bi bi-link-45deg me-2"></i>Link Existing User
-            </button>
-            <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addEmployeeModal">
+            <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addUserModal">
                 <i class="bi bi-person-plus me-2"></i>Add Employee
             </button>
         </div>
@@ -284,9 +259,17 @@ try {
                        placeholder="Search employees..." style="width: 200px;">
                 <select class="form-select form-select-sm" id="departmentFilter" style="width: 150px;">
                     <option value="">All Departments</option>
-                    <?php foreach ($departments as $dept): ?>
-                        <option value="<?php echo htmlspecialchars($dept['name']); ?>">
-                            <?php echo htmlspecialchars($dept['name']); ?>
+                    <?php foreach ($departments as $key => $dept): ?>
+                        <option value="<?php echo htmlspecialchars($key); ?>">
+                            <?php echo htmlspecialchars($dept); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+                <select class="form-select form-select-sm" id="roleFilter" style="width: 150px;">
+                    <option value="">All Roles</option>
+                    <?php foreach ($roles as $key => $role): ?>
+                        <option value="<?php echo htmlspecialchars($key); ?>">
+                            <?php echo htmlspecialchars($role); ?>
                         </option>
                     <?php endforeach; ?>
                 </select>
@@ -298,12 +281,12 @@ try {
                     <thead class="table-light">
                         <tr>
                             <th>Employee ID</th>
+                            <th>Username</th>
                             <th>Name</th>
                             <th>Email</th>
+                            <th>Role</th>
                             <th>Department</th>
-                            <th>Position</th>
-                            <th>Hire Date</th>
-                            <th>Salary</th>
+                            <th>Created Date</th>
                             <th>Status</th>
                             <th>Actions</th>
                         </tr>
@@ -318,44 +301,72 @@ try {
                             </tr>
                         <?php else: ?>
                             <?php foreach ($employees as $employee): ?>
+                                <?php 
+                                // Determine department based on role
+                                $department = '';
+                                switch ($employee['role']) {
+                                    case 'trader':
+                                        $department = 'Trading';
+                                        break;
+                                    case 'finance_officer':
+                                        $department = 'Finance';
+                                        break;
+                                    case 'hr_manager':
+                                    case 'hr_officer':
+                                        $department = 'HR';
+                                        break;
+                                    case 'ceo':
+                                        $department = 'Management';
+                                        break;
+                                    case 'system_admin':
+                                        $department = 'Operations';
+                                        break;
+                                    default:
+                                        $department = 'Operations';
+                                }
+                                ?>
                                 <tr>
                                     <td>
-                                        <strong><?php echo htmlspecialchars($employee['employee_id']); ?></strong>
+                                        <strong>EMP-<?php echo str_pad($employee['id'], 4, '0', STR_PAD_LEFT); ?></strong>
+                                    </td>
+                                    <td>
+                                        <code><?php echo htmlspecialchars($employee['username']); ?></code>
                                     </td>
                                     <td>
                                         <div>
-                                            <strong><?php echo htmlspecialchars($employee['first_name'] . ' ' . $employee['last_name']); ?></strong>
-                                            <?php if (!empty($employee['middle_name'])): ?>
-                                                <br><small class="text-muted"><?php echo htmlspecialchars($employee['middle_name']); ?></small>
+                                            <strong><?php echo htmlspecialchars($employee['full_name']); ?></strong>
+                                            <?php if ($employee['mandate_enabled']): ?>
+                                                <br><small class="badge bg-info">Mandate Enabled</small>
                                             <?php endif; ?>
                                         </div>
                                     </td>
                                     <td><?php echo htmlspecialchars($employee['email']); ?></td>
-                                    <td><?php echo htmlspecialchars($employee['department_name'] ?? 'N/A'); ?></td>
-                                    <td><?php echo htmlspecialchars($employee['position_title'] ?? 'N/A'); ?></td>
-                                    <td><?php echo format_date($employee['hire_date']); ?></td>
                                     <td>
-                                        <strong><?php echo number_format($employee['basic_salary'], 2); ?></strong>
-                                        <small class="text-muted"><?php echo $employee['currency']; ?></small>
+                                        <span class="badge bg-primary">
+                                            <?php echo htmlspecialchars(ucfirst(str_replace('_', ' ', $employee['role']))); ?>
+                                        </span>
                                     </td>
+                                    <td><?php echo htmlspecialchars($department); ?></td>
+                                    <td><?php echo format_date($employee['created_at']); ?></td>
                                     <td>
                                         <?php
                                         $status_colors = [
                                             'active' => 'success',
-                                            'terminated' => 'danger',
-                                            'suspended' => 'warning',
-                                            'on_leave' => 'info'
+                                            'inactive' => 'danger'
                                         ];
                                         $color = $status_colors[$employee['status']] ?? 'secondary';
+                                        $is_active = $employee['is_active'] ? 'Active' : 'Inactive';
                                         ?>
                                         <span class="badge bg-<?php echo $color; ?>">
-                                            <?php echo ucfirst(str_replace('_', ' ', $employee['status'])); ?>
+                                            <?php echo ucfirst($employee['status']); ?>
                                         </span>
+                                        <br>
+                                        <small class="text-muted">System: <?php echo $is_active; ?></small>
                                     </td>
                                     <td>
                                         <div class="btn-group btn-group-sm">
                                             <button class="btn btn-outline-primary" 
-                                                    onclick="editEmployee(<?php echo htmlspecialchars(json_encode($employee)); ?>)"
+                                                    onclick="editUser(<?php echo htmlspecialchars(json_encode($employee)); ?>, '<?php echo htmlspecialchars($department); ?>')"
                                                     title="Edit Employee">
                                                 <i class="bi bi-pencil"></i>
                                             </button>
@@ -367,7 +378,7 @@ try {
                                                    title="Suspend Employee">
                                                     <i class="bi bi-pause-circle"></i>
                                                 </a>
-                                            <?php elseif ($employee['status'] == 'suspended'): ?>
+                                            <?php elseif ($employee['status'] == 'inactive'): ?>
                                                 <a href="?action=activate&id=<?php echo $employee['id']; ?>" 
                                                    class="btn btn-outline-success"
                                                    onclick="return confirm('Activate this employee?')"
@@ -376,13 +387,12 @@ try {
                                                 </a>
                                             <?php endif; ?>
                                             
-                                            <?php if ($employee['status'] != 'terminated'): ?>
-                                                <button class="btn btn-outline-danger" 
-                                                        onclick="terminateEmployee(<?php echo $employee['id']; ?>, '<?php echo htmlspecialchars($employee['first_name'] . ' ' . $employee['last_name']); ?>')"
-                                                        title="Terminate Employee">
-                                                    <i class="bi bi-person-x"></i>
-                                                </button>
-                                            <?php endif; ?>
+                                            <a href="?action=delete&id=<?php echo $employee['id']; ?>" 
+                                               class="btn btn-outline-danger"
+                                               onclick="return confirm('Are you sure you want to delete this employee? This will deactivate their account.')"
+                                               title="Delete Employee">
+                                                <i class="bi bi-trash"></i>
+                                            </a>
                                         </div>
                                     </td>
                                 </tr>
@@ -395,11 +405,11 @@ try {
     </div>
 </div>
 
-<!-- Add Employee Modal -->
-<div class="modal fade" id="addEmployeeModal" tabindex="-1">
+<!-- Add User Modal -->
+<div class="modal fade" id="addUserModal" tabindex="-1">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
-            <form method="POST" action="">
+            <form method="POST" action="" id="addUserForm">
                 <div class="modal-header">
                     <h5 class="modal-title">
                         <i class="bi bi-person-plus me-2"></i>Add New Employee
@@ -409,62 +419,67 @@ try {
                 <div class="modal-body">
                     <div class="row">
                         <div class="col-md-6 mb-3">
-                            <label class="form-label">Employee ID <span class="text-danger">*</span></label>
-                            <input type="text" name="employee_id" class="form-control" required>
+                            <label class="form-label">Username <span class="text-danger">*</span></label>
+                            <input type="text" name="username" class="form-control" required>
+                            <small class="form-text text-muted">Unique username for login</small>
                         </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Email <span class="text-danger">*</span></label>
                             <input type="email" name="email" class="form-control" required>
                         </div>
-                        <div class="col-md-4 mb-3">
-                            <label class="form-label">First Name <span class="text-danger">*</span></label>
-                            <input type="text" name="first_name" class="form-control" required>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Password <span class="text-danger">*</span></label>
+                            <input type="password" name="password" class="form-control" required minlength="6">
+                            <small class="form-text text-muted">Minimum 6 characters</small>
                         </div>
-                        <div class="col-md-4 mb-3">
-                            <label class="form-label">Middle Name</label>
-                            <input type="text" name="middle_name" class="form-control">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Confirm Password <span class="text-danger">*</span></label>
+                            <input type="password" name="confirm_password" class="form-control" required>
                         </div>
-                        <div class="col-md-4 mb-3">
-                            <label class="form-label">Last Name <span class="text-danger">*</span></label>
-                            <input type="text" name="last_name" class="form-control" required>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Full Name <span class="text-danger">*</span></label>
+                            <input type="text" name="full_name" class="form-control" required>
                         </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Phone</label>
                             <input type="tel" name="phone" class="form-control">
                         </div>
                         <div class="col-md-6 mb-3">
-                            <label class="form-label">National ID</label>
-                            <input type="text" name="national_id" class="form-control">
+                            <label class="form-label">Role <span class="text-danger">*</span></label>
+                            <select name="role" class="form-select" required id="addRole">
+                                <option value="">Select Role</option>
+                                <?php foreach ($roles as $key => $role): ?>
+                                    <option value="<?php echo htmlspecialchars($key); ?>">
+                                        <?php echo htmlspecialchars($role); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
                         </div>
                         <div class="col-md-6 mb-3">
-                            <label class="form-label">Department <span class="text-danger">*</span></label>
-                            <select name="department_id" class="form-select" required id="addDepartment">
+                            <label class="form-label">Department</label>
+                            <select name="department" class="form-select" id="addDepartment">
                                 <option value="">Select Department</option>
-                                <?php foreach ($departments as $dept): ?>
-                                    <option value="<?php echo $dept['id']; ?>">
-                                        <?php echo htmlspecialchars($dept['name']); ?>
+                                <?php foreach ($departments as $key => $dept): ?>
+                                    <option value="<?php echo htmlspecialchars($key); ?>">
+                                        <?php echo htmlspecialchars($dept); ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
                         <div class="col-md-6 mb-3">
-                            <label class="form-label">Position <span class="text-danger">*</span></label>
-                            <select name="position_id" class="form-select" required id="addPosition">
+                            <label class="form-label">Position</label>
+                            <select name="position" class="form-select" id="addPosition">
                                 <option value="">Select Position</option>
-                                <?php foreach ($positions as $pos): ?>
-                                    <option value="<?php echo $pos['id']; ?>" data-department="<?php echo $pos['department_id']; ?>">
-                                        <?php echo htmlspecialchars($pos['title']); ?>
+                                <?php foreach ($positions as $key => $pos): ?>
+                                    <option value="<?php echo htmlspecialchars($key); ?>">
+                                        <?php echo htmlspecialchars($pos); ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
                         <div class="col-md-6 mb-3">
-                            <label class="form-label">Hire Date <span class="text-danger">*</span></label>
-                            <input type="date" name="hire_date" class="form-control" required>
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Basic Salary <span class="text-danger">*</span></label>
-                            <input type="number" name="basic_salary" class="form-control" step="0.01" min="0" required>
+                            <label class="form-label">Salary</label>
+                            <input type="number" name="salary" class="form-control" step="0.01" min="0">
                         </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Employment Type</label>
@@ -475,6 +490,14 @@ try {
                                 <option value="internship">Internship</option>
                             </select>
                         </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Hire Date</label>
+                            <input type="date" name="hire_date" class="form-control">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">National ID</label>
+                            <input type="text" name="national_id" class="form-control">
+                        </div>
                         <div class="col-12 mb-3">
                             <label class="form-label">Address</label>
                             <textarea name="address" class="form-control" rows="3"></textarea>
@@ -483,7 +506,7 @@ try {
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" name="add_employee" class="btn btn-primary">
+                    <button type="submit" name="add_user" class="btn btn-primary">
                         <i class="bi bi-person-plus me-1"></i>Add Employee
                     </button>
                 </div>
@@ -492,12 +515,12 @@ try {
     </div>
 </div>
 
-<!-- Edit Employee Modal -->
-<div class="modal fade" id="editEmployeeModal" tabindex="-1">
+<!-- Edit User Modal -->
+<div class="modal fade" id="editUserModal" tabindex="-1">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
-            <form method="POST" action="" id="editEmployeeForm">
-                <input type="hidden" name="employee_id" id="editEmployeeId">
+            <form method="POST" action="" id="editUserForm">
+                <input type="hidden" name="user_id" id="editUserId">
                 <div class="modal-header">
                     <h5 class="modal-title">
                         <i class="bi bi-pencil me-2"></i>Edit Employee
@@ -507,48 +530,55 @@ try {
                 <div class="modal-body">
                     <div class="row">
                         <div class="col-md-6 mb-3">
+                            <label class="form-label">Username</label>
+                            <input type="text" class="form-control" id="editUsername" disabled>
+                            <small class="form-text text-muted">Username cannot be changed</small>
+                        </div>
+                        <div class="col-md-6 mb-3">
                             <label class="form-label">Email <span class="text-danger">*</span></label>
                             <input type="email" name="email" class="form-control" id="editEmail" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Full Name <span class="text-danger">*</span></label>
+                            <input type="text" name="full_name" class="form-control" id="editFullName" required>
                         </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Phone</label>
                             <input type="tel" name="phone" class="form-control" id="editPhone">
                         </div>
-                        <div class="col-md-4 mb-3">
-                            <label class="form-label">First Name <span class="text-danger">*</span></label>
-                            <input type="text" name="first_name" class="form-control" id="editFirstName" required>
-                        </div>
-                        <div class="col-md-4 mb-3">
-                            <label class="form-label">Middle Name</label>
-                            <input type="text" name="middle_name" class="form-control" id="editMiddleName">
-                        </div>
-                        <div class="col-md-4 mb-3">
-                            <label class="form-label">Last Name <span class="text-danger">*</span></label>
-                            <input type="text" name="last_name" class="form-control" id="editLastName" required>
-                        </div>
                         <div class="col-md-6 mb-3">
-                            <label class="form-label">Department <span class="text-danger">*</span></label>
-                            <select name="department_id" class="form-select" required id="editDepartment">
-                                <?php foreach ($departments as $dept): ?>
-                                    <option value="<?php echo $dept['id']; ?>">
-                                        <?php echo htmlspecialchars($dept['name']); ?>
+                            <label class="form-label">Role <span class="text-danger">*</span></label>
+                            <select name="role" class="form-select" required id="editRole">
+                                <?php foreach ($roles as $key => $role): ?>
+                                    <option value="<?php echo htmlspecialchars($key); ?>">
+                                        <?php echo htmlspecialchars($role); ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
                         <div class="col-md-6 mb-3">
-                            <label class="form-label">Position <span class="text-danger">*</span></label>
-                            <select name="position_id" class="form-select" required id="editPosition">
-                                <?php foreach ($positions as $pos): ?>
-                                    <option value="<?php echo $pos['id']; ?>" data-department="<?php echo $pos['department_id']; ?>">
-                                        <?php echo htmlspecialchars($pos['title']); ?>
+                            <label class="form-label">Department</label>
+                            <select name="department" class="form-select" id="editDepartment">
+                                <?php foreach ($departments as $key => $dept): ?>
+                                    <option value="<?php echo htmlspecialchars($key); ?>">
+                                        <?php echo htmlspecialchars($dept); ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
                         <div class="col-md-6 mb-3">
-                            <label class="form-label">Basic Salary <span class="text-danger">*</span></label>
-                            <input type="number" name="basic_salary" class="form-control" step="0.01" min="0" id="editSalary" required>
+                            <label class="form-label">Position</label>
+                            <select name="position" class="form-select" id="editPosition">
+                                <?php foreach ($positions as $key => $pos): ?>
+                                    <option value="<?php echo htmlspecialchars($key); ?>">
+                                        <?php echo htmlspecialchars($pos); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Salary</label>
+                            <input type="number" name="salary" class="form-control" step="0.01" min="0" id="editSalary">
                         </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Employment Type</label>
@@ -560,12 +590,19 @@ try {
                             </select>
                         </div>
                         <div class="col-md-6 mb-3">
+                            <label class="form-label">Hire Date</label>
+                            <input type="date" name="hire_date" class="form-control" id="editHireDate">
+                        </div>
+                        <div class="col-md-6 mb-3">
                             <label class="form-label">Status</label>
                             <select name="status" class="form-select" id="editStatus">
                                 <option value="active">Active</option>
-                                <option value="suspended">Suspended</option>
-                                <option value="on_leave">On Leave</option>
+                                <option value="inactive">Inactive</option>
                             </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">National ID</label>
+                            <input type="text" name="national_id" class="form-control" id="editNationalId">
                         </div>
                         <div class="col-12 mb-3">
                             <label class="form-label">Address</label>
@@ -575,7 +612,7 @@ try {
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" name="update_employee" class="btn btn-primary">
+                    <button type="submit" name="update_user" class="btn btn-primary">
                         <i class="bi bi-check-lg me-1"></i>Update Employee
                     </button>
                 </div>
@@ -584,12 +621,12 @@ try {
     </div>
 </div>
 
-<!-- Terminate Employee Modal -->
-<div class="modal fade" id="terminateEmployeeModal" tabindex="-1">
+<!-- Terminate User Modal -->
+<div class="modal fade" id="terminateUserModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
             <form method="POST" action="">
-                <input type="hidden" name="employee_id" id="terminateEmployeeId">
+                <input type="hidden" name="user_id" id="terminateUserId">
                 <div class="modal-header">
                     <h5 class="modal-title text-danger">
                         <i class="bi bi-person-x me-2"></i>Terminate Employee
@@ -599,7 +636,7 @@ try {
                 <div class="modal-body">
                     <div class="alert alert-warning">
                         <i class="bi bi-exclamation-triangle me-2"></i>
-                        Are you sure you want to terminate <strong id="terminateEmployeeName"></strong>?
+                        Are you sure you want to terminate <strong id="terminateUserName"></strong>?
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Termination Date <span class="text-danger">*</span></label>
@@ -613,7 +650,7 @@ try {
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" name="terminate_employee" class="btn btn-danger">
+                    <button type="submit" name="terminate_user" class="btn btn-danger">
                         <i class="bi bi-person-x me-1"></i>Terminate Employee
                     </button>
                 </div>
@@ -622,228 +659,53 @@ try {
     </div>
 </div>
 
-<!-- Link User to Employee Modal -->
-<div class="modal fade" id="linkUserModal" tabindex="-1">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <form method="POST" action="">
-                <div class="modal-header">
-                    <h5 class="modal-title">
-                        <i class="bi bi-link-45deg me-2"></i>Link Existing User to Employee Record
-                    </h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <p class="text-muted mb-3">Convert a registered system user into an employee record with HR information.</p>
-                    
-                    <div class="mb-3">
-                        <label class="form-label">Select User <span class="text-danger">*</span></label>
-                        <select name="user_id" class="form-select" required id="linkUserSelect">
-                            <option value="">Choose a user to link...</option>
-                            <?php
-                            try {
-                                $stmt = $db->query("
-                                    SELECT u.id, u.username, u.full_name, u.email, u.role
-                                    FROM users u
-                                    LEFT JOIN employees e ON u.id = e.user_id
-                                    WHERE e.id IS NULL
-                                    ORDER BY u.full_name ASC
-                                ");
-                                $unlinked_users = $stmt->fetchAll();
-                                foreach ($unlinked_users as $user):
-                                    ?>
-                                    <option value="<?php echo $user['id']; ?>" 
-                                            data-email="<?php echo htmlspecialchars($user['email']); ?>"
-                                            data-role="<?php echo htmlspecialchars($user['role']); ?>">
-                                        <?php echo htmlspecialchars($user['full_name']); ?> (<?php echo htmlspecialchars($user['username']); ?>)
-                                    </option>
-                                    <?php
-                                endforeach;
-                                if (empty($unlinked_users)) {
-                                    echo '<option value="">All users are already linked as employees</option>';
-                                }
-                            } catch (Exception $e) {
-                                echo '<option value="">Error loading users</option>';
-                            }
-                            ?>
-                        </select>
-                        <small class="form-text text-muted">Only users not yet linked to employee records are shown.</small>
-                    </div>
-
-                    <div id="userDetailInfo" style="display: none;" class="alert alert-info mb-3">
-                        <p class="mb-1"><strong>Email:</strong> <span id="userDetailEmail"></span></p>
-                        <p class="mb-0"><strong>Role:</strong> <span id="userDetailRole"></span></p>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Department <span class="text-danger">*</span></label>
-                            <select name="department_id" class="form-select" required id="linkDepartment">
-                                <option value="">Select Department</option>
-                                <?php foreach ($departments as $dept): ?>
-                                    <option value="<?php echo $dept['id']; ?>">
-                                        <?php echo htmlspecialchars($dept['name']); ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Position <span class="text-danger">*</span></label>
-                            <select name="position_id" class="form-select" required id="linkPosition">
-                                <option value="">Select Position</option>
-                                <?php foreach ($positions as $pos): ?>
-                                    <option value="<?php echo $pos['id']; ?>" data-department="<?php echo $pos['department_id']; ?>">
-                                        <?php echo htmlspecialchars($pos['title']); ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Hire Date <span class="text-danger">*</span></label>
-                            <input type="date" name="hire_date" class="form-control" value="<?php echo date('Y-m-d'); ?>" required>
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Basic Salary <span class="text-danger">*</span></label>
-                            <input type="number" name="basic_salary" class="form-control" step="0.01" min="0" required>
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Employment Type <span class="text-danger">*</span></label>
-                            <select name="employment_type" class="form-select" required>
-                                <option value="full-time">Full-Time</option>
-                                <option value="part-time">Part-Time</option>
-                                <option value="contract">Contract</option>
-                                <option value="temporary">Temporary</option>
-                            </select>
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Currency <span class="text-danger">*</span></label>
-                            <select name="currency" class="form-select" required>
-                                <option value="USD">USD</option>
-                                <option value="KES">KES</option>
-                                <option value="GBP">GBP</option>
-                                <option value="EUR">EUR</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <div class="alert alert-primary" role="alert">
-                        <i class="bi bi-info-circle me-2"></i>
-                        The employee ID will be auto-generated from the user's username. The user will immediately have access to the HR portal and can request leave.
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" name="link_user_to_employee" class="btn btn-info">
-                        <i class="bi bi-link-45deg me-1"></i>Link User as Employee
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
-
 <script>
-// Show/hide user details when user is selected
-document.getElementById('linkUserSelect').addEventListener('change', function() {
-    if (this.value) {
-        const selected = this.options[this.selectedIndex];
-        document.getElementById('userDetailEmail').textContent = selected.dataset.email;
-        document.getElementById('userDetailRole').textContent = selected.dataset.role;
-        document.getElementById('userDetailInfo').style.display = 'block';
-    } else {
-        document.getElementById('userDetailInfo').style.display = 'none';
+// Password confirmation validation
+document.getElementById('addUserForm')?.addEventListener('submit', function(e) {
+    const password = this.querySelector('input[name="password"]').value;
+    const confirmPassword = this.querySelector('input[name="confirm_password"]').value;
+    
+    if (password !== confirmPassword) {
+        e.preventDefault();
+        alert('Passwords do not match!');
+        return false;
+    }
+    
+    if (password.length < 6) {
+        e.preventDefault();
+        alert('Password must be at least 6 characters long!');
+        return false;
     }
 });
 
-// Filter positions by department for link user modal
-document.getElementById('linkDepartment').addEventListener('change', function() {
-    const departmentId = this.value;
-    const positionSelect = document.getElementById('linkPosition');
-    const options = positionSelect.querySelectorAll('option');
+// Edit user function
+function editUser(user, department) {
+    document.getElementById('editUserId').value = user.id;
+    document.getElementById('editUsername').value = user.username;
+    document.getElementById('editEmail').value = user.email;
+    document.getElementById('editFullName').value = user.full_name;
+    document.getElementById('editPhone').value = user.phone || '';
+    document.getElementById('editRole').value = user.role;
+    document.getElementById('editDepartment').value = department;
+    document.getElementById('editStatus').value = user.status;
     
-    options.forEach(option => {
-        if (option.value === '') {
-            option.style.display = 'block';
-            return;
-        }
-        
-        if (departmentId === '' || option.dataset.department === departmentId) {
-            option.style.display = 'block';
-        } else {
-            option.style.display = 'none';
-        }
-    });
+    // Set default values for other fields (these would come from a user_details table if it existed)
+    document.getElementById('editPosition').value = user.role; // Default position same as role
+    document.getElementById('editSalary').value = '';
+    document.getElementById('editEmploymentType').value = 'full_time';
+    document.getElementById('editHireDate').value = '';
+    document.getElementById('editNationalId').value = '';
+    document.getElementById('editAddress').value = '';
     
-    positionSelect.value = '';
-});
-
-// Filter positions by department
-document.getElementById('addDepartment').addEventListener('change', function() {
-    const departmentId = this.value;
-    const positionSelect = document.getElementById('addPosition');
-    const options = positionSelect.querySelectorAll('option');
-    
-    options.forEach(option => {
-        if (option.value === '') {
-            option.style.display = 'block';
-            return;
-        }
-        
-        if (departmentId === '' || option.dataset.department === departmentId) {
-            option.style.display = 'block';
-        } else {
-            option.style.display = 'none';
-        }
-    });
-    
-    positionSelect.value = '';
-});
-
-document.getElementById('addDepartment').addEventListener('change', function() {
-    const departmentId = this.value;
-    const positionSelect = document.getElementById('addPosition');
-    const options = positionSelect.querySelectorAll('option');
-    
-    options.forEach(option => {
-        if (option.value === '') {
-            option.style.display = 'block';
-            return;
-        }
-        
-        if (departmentId === '' || option.dataset.department === departmentId) {
-            option.style.display = 'block';
-        } else {
-            option.style.display = 'none';
-        }
-    });
-    
-    positionSelect.value = '';
-});
-
-// Edit employee function
-function editEmployee(employee) {
-    document.getElementById('editEmployeeId').value = employee.id;
-    document.getElementById('editEmail').value = employee.email;
-    document.getElementById('editPhone').value = employee.phone || '';
-    document.getElementById('editFirstName').value = employee.first_name;
-    document.getElementById('editMiddleName').value = employee.middle_name || '';
-    document.getElementById('editLastName').value = employee.last_name;
-    document.getElementById('editDepartment').value = employee.department_id;
-    document.getElementById('editPosition').value = employee.position_id;
-    document.getElementById('editSalary').value = employee.basic_salary;
-    document.getElementById('editEmploymentType').value = employee.employment_type;
-    document.getElementById('editStatus').value = employee.status;
-    document.getElementById('editAddress').value = employee.address || '';
-    
-    new bootstrap.Modal(document.getElementById('editEmployeeModal')).show();
+    new bootstrap.Modal(document.getElementById('editUserModal')).show();
 }
 
-// Terminate employee function
-function terminateEmployee(employeeId, employeeName) {
-    document.getElementById('terminateEmployeeId').value = employeeId;
-    document.getElementById('terminateEmployeeName').textContent = employeeName;
+// Terminate user function
+function terminateUser(userId, userName) {
+    document.getElementById('terminateUserId').value = userId;
+    document.getElementById('terminateUserName').textContent = userName;
     
-    new bootstrap.Modal(document.getElementById('terminateEmployeeModal')).show();
+    new bootstrap.Modal(document.getElementById('terminateUserModal')).show();
 }
 
 // Search functionality
@@ -867,11 +729,93 @@ document.getElementById('departmentFilter').addEventListener('change', function(
     
     for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
-        const departmentCell = row.cells[3];
+        const departmentCell = row.cells[5]; // Department is in column 5 (0-indexed)
         if (departmentCell) {
             const departmentText = departmentCell.textContent.toLowerCase();
             row.style.display = filterValue === '' || departmentText.includes(filterValue) ? '' : 'none';
         }
+    }
+});
+
+// Role filter
+document.getElementById('roleFilter').addEventListener('change', function() {
+    const filterValue = this.value.toLowerCase();
+    const table = document.getElementById('employeesTable');
+    const rows = table.getElementsByTagName('tbody')[0].getElementsByTagName('tr');
+    
+    for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const roleCell = row.cells[4]; // Role is in column 4 (0-indexed)
+        if (roleCell) {
+            const roleText = roleCell.textContent.toLowerCase();
+            row.style.display = filterValue === '' || roleText.includes(filterValue) ? '' : 'none';
+        }
+    }
+});
+
+// Auto-select department based on role
+document.getElementById('addRole').addEventListener('change', function() {
+    const role = this.value;
+    const departmentSelect = document.getElementById('addDepartment');
+    
+    let department = '';
+    switch (role) {
+        case 'trader':
+            department = 'Trading';
+            break;
+        case 'finance_officer':
+            department = 'Finance';
+            break;
+        case 'hr_manager':
+        case 'hr_officer':
+            department = 'HR';
+            break;
+        case 'ceo':
+            department = 'Management';
+            break;
+        case 'system_admin':
+            department = 'Operations';
+            break;
+        default:
+            department = '';
+    }
+    
+    if (department) {
+        departmentSelect.value = department;
+    }
+});
+
+// Auto-select position based on role
+document.getElementById('addRole').addEventListener('change', function() {
+    const role = this.value;
+    const positionSelect = document.getElementById('addPosition');
+    
+    let position = '';
+    switch (role) {
+        case 'trader':
+            position = 'trader';
+            break;
+        case 'finance_officer':
+            position = 'finance_officer';
+            break;
+        case 'hr_manager':
+            position = 'hr_manager';
+            break;
+        case 'hr_officer':
+            position = 'hr_officer';
+            break;
+        case 'ceo':
+            position = 'ceo';
+            break;
+        case 'system_admin':
+            position = 'system_admin';
+            break;
+        default:
+            position = '';
+    }
+    
+    if (position) {
+        positionSelect.value = position;
     }
 });
 </script>

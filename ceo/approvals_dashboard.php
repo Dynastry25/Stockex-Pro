@@ -70,12 +70,12 @@ $pending_leaves = get_ceo_pending_leaves();
 // Get pending payroll approvals
 try {
     $stmt = $db->query("
-        SELECT p.*, CONCAT(e.first_name, ' ', e.last_name) as employee_name, e.employee_id as employee_code,
+        SELECT p.*, CONCAT(u.first_name, ' ', u.last_name) as employee_name, u.full_name, u.employee_id as employee_code,
                d.name as department_name, 
                hr_user.full_name as submitted_by_name
         FROM payroll p
-        JOIN employees e ON p.employee_id = e.id
-        JOIN departments d ON e.department_id = d.id
+        JOIN users u ON p.user_id = u.id
+        JOIN departments d ON u.department_id = d.id
         LEFT JOIN users hr_user ON p.processed_by = hr_user.id
         WHERE p.status = 'pending_ceo_approval'
         ORDER BY p.submitted_by_hr_at ASC
@@ -107,11 +107,11 @@ try {
 // Get pending target approvals
 try {
     $stmt = $db->query("
-        SELECT pt.*, CONCAT(e.first_name, ' ', e.last_name) as employee_name, e.employee_id as employee_code,
+        SELECT pt.*, CONCAT(u.first_name, ' ', u.last_name) as employee_name, u.full_name, u.employee_id as employee_code,
                d.name as department_name
         FROM performance_targets pt
-        JOIN employees e ON pt.employee_id = e.id
-        JOIN departments d ON e.department_id = d.id
+        JOIN users u ON pt.employee_id = u.id
+        JOIN departments d ON u.department_id = d.id
         WHERE pt.requires_ceo_approval = TRUE AND pt.ceo_decision_status = 'pending_ceo'
         ORDER BY pt.created_at ASC
     ");
@@ -125,14 +125,14 @@ try {
 try {
     $stmt = $db->query("
         SELECT lr.*, lt.name as leave_type_name, 
-               CONCAT(e.first_name, ' ', e.last_name) as employee_name, e.employee_id as employee_code,
+               CONCAT(u.first_name, ' ', u.last_name) as employee_name, u.full_name, u.employee_id as employee_code,
                d.name as department_name, 
                hr_user.full_name as escalated_by_name,
                ceo_user.full_name as approved_by_name
         FROM leave_requests lr
         JOIN leave_types lt ON lr.leave_type_id = lt.id
-        JOIN employees e ON lr.employee_id = e.id
-        JOIN departments d ON e.department_id = d.id
+        JOIN users u ON lr.employee_id = u.id
+        JOIN departments d ON u.department_id = d.id
         LEFT JOIN users hr_user ON lr.finalized_by_hr = hr_user.id
         LEFT JOIN users ceo_user ON lr.ceo_decided_by = ceo_user.id
         WHERE lr.ceo_decision_status = 'approved'
@@ -148,13 +148,13 @@ try {
 // Get approved payroll approvals
 try {
     $stmt = $db->query("
-        SELECT p.*, CONCAT(e.first_name, ' ', e.last_name) as employee_name, e.employee_id as employee_code,
+        SELECT p.*, CONCAT(u.first_name, ' ', u.last_name) as employee_name, u.full_name, u.employee_id as employee_code,
                d.name as department_name, 
                hr_user.full_name as submitted_by_name,
                ceo_user.full_name as approved_by_name
         FROM payroll p
-        JOIN employees e ON p.employee_id = e.id
-        JOIN departments d ON e.department_id = d.id
+        JOIN users u ON p.user_id = u.id
+        JOIN departments d ON u.department_id = d.id
         LEFT JOIN users hr_user ON p.processed_by = hr_user.id
         LEFT JOIN users ceo_user ON p.ceo_approved_by = ceo_user.id
         WHERE p.status = 'approved_by_ceo'
@@ -191,12 +191,12 @@ try {
 // Get approved target approvals
 try {
     $stmt = $db->query("
-        SELECT pt.*, CONCAT(e.first_name, ' ', e.last_name) as employee_name, e.employee_id as employee_code,
+        SELECT pt.*, CONCAT(u.first_name, ' ', u.last_name) as employee_name, u.full_name, u.employee_id as employee_code,
                d.name as department_name,
                ceo_user.full_name as approved_by_name
         FROM performance_targets pt
-        JOIN employees e ON pt.employee_id = e.id
-        JOIN departments d ON e.department_id = d.id
+        JOIN users u ON pt.employee_id = u.id
+        JOIN departments d ON u.department_id = d.id
         LEFT JOIN users ceo_user ON pt.ceo_decided_by = ceo_user.id
         WHERE pt.ceo_decision_status = 'approved'
         ORDER BY pt.ceo_decided_at DESC
