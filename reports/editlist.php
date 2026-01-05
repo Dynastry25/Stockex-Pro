@@ -359,7 +359,7 @@ function generateBondsEditListHTML($transactions, $company_name, $company_addres
     <div class="row mt-4">
         <div class="col-md-4">
             <div class="card">
-                <div class="card-header bg-primary text-white">
+                <div class="card-header bg-primary">
                     <strong>Summary</strong>
                 </div>
                 <div class="card-body">
@@ -372,7 +372,7 @@ function generateBondsEditListHTML($transactions, $company_name, $company_addres
         </div>
         <div class="col-md-4">
             <div class="card">
-                <div class="card-header bg-success text-white">
+                <div class="card-header bg-success">
                     <strong>Financial Summary</strong>
                 </div>
                 <div class="card-body">
@@ -384,7 +384,7 @@ function generateBondsEditListHTML($transactions, $company_name, $company_addres
         </div>
         <div class="col-md-4">
             <div class="card">
-                <div class="card-header bg-info text-white">
+                <div class="card-header bg-info">
                     <strong>Commission Summary</strong>
                 </div>
                 <div class="card-body">
@@ -656,7 +656,7 @@ function generateEquitiesEditListHTML($transactions, $company_name, $company_add
     <div class="row mt-4">
         <div class="col-md-4">
             <div class="card">
-                <div class="card-header bg-success text-white">
+                <div class="card-header bg-success">
                     <strong>Summary</strong>
                 </div>
                 <div class="card-body">
@@ -669,7 +669,7 @@ function generateEquitiesEditListHTML($transactions, $company_name, $company_add
         </div>
         <div class="col-md-4">
             <div class="card">
-                <div class="card-header bg-primary text-white">
+                <div class="card-header bg-primary">
                     <strong>Financial Summary</strong>
                 </div>
                 <div class="card-body">
@@ -681,7 +681,7 @@ function generateEquitiesEditListHTML($transactions, $company_name, $company_add
         </div>
         <div class="col-md-4">
             <div class="card">
-                <div class="card-header bg-info text-white">
+                <div class="card-header bg-info">
                     <strong>Commission Summary</strong>
                 </div>
                 <div class="card-body">
@@ -898,7 +898,7 @@ function generateCombinedEditListHTML($bond_transactions, $equity_transactions, 
                 <div class="row mt-2">
                     <div class="col-md-12">
                         <div class="card border-primary">
-                            <div class="card-header bg-primary text-white py-2">
+                            <div class="card-header bg-primary py-2">
                                 <strong>Bonds Summary</strong>
                             </div>
                             <div class="card-body p-3">
@@ -1041,7 +1041,7 @@ function generateCombinedEditListHTML($bond_transactions, $equity_transactions, 
                 <div class="row mt-2">
                     <div class="col-md-12">
                         <div class="card border-success">
-                            <div class="card-header bg-success text-white py-2">
+                            <div class="card-header bg-success py-2">
                                 <strong>Shares Summary</strong>
                             </div>
                             <div class="card-body p-3">
@@ -1133,7 +1133,7 @@ function generateCombinedEditListHTML($bond_transactions, $equity_transactions, 
             <div class="row mt-4">
                 <div class="col-md-12">
                     <div class="card border-dark">
-                        <div class="card-header bg-dark text-white py-2">
+                        <div class="card-header bg-dark py-2">
                             <strong><i class="fas fa-calculator me-2"></i>OVERALL SUMMARY</strong>
                         </div>
                         <div class="card-body p-3">
@@ -1494,7 +1494,7 @@ function displayFilterForm() {
             <div class="row justify-content-center">
                 <div class="col-lg-10">
                     <div class="card">
-                        <div class="card-header bg-primary text-white">
+                        <div class="card-header bg-primary">
                             <h4 class="mb-0"><i class="fas fa-filter me-2"></i>Edit List Reports Filter</h4>
                         </div>
                         <div class="card-body">

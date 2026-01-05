@@ -14,7 +14,7 @@ include '../includes/header.php';
     <div class="row">
         <div class="col-12">
             <div class="card">
-                <div class="card-header bg-primary text-white">
+                <div class="card-header bg-primary">
                     <h4 class="mb-0"><i class="bi bi-file-earmark-text me-2"></i>Financial Reports</h4>
                     <p class="mb-0">Generate and export comprehensive financial statements</p>
                 </div>
@@ -27,7 +27,7 @@ include '../includes/header.php';
                                     <div class="report-icon mb-3">
                                         <div class="d-inline-flex align-items-center justify-content-center rounded-circle" 
                                              style="width: 80px; height: 80px; background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);">
-                                            <i class="bi bi-balance-scale text-white" style="font-size: 2rem;"></i>
+                                            <i class="bi bi-balance-scale" style="font-size: 2rem;"></i>
                                         </div>
                                     </div>
                                     <h5 class="report-title mb-2">Balance Sheet</h5>

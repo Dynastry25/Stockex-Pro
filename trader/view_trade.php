@@ -173,7 +173,7 @@ include '../includes/header.php';
                     <div class="me-3">
                         <div class="d-inline-flex align-items-center justify-content-center rounded-circle shadow-sm"
                              style="width: 60px; height: 60px; background: linear-gradient(135deg, var(--primary-color) 0%, #3b82f6 100%);">
-                            <i class="bi bi-card-checklist text-white" style="font-size: 1.5rem;"></i>
+                            <i class="bi bi-card-checklist" style="font-size: 1.5rem;"></i>
                         </div>
                     </div>
                     <div>

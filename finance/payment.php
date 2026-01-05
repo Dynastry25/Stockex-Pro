@@ -1538,14 +1538,14 @@ include '../includes/header.php';
                                             <td><?php echo date('M d, Y', strtotime($payment['payment_date'])); ?></td>
                                             <td><?php echo htmlspecialchars($payment['paid_to_desc'] ?? $payment['paid_to']); ?></td>
                                             <td>
-                                                <?php echo htmlspecialchars($payment['name']); ?>
+                                                <?php echo htmlspecialchars($payment['name'] ?? ''); ?>
                                                 <?php if (!empty($payment['name_id'])): ?>
-                                                    <br><small class="text-muted">ID: <?php echo htmlspecialchars($payment['name_id']); ?></small>
+                                                    <br><small class="text-muted">ID: <?php echo htmlspecialchars((string)$payment['name_id']); ?></small>
                                                 <?php endif; ?>
                                             </td>
-                                            <td><?php echo htmlspecialchars($payment['account_no']); ?></td>
+                                            <td><?php echo htmlspecialchars($payment['account_no'] ?? ''); ?></td>
                                             <td class="fw-bold text-danger"><?php echo number_format($payment['amount'], 2); ?></td>
-                                            <td><?php echo htmlspecialchars($payment['currency']); ?></td>
+                                            <td><?php echo htmlspecialchars($payment['currency'] ?? ''); ?></td>
                                             <td>
                                                 <?php if (!empty($bank_info)): ?>
                                                     <small><?php echo htmlspecialchars($bank_info); ?></small>

@@ -283,4 +283,327 @@ function get_payroll_details($payroll_id) {
         return null;
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// payroll_helpers.php
+function generate_salary_preview($pay_period_month) {
+    global $db;
+    
+    $preview_data = [
+        'employees' => [],
+        'summary' => [
+            'total_employees' => 0,
+            'total_basic' => 0,
+            'total_allowances' => 0,
+            'total_overtime' => 0,
+            'total_bonus' => 0,
+            'total_gross' => 0,
+            'total_employee_deductions' => 0,
+            'total_employer_contributions' => 0,
+            'total_net' => 0,
+            'total_employer_cost' => 0,
+            'deduction_breakdown' => [],
+            'total_employer_nssf' => 0,
+            'total_employer_sdl' => 0,
+            'total_employer_wcf' => 0,
+            'total_employer_osha' => 0
+        ]
+    ];
+    
+    // Get all active employees
+    $employee_stmt = $db->query("
+        SELECT u.*, d.department_name
+        FROM users u
+        LEFT JOIN departments d ON u.department_id = d.id
+        WHERE u.status = 'active'
+        AND u.role NOT IN ('system_admin', 'ceo')
+        ORDER BY u.full_name
+    ");
+    $employees = $employee_stmt->fetchAll();
+    
+    // Get all deduction types
+    $deduction_stmt = $db->query("
+        SELECT dt.*, de.user_id
+        FROM deduction_types dt
+        LEFT JOIN deduction_employees de ON dt.id = de.deduction_type_id 
+            AND de.status = 'active'
+        WHERE dt.status = 'active'
+    ");
+    $all_deductions = $deduction_stmt->fetchAll();
+    
+    // Organize deductions by employee
+    $employee_deductions = [];
+    foreach ($all_deductions as $ded) {
+        if ($ded['applies_to'] === 'all') {
+            // Apply to all employees
+            foreach ($employees as $emp) {
+                $employee_deductions[$emp['id']][] = $ded;
+            }
+        } elseif ($ded['user_id']) {
+            // Apply to specific employee
+            $employee_deductions[$ded['user_id']][] = $ded;
+        }
+    }
+    
+    foreach ($employees as $employee) {
+        $basic_salary = (float)$employee['salary'];
+        $user_id = $employee['id'];
+        
+        // Get approved incentives for this month
+        $incentive_stmt = $db->prepare("
+            SELECT incentive_type, SUM(amount) as total_amount 
+            FROM payroll_incentives 
+            WHERE user_id = ? 
+            AND pay_period_month = ? 
+            AND status = 'approved'
+            GROUP BY incentive_type
+        ");
+        $incentive_stmt->execute([$user_id, $pay_period_month]);
+        $incentives = $incentive_stmt->fetchAll(PDO::FETCH_KEY_PAIR);
+        
+        // Calculate earnings
+        $allowances = (float)($incentives['allowance'] ?? 0);
+        $overtime = (float)($incentives['overtime'] ?? 0);
+        $bonus = (float)($incentives['bonus'] ?? 0);
+        $commission = (float)($incentives['commission'] ?? 0);
+        $gross_salary = $basic_salary + $allowances + $overtime + $bonus + $commission;
+        
+        // Calculate deductions
+        $deductions = [];
+        $total_employee_deductions = 0;
+        $total_employer_contributions = 0;
+        
+        $emp_deductions = $employee_deductions[$user_id] ?? [];
+        foreach ($emp_deductions as $ded) {
+            if ($ded['deduction_type'] === 'percentage') {
+                $amount = ($basic_salary * $ded['deduction_value']) / 100;
+            } else {
+                $amount = $ded['deduction_value'];
+            }
+            
+            if ($ded['is_employer_contribution']) {
+                $total_employer_contributions += $amount;
+                $preview_data['summary']['total_employer_contributions'] += $amount;
+                
+                // Add to employer breakdown
+                if (!isset($preview_data['summary']['deduction_breakdown'][$ded['deduction_name']])) {
+                    $preview_data['summary']['deduction_breakdown'][$ded['deduction_name']] = 0;
+                }
+                $preview_data['summary']['deduction_breakdown'][$ded['deduction_name']] += $amount;
+            } else {
+                $deductions[$ded['deduction_name']] = $amount;
+                $total_employee_deductions += $amount;
+                $preview_data['summary']['total_employee_deductions'] += $amount;
+                
+                // Add to employee deduction breakdown
+                if (!isset($preview_data['summary']['deduction_breakdown'][$ded['deduction_name']])) {
+                    $preview_data['summary']['deduction_breakdown'][$ded['deduction_name']] = 0;
+                }
+                $preview_data['summary']['deduction_breakdown'][$ded['deduction_name']] += $amount;
+            }
+        }
+        
+        // Calculate statutory deductions
+        $nssf_employee = calculate_nssf($basic_salary);
+        $paye = calculate_paye($basic_salary + $allowances + $bonus);
+        $nhif = calculate_nhif($basic_salary + $allowances + $bonus);
+        
+        // Add statutory to deductions
+        $deductions['NSSF (Employee)'] = $nssf_employee;
+        $deductions['PAYE'] = $paye;
+        $deductions['NHIF'] = $nhif;
+        
+        $total_employee_deductions += $nssf_employee + $paye + $nhif;
+        $preview_data['summary']['total_employee_deductions'] += $nssf_employee + $paye + $nhif;
+        
+        // Calculate employer statutory contributions
+        $nssf_employer = calculate_nssf_employer($basic_salary);
+        $sdl = calculate_sdl($gross_salary);
+        $wcf = calculate_wcf($gross_salary);
+        $osha = calculate_osha($gross_salary);
+        
+        $total_employer_contributions += $nssf_employer + $sdl + $wcf + $osha;
+        $preview_data['summary']['total_employer_contributions'] += $nssf_employer + $sdl + $wcf + $osha;
+        
+        // Add to employer totals
+        $preview_data['summary']['total_employer_nssf'] += $nssf_employer;
+        $preview_data['summary']['total_employer_sdl'] += $sdl;
+        $preview_data['summary']['total_employer_wcf'] += $wcf;
+        $preview_data['summary']['total_employer_osha'] += $osha;
+        
+        $net_salary = $gross_salary - $total_employee_deductions;
+        $total_cost_to_employer = $gross_salary + $total_employer_contributions;
+        
+        // Add employee data
+        $preview_data['employees'][] = [
+            'id' => $user_id,
+            'full_name' => $employee['full_name'],
+            'job_title' => $employee['job_title'],
+            'department' => $employee['department_name'],
+            'basic_salary' => $basic_salary,
+            'allowances' => $allowances,
+            'overtime' => $overtime,
+            'bonus' => $bonus,
+            'commission' => $commission,
+            'gross_salary' => $gross_salary,
+            'deductions' => $deductions,
+            'total_deductions' => $total_employee_deductions,
+            'net_salary' => $net_salary,
+            'employer_contributions' => [
+                'nssf' => $nssf_employer,
+                'sdl' => $sdl,
+                'wcf' => $wcf,
+                'osha' => $osha,
+                'other' => $total_employer_contributions - ($nssf_employer + $sdl + $wcf + $osha)
+            ],
+            'total_employer_contributions' => $total_employer_contributions,
+            'total_cost_to_employer' => $total_cost_to_employer
+        ];
+        
+        // Update summary totals
+        $preview_data['summary']['total_employees']++;
+        $preview_data['summary']['total_basic'] += $basic_salary;
+        $preview_data['summary']['total_allowances'] += $allowances;
+        $preview_data['summary']['total_overtime'] += $overtime;
+        $preview_data['summary']['total_bonus'] += $bonus;
+        $preview_data['summary']['total_gross'] += $gross_salary;
+        $preview_data['summary']['total_net'] += $net_salary;
+        $preview_data['summary']['total_employer_cost'] += $total_cost_to_employer;
+    }
+    
+    return $preview_data;
+}
+
+function create_payment_request_from_preview($preview_id, $created_by) {
+    global $db;
+    
+    // Get preview data
+    $preview_stmt = $db->prepare("
+        SELECT sp.*, sp.preview_data
+        FROM salary_previews sp
+        WHERE sp.id = ?
+    ");
+    $preview_stmt->execute([$preview_id]);
+    $preview = $preview_stmt->fetch();
+    
+    if (!$preview) {
+        throw new Exception('Preview not found');
+    }
+    
+    $preview_data = json_decode($preview['preview_data'], true);
+    
+    // Generate payment request number
+    $request_no = generate_payment_request_no();
+    
+    // Calculate total amount (net salary)
+    $total_amount = $preview_data['summary']['total_net'] ?? 0;
+    
+    // Create payment request
+    $payment_stmt = $db->prepare("
+        INSERT INTO pending_pay (
+            request_no, subject, pay_to_type, payee_id, payee_name,
+            payee_bank_name, payee_branch, payee_account_name,
+            payee_account_no, currency, amount_paid, cheque_no,
+            payment_description, requested_by, status, salary_preview_id
+        ) VALUES (?, ?, 'O', ?, ?, ?, ?, ?, ?, 'TZS', ?, ?, ?, ?, 'pending', ?)
+    ");
+    
+    $subject = "Salary Payment - " . date('F Y', strtotime($preview['pay_period_month'] . '-01'));
+    $payee_id = 'SALARY'; // Special code for salary payments
+    $payee_name = 'Employee Salaries';
+    $description = "Salary payment for " . date('F Y', strtotime($preview['pay_period_month'] . '-01')) . 
+                   " - " . $preview_data['summary']['total_employees'] . " employees";
+    
+    $payment_stmt->execute([
+        $request_no,
+        $subject,
+        $payee_id,
+        $payee_name,
+        '', // bank name
+        '', // branch
+        'Various Accounts', // account name
+        'Various', // account number
+        $total_amount,
+        '', // cheque no
+        $description,
+        $created_by,
+        $preview_id
+    ]);
+    
+    $payment_id = $db->lastInsertId();
+    
+    // Create detailed payment records for each employee
+    foreach ($preview_data['employees'] ?? [] as $employee) {
+        $detail_stmt = $db->prepare("
+            INSERT INTO payment_details (
+                payment_request_id, user_id, employee_name, job_title,
+                basic_salary, allowances, overtime, bonus, gross_salary,
+                total_deductions, net_salary, bank_name, account_number,
+                payment_method
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'bank_transfer')
+        ");
+        
+        $detail_stmt->execute([
+            $payment_id,
+            $employee['id'],
+            $employee['full_name'],
+            $employee['job_title'],
+            $employee['basic_salary'],
+            $employee['allowances'],
+            $employee['overtime'],
+            $employee['bonus'],
+            $employee['gross_salary'],
+            $employee['total_deductions'],
+            $employee['net_salary'],
+            'Various Banks',
+            'Various Accounts'
+        ]);
+    }
+    
+    return $payment_id;
+}
+
+function generate_payment_request_no() {
+    global $db;
+    
+    $prefix = 'SAL';
+    $year = date('Y');
+    $month = date('m');
+    
+    // Get last salary payment request number for this month
+    $stmt = $db->prepare("
+        SELECT request_no FROM pending_pay 
+        WHERE request_no LIKE ? 
+        AND subject LIKE 'Salary Payment%'
+        ORDER BY id DESC LIMIT 1
+    ");
+    $stmt->execute(["$prefix$year$month%"]);
+    $last = $stmt->fetch();
+    
+    if ($last) {
+        $last_no = intval(substr($last['request_no'], -4));
+        $new_no = str_pad($last_no + 1, 4, '0', STR_PAD_LEFT);
+    } else {
+        $new_no = '0001';
+    }
+    
+    return $prefix . $year . $month . $new_no;
+}
+
+// Other helper functions remain the same as before...
+// calculate_nssf, calculate_paye, calculate_nhif, calculate_sdl, calculate_wcf, calculate_osha
 ?>

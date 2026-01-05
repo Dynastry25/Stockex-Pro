@@ -745,3 +745,8 @@ body {
 .timeline-item.current .timeline-content {
     border-left-color: #ffc107;
 }
+
+/* Override Bootstrap's .text-white to prevent invisible text */
+.text-white {
+    color: inherit !important;
+}

@@ -303,3 +303,6 @@ Stack trace:
 [29-Dec-2025 16:38:30 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
 [29-Dec-2025 16:38:30 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
 [29-Dec-2025 16:41:52 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[01-Jan-2026 11:46:08 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[01-Jan-2026 11:54:23 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'
+[01-Jan-2026 11:54:37 UTC] Trading metrics error: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'commission_amount' in 'field list'

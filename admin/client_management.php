@@ -1,9 +1,10 @@
 <?php
 require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
-
+require_ceo();
 require_admin();
-require_mandate();
+require_trader();
+
 
 $db = getDBConnection();
 $success_message = '';

@@ -242,7 +242,7 @@ function generateBondsSummaryHTML($client_balances, $company_name, $company_addr
     <div class="row mt-4">
         <div class="col-md-4">
             <div class="card border-primary">
-                <div class="card-header bg-primary text-white">
+                <div class="card-header bg-primary">
                     <strong><i class="fas fa-users me-2"></i>Client Summary</strong>
                 </div>
                 <div class="card-body">
@@ -255,7 +255,7 @@ function generateBondsSummaryHTML($client_balances, $company_name, $company_addr
         </div>
         <div class="col-md-4">
             <div class="card border-success">
-                <div class="card-header bg-success text-white">
+                <div class="card-header bg-success">
                     <strong><i class="fas fa-money-bill-wave me-2"></i>Financial Summary</strong>
                 </div>
                 <div class="card-body">
@@ -268,7 +268,7 @@ function generateBondsSummaryHTML($client_balances, $company_name, $company_addr
         </div>
         <div class="col-md-4">
             <div class="card border-info">
-                <div class="card-header bg-info text-white">
+                <div class="card-header bg-info">
                     <strong><i class="fas fa-chart-pie me-2"></i>Statistics</strong>
                 </div>
                 <div class="card-body">
@@ -430,7 +430,7 @@ function generateEquitiesSummaryHTML($client_balances, $company_name, $company_a
     <div class="row mt-4">
         <div class="col-md-4">
             <div class="card border-success">
-                <div class="card-header bg-success text-white">
+                <div class="card-header bg-success">
                     <strong><i class="fas fa-users me-2"></i>Client Summary</strong>
                 </div>
                 <div class="card-body">
@@ -443,7 +443,7 @@ function generateEquitiesSummaryHTML($client_balances, $company_name, $company_a
         </div>
         <div class="col-md-4">
             <div class="card border-primary">
-                <div class="card-header bg-primary text-white">
+                <div class="card-header bg-primary">
                     <strong><i class="fas fa-money-bill-wave me-2"></i>Financial Summary</strong>
                 </div>
                 <div class="card-body">
@@ -456,7 +456,7 @@ function generateEquitiesSummaryHTML($client_balances, $company_name, $company_a
         </div>
         <div class="col-md-4">
             <div class="card border-info">
-                <div class="card-header bg-info text-white">
+                <div class="card-header bg-info">
                     <strong><i class="fas fa-chart-pie me-2"></i>Statistics</strong>
                 </div>
                 <div class="card-body">
@@ -703,7 +703,7 @@ function generateCombinedSummaryHTML($bond_balances, $equity_balances, $company_
             <div class="row mt-4">
                 <div class="col-md-12">
                     <div class="card border-dark">
-                        <div class="card-header bg-dark text-white py-2">
+                        <div class="card-header bg-dark py-2">
                             <strong><i class="fas fa-calculator me-2"></i>OVERALL SUMMARY</strong>
                         </div>
                         <div class="card-body">
@@ -1171,7 +1171,7 @@ function displayFilterForm() {
             <div class="row justify-content-center">
                 <div class="col-lg-10">
                     <div class="card">
-                        <div class="card-header bg-primary text-white">
+                        <div class="card-header bg-primary">
                             <h4 class="mb-0"><i class="fas fa-filter me-2"></i>Transaction Summary Reports Filter</h4>
                         </div>
                         <div class="card-body">

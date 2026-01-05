@@ -195,7 +195,7 @@ if (isset($_SESSION['error_message'])) {
                                     <div class="flex-shrink-0">
                                         <div class="bg-primary rounded-circle d-flex align-items-center justify-content-center" 
                                              style="width: 40px; height: 40px;">
-                                            <span class="text-white fw-bold">
+                                            <span class="fw-bold">
                                                 <?php echo strtoupper(substr($application['first_name'], 0, 1) . substr($application['last_name'], 0, 1)); ?>
                                             </span>
                                         </div>

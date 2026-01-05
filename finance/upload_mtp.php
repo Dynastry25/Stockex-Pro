@@ -942,7 +942,7 @@ if (isset($_SESSION['created_receipts']) && !empty($_SESSION['created_receipts']
     <!-- Receipt Creation Results -->
     <?php if (isset($created_receipts) && !empty($created_receipts)): ?>
     <div class="card shadow-sm mb-4">
-        <div class="card-header bg-success text-white">
+        <div class="card-header bg-success">
             <h5 class="mb-0"><i class="bi bi-receipt me-2"></i>Receipts Created Successfully</h5>
         </div>
         <div class="card-body">
@@ -1006,7 +1006,7 @@ if (isset($_SESSION['created_receipts']) && !empty($_SESSION['created_receipts']
     <div class="row">
         <div class="col-lg-12">
             <div class="card shadow-sm">
-                <div class="card-header bg-primary text-white">
+                <div class="card-header bg-primary">
                     <h4 class="mb-0 text-dark"><i class="bi bi-upload me-2"></i>Upload CSV File (MTP Payments)</h4>
                 </div>
                 <div class="card-body">
@@ -1054,7 +1054,7 @@ if (isset($_SESSION['created_receipts']) && !empty($_SESSION['created_receipts']
     <?php if (!empty($all_entries)): ?>
     <!-- Validation Results -->
     <div class="card shadow-sm mt-4">
-        <div class="card-header bg-info text-white">
+        <div class="card-header bg-info">
             <h5 class="mb-0 text-dark">Validation Results</h5>
             <div>
                 <span class="badge bg-success">Valid: <?php echo $valid_count; ?></span>

@@ -285,14 +285,64 @@ try {
                             </thead>
                             <tbody>
                                 <?php foreach ($employees as $employee): ?>
+                                <?php 
+                                // Determine department based on role if join failed
+                                $department = $employee['department_name'];
+                                if (empty($department)) {
+                                    switch ($employee['role']) {
+                                        case 'trader':
+                                            $department = 'Trading';
+                                            break;
+                                        case 'finance_officer':
+                                            $department = 'Finance';
+                                            break;
+                                        case 'hr_manager':
+                                        case 'hr_officer':
+                                            $department = 'HR';
+                                            break;
+                                        case 'ceo':
+                                            $department = 'Management';
+                                            break;
+                                        case 'system_admin':
+                                            $department = 'Operations';
+                                            break;
+                                        default:
+                                            $department = 'Operations';
+                                    }
+                                }
+                                
+                                // Determine position based on role if join failed
+                                $position = $employee['position_title'];
+                                if (empty($position)) {
+                                    switch ($employee['role']) {
+                                        case 'trader':
+                                            $position = 'Operations Manager';
+                                            break;
+                                        case 'finance_officer':
+                                            $position = 'Finance Officer';
+                                            break;
+                                        case 'hr_manager':
+                                            $position = 'HR Manager';
+                                            break;
+                                        case 'hr_officer':
+                                            $position = 'HR Officer';
+                                            break;
+                                        case 'ceo':
+                                            $position = 'Finance Manager'; // or CEO
+                                            break;
+                                        default:
+                                            $position = 'Operations Manager';
+                                    }
+                                }
+                                ?>
                                 <tr>
-                                    <td><?php echo htmlspecialchars($employee['employee_id'] ?? 'N/A'); ?></td>
-                                    <td><?php echo htmlspecialchars(($employee['first_name'] ?? '') . ' ' . ($employee['last_name'] ?? '')); ?></td>
-                                    <td><?php echo htmlspecialchars($employee['department_name'] ?? 'N/A'); ?></td>
-                                    <td><?php echo htmlspecialchars($employee['position_title'] ?? 'N/A'); ?></td>
+                                    <td><?php echo 'EMP-' . str_pad($employee['id'], 4, '0', STR_PAD_LEFT); ?></td>
+                                    <td><?php echo htmlspecialchars($employee['full_name']); ?></td>
+                                    <td><?php echo htmlspecialchars($department); ?></td>
+                                    <td><?php echo htmlspecialchars($position); ?></td>
                                     <td>
-                                        <span class="badge bg-<?php echo ($employee['status'] ?? '') == 'active' ? 'success' : 'danger'; ?>">
-                                            <?php echo ucfirst($employee['status'] ?? 'Unknown'); ?>
+                                        <span class="badge bg-<?php echo $employee['is_active'] ? 'success' : 'danger'; ?>">
+                                            <?php echo $employee['is_active'] ? 'Active' : 'Inactive'; ?>
                                         </span>
                                     </td>
                                 </tr>

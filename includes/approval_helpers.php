@@ -6,6 +6,30 @@
  * across different HR modules (leave requests, payroll, recruitment, etc.)
  */
 
+// Define constants if they don't exist
+if (!defined('WORKFLOW_LEAVE')) define('WORKFLOW_LEAVE', 'leave');
+if (!defined('WORKFLOW_PAYROLL')) define('WORKFLOW_PAYROLL', 'payroll');
+if (!defined('WORKFLOW_RECRUITMENT')) define('WORKFLOW_RECRUITMENT', 'recruitment');
+if (!defined('WORKFLOW_PAYMENT')) define('WORKFLOW_PAYMENT', 'payment');
+
+if (!defined('ENTITY_LEAVE_REQUEST')) define('ENTITY_LEAVE_REQUEST', 'leave_request');
+if (!defined('ENTITY_PAYROLL')) define('ENTITY_PAYROLL', 'payroll');
+if (!defined('ENTITY_RECRUITMENT')) define('ENTITY_RECRUITMENT', 'recruitment');
+if (!defined('ENTITY_PAYMENT')) define('ENTITY_PAYMENT', 'payment_request');
+
+if (!defined('WORKFLOW_PENDING')) define('WORKFLOW_PENDING', 'pending');
+if (!defined('WORKFLOW_IN_PROGRESS')) define('WORKFLOW_IN_PROGRESS', 'in_progress');
+if (!defined('WORKFLOW_COMPLETED')) define('WORKFLOW_COMPLETED', 'completed');
+if (!defined('WORKFLOW_REJECTED')) define('WORKFLOW_REJECTED', 'rejected');
+
+// Leave status constants
+if (!defined('LEAVE_PENDING_HR')) define('LEAVE_PENDING_HR', 'pending_hr');
+if (!defined('LEAVE_APPROVED_BY_HR')) define('LEAVE_APPROVED_BY_HR', 'approved_by_hr');
+if (!defined('LEAVE_REJECTED_BY_HR')) define('LEAVE_REJECTED_BY_HR', 'rejected_by_hr');
+if (!defined('LEAVE_PENDING_CEO')) define('LEAVE_PENDING_CEO', 'pending_ceo');
+if (!defined('LEAVE_APPROVED_BY_CEO')) define('LEAVE_APPROVED_BY_CEO', 'approved_by_ceo');
+if (!defined('LEAVE_REJECTED_BY_CEO')) define('LEAVE_REJECTED_BY_CEO', 'rejected_by_ceo');
+
 /**
  * Create a new approval workflow
  *
@@ -104,24 +128,27 @@ function get_approval_workflow($entity_type, $entity_id) {
 /**
  * Update approval workflow status
  *
- * @param int $workflow_id The workflow ID
+ * @param string $entity_type The entity type
+ * @param int $entity_id The entity ID
  * @param string $new_status New status for the workflow
  * @param int $action_by User ID performing the action
  * @param string|null $action_reason Optional reason for the action
  * @return bool Success status
  */
-function update_approval_workflow_status($workflow_id, $new_status, $action_by, $action_reason = null) {
+function update_approval_workflow_status($entity_type, $entity_id, $new_status, $action_by, $action_reason = null) {
     global $db;
 
     try {
         // Get current workflow info
-        $workflow_stmt = $db->prepare("SELECT * FROM approval_workflows WHERE id = ?");
-        $workflow_stmt->execute([$workflow_id]);
+        $workflow_stmt = $db->prepare("SELECT * FROM approval_workflows WHERE entity_type = ? AND entity_id = ?");
+        $workflow_stmt->execute([$entity_type, $entity_id]);
         $workflow = $workflow_stmt->fetch();
 
         if (!$workflow) {
             return false;
         }
+
+        $workflow_id = $workflow['id'];
 
         // Determine which action field to update based on user role and current status
         $update_fields = [];
@@ -326,6 +353,65 @@ function get_pending_workflows_for_user($user_id, $user_role) {
     } catch (Exception $e) {
         error_log("Error getting pending workflows: " . $e->getMessage());
         return [];
+    }
+}
+
+/**
+ * Get workflow history for an entity
+ *
+ * @param string $entity_type The entity type
+ * @param int $entity_id The entity ID
+ * @return array Array of workflow history
+ */
+function get_workflow_history($entity_type, $entity_id) {
+    global $db;
+
+    try {
+        $stmt = $db->prepare("
+            SELECT 
+                wh.*,
+                u.full_name as action_by_name,
+                u.role as action_by_role
+            FROM workflow_history wh
+            LEFT JOIN users u ON wh.action_by = u.id
+            WHERE wh.entity_type = ? AND wh.entity_id = ?
+            ORDER BY wh.action_date DESC
+        ");
+
+        $stmt->execute([$entity_type, $entity_id]);
+        return $stmt->fetchAll();
+
+    } catch (Exception $e) {
+        error_log("Error getting workflow history: " . $e->getMessage());
+        return [];
+    }
+}
+
+/**
+ * Log workflow action to history
+ *
+ * @param string $entity_type The entity type
+ * @param int $entity_id The entity ID
+ * @param string $action_type Action type (approve, reject, escalate, etc.)
+ * @param int $action_by User ID performing the action
+ * @param string|null $action_notes Optional notes about the action
+ * @return bool Success status
+ */
+function log_workflow_action($entity_type, $entity_id, $action_type, $action_by, $action_notes = null) {
+    global $db;
+
+    try {
+        $stmt = $db->prepare("
+            INSERT INTO workflow_history (
+                entity_type, entity_id, action_type, action_by, action_notes, action_date
+            ) VALUES (?, ?, ?, ?, ?, NOW())
+        ");
+
+        return $stmt->execute([$entity_type, $entity_id, $action_type, $action_by, $action_notes]);
+
+    } catch (Exception $e) {
+        error_log("Error logging workflow action: " . $e->getMessage());
+        return false;
     }
 }
 ?>

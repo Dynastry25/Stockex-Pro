@@ -39,8 +39,8 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
     fputcsv($output, $headers, ',', '"', '\\');
     
     // Get filtered trades for export
-    $where_conditions = ["t.uploaded_by = ?"];
-    $params = [$_SESSION['user_id']];
+    $where_conditions = [];
+    $params = [];
     
     // Apply same filters as page
     if (isset($_GET['status']) && !empty($_GET['status'])) {
@@ -76,7 +76,12 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
         $params[] = $search_term;
     }
     
-    $where_clause = implode(' AND ', $where_conditions);
+    // Build WHERE clause - if empty, use "1=1" (always true)
+    if (empty($where_conditions)) {
+        $where_clause = "1=1";
+    } else {
+        $where_clause = implode(' AND ', $where_conditions);
+    }
     
     $export_stmt = $db->prepare("
         SELECT t.*
@@ -475,9 +480,9 @@ if (isset($_GET['action']) && isset($_GET['id'])) {
     $action = $_GET['action'];
     $trade_id = (int)$_GET['id'];
     
-    // Verify trade belongs to current trader
-    $stmt = $db->prepare("SELECT * FROM trades WHERE id = ? AND uploaded_by = ?");
-    $stmt->execute([$trade_id, $_SESSION['user_id']]);
+    // Get the trade (no user restriction)
+    $stmt = $db->prepare("SELECT * FROM trades WHERE id = ?");
+    $stmt->execute([$trade_id]);
     $trade = $stmt->fetch();
     
     if ($trade) {
@@ -525,9 +530,8 @@ if (isset($_GET['action']) && isset($_GET['id'])) {
                     AND trade_side = ? 
                     AND security_id = ?
                     AND status = 'active'
-                    AND uploaded_by = ?
                 ");
-                $stmt->execute([$client_id, $trade_date, $trade_side, $security_id, $_SESSION['user_id']]);
+                $stmt->execute([$client_id, $trade_date, $trade_side, $security_id]);
                 $result = $stmt->fetch();
                 
                 if ($result['trade_count'] > 1) {
@@ -1105,8 +1109,8 @@ $stmt = $db->query("SELECT id, company_name, company_code FROM companies WHERE s
 $companies = $stmt->fetchAll();
 
 // Get trades with extensive filtering including dates - WITHOUT PAGINATION (client-side)
-$where_conditions = ["t.uploaded_by = ?"];
-$params = [$_SESSION['user_id']];
+$where_conditions = [];
+$params = [];
 
 // Status filter
 if (isset($_GET['status']) && !empty($_GET['status'])) {
@@ -1152,7 +1156,12 @@ if (isset($_GET['search']) && !empty($_GET['search'])) {
     $params[] = $search_term;
 }
 
-$where_clause = implode(' AND ', $where_conditions);
+// Build WHERE clause - if empty, use "1=1" (always true)
+if (empty($where_conditions)) {
+    $where_clause = "1=1";
+} else {
+    $where_clause = implode(' AND ', $where_conditions);
+}
 
 // Get all trades without pagination
 $stmt = $db->prepare("
@@ -1201,7 +1210,7 @@ include '../includes/header.php';
                     <div class="me-3">
                         <div class="d-inline-flex align-items-center justify-content-center rounded-circle shadow-sm" 
                              style="width: 60px; height: 60px; background: linear-gradient(135deg, var(--success-color) 0%, #10b981 100%);">
-                            <i class="bi bi-graph-up text-white" style="font-size: 1.5rem;"></i>
+                            <i class="bi bi-graph-up" style="font-size: 1.5rem;"></i>
                         </div>
                     </div>
                     <div>
@@ -1313,11 +1322,11 @@ include '../includes/header.php';
                 <div class="modal-header border-0 pb-0" style="background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-color-dark) 100%);">
                     <div class="d-flex align-items-center w-100">
                         <div class="me-3">
-                            <i class="bi bi-file-earmark-text-fill text-white" style="font-size: 1.5rem;"></i>
+                            <i class="bi bi-file-earmark-text-fill" style="font-size: 1.5rem;"></i>
                         </div>
                         <div class="flex-grow-1">
-                            <h5 class="modal-title text-white mb-0" id="contractNoteModalLabel">Generate Contract Note</h5>
-                            <small class="text-white opacity-75">Multiple trades detected for <?php echo htmlspecialchars($client_data['client_name']); ?></small>
+                            <h5 class="modal-title mb-0" id="contractNoteModalLabel">Generate Contract Note</h5>
+                            <small class="opacity-75">Multiple trades detected for <?php echo htmlspecialchars($client_data['client_name']); ?></small>
                         </div>
                         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close" onclick="window.location.href='trades.php';"></button>
                     </div>

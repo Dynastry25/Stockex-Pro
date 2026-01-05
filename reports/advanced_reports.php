@@ -37,7 +37,7 @@ include '../includes/header.php';
     <div class="row">
         <div class="col-12">
             <div class="card shadow-sm">
-                <div class="card-header bg-gradient-primary text-white">
+                <div class="card-header bg-gradient-primary">
                     <div class="d-flex justify-content-between align-items-center">
                         <div>
                             <h4 class="mb-0">

@@ -463,7 +463,7 @@ if (isset($_GET['export'])) {
     $company_stmt = $db->prepare("SELECT * FROM companies WHERE status = 'active' ORDER BY id ASC LIMIT 1");
     $company_stmt->execute();
     $company = $company_stmt->fetch(PDO::FETCH_ASSOC) ?: [
-        'company_name' => 'Victory Financial Services',
+        'company_name' => 'Neovam LTD',
         'address' => 'P.O Box, Dar es Salaam, Tanzania',
         'currency' => 'TZS'
     ];
@@ -843,7 +843,7 @@ $company = $company_stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$company) {
     $company = [
-        'company_name' => 'Victory Financial Services',
+        'company_name' => 'Neovam LTD',
         'address' => 'P.O Box, Dar es Salaam, Tanzania',
         'currency' => 'TZS'
     ];
@@ -877,7 +877,7 @@ include '../includes/header.php';
     <div class="row">
         <div class="col-12">
             <div class="card">
-                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                <div class="card-header bg-primary d-flex justify-content-between align-items-center">
                     <div>
                         <h4 class="mb-0"><i class="bi bi-cash-coin me-2"></i>Cash Flow Statement</h4>
                         <p class="mb-0">For Period: <?php echo htmlspecialchars(date('F d, Y', strtotime($start_date)) . ' - ' . date('F d, Y', strtotime($end_date))); ?></p>

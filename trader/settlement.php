@@ -21,7 +21,7 @@ $error_message = '';
 // Get company details
 $company_stmt = $db->query("SELECT * FROM companies WHERE status = 'active' ORDER BY id LIMIT 1");
 $company = $company_stmt->fetch();
-$company_name = $company ? $company['company_name'] : 'Victory Financial Services LTD';
+$company_name = $company ? $company['company_name'] : 'Neovam LTD';
 
 // Fetch bank accounts for payment
 try {
@@ -867,8 +867,11 @@ $hide_buy_orders = isset($_GET['hide_buy']) ? $_GET['hide_buy'] : '1';
 
 // Get date range for settlement
 $today = date('Y-m-d');
-$two_days_ago = date('Y-m-d', strtotime('-2 days'));
+$two_days_ago = date('Y-m-d', strtotime('-30 days'));
 $next_30_days = date('Y-m-d', strtotime('+30 days'));
+
+// Debug: Show date ranges
+error_log("Settlement Date Range: $two_days_ago to $next_30_days");
 
 // Get settlement trades - from 2 days ago to 30 days in the future
 $query = "
@@ -892,7 +895,8 @@ $query = "
     LEFT JOIN companies c_seller ON t.counterparty_name = c_seller.company_name
     LEFT JOIN linked_trades lt ON t.id = lt.trade_id
     LEFT JOIN trades lt2 ON lt.linked_trade_id = lt2.id
-    WHERE t.settlement_date BETWEEN ? AND ?
+    WHERE t.settlement_date IS NOT NULL 
+    AND t.settlement_date BETWEEN ? AND ?
     AND t.status = 'active'
     AND (t.settlement_status IS NULL OR t.settlement_status != 'cancelled')
 ";
@@ -925,6 +929,9 @@ if ($hide_buy_orders === '1') {
 }
 
 $settlement_trades = $stmt->fetchAll();
+
+// Debug: Log how many trades were fetched
+error_log("Total settlement trades fetched: " . count($settlement_trades));
 
 // Calculate summary statistics
 $total_trades = count($settlement_trades);
@@ -986,12 +993,19 @@ include '../includes/header.php';
                     <div class="me-3">
                         <div class="d-inline-flex align-items-center justify-content-center rounded-circle shadow-sm" 
                              style="width: 60px; height: 60px; background: linear-gradient(135deg, var(--success-color) 0%, #10b981 100%);">
-                            <i class="bi bi-cash-coin text-white" style="font-size: 1.5rem;"></i>
+                            <i class="bi bi-cash-coin" style="font-size: 1.5rem;"></i>
                         </div>
                     </div>
                     <div>
                         <h1 class="page-title mb-1">Trade Settlement</h1>
                         <p class="page-subtitle">Manage trade settlements and payments - <?php echo htmlspecialchars($company_name); ?></p>
+                        <!-- Debug info -->
+                        <div style="display: none;" id="debugInfo">
+                            <small class="text-muted">
+                                Date Range: <?php echo $two_days_ago; ?> to <?php echo $next_30_days; ?> | 
+                                Total Trades: <?php echo $total_trades; ?>
+                            </small>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1222,6 +1236,11 @@ include '../includes/header.php';
                             <i class="bi bi-check-circle text-muted" style="font-size: 4rem; opacity: 0.3;"></i>
                             <h5 class="text-muted mt-3">No Settlements Due</h5>
                             <p class="text-muted">All trades are settled or no settlements due within the period.</p>
+                            <div class="mt-3">
+                                <small class="text-info">
+                                    <i class="bi bi-info-circle"></i> Date range: <?php echo $two_days_ago; ?> to <?php echo $next_30_days; ?>
+                                </small>
+                            </div>
                         </div>
                     <?php else: ?>
                         <div class="table-responsive">
@@ -1309,10 +1328,17 @@ include '../includes/header.php';
                                             </td>
                                             <td>
                                                 <div class="fw-medium">
-                                                    <?php echo date('Y-m-d', strtotime($trade['settlement_date'])); ?>
+                                                    <?php 
+                                                    if (!empty($trade['settlement_date']) && $trade['settlement_date'] != '0000-00-00') {
+                                                        echo date('Y-m-d', strtotime($trade['settlement_date']));
+                                                    } else {
+                                                        echo 'N/A';
+                                                    }
+                                                    ?>
                                                 </div>
                                                 <small class="text-muted">
                                                     <?php 
+                                                    if (!empty($trade['settlement_date']) && $trade['settlement_date'] != '0000-00-00') {
                                                         $days_diff = (strtotime($trade['settlement_date']) - strtotime($today)) / (60 * 60 * 24);
                                                         if ($days_diff < 0) {
                                                             echo abs($days_diff) . ' days overdue';
@@ -1321,6 +1347,9 @@ include '../includes/header.php';
                                                         } else {
                                                             echo $days_diff . ' days';
                                                         }
+                                                    } else {
+                                                        echo 'No date set';
+                                                    }
                                                     ?>
                                                 </small>
                                             </td>
@@ -1422,7 +1451,11 @@ include '../includes/header.php';
                                 </thead>
                                 <tbody>
                                     <?php foreach ($overdue_trades as $trade): 
-                                        $days_overdue = (strtotime($today) - strtotime($trade['settlement_date'])) / (60 * 60 * 24);
+                                        if (!empty($trade['settlement_date']) && $trade['settlement_date'] != '0000-00-00') {
+                                            $days_overdue = (strtotime($today) - strtotime($trade['settlement_date'])) / (60 * 60 * 24);
+                                        } else {
+                                            $days_overdue = 0;
+                                        }
                                     ?>
                                         <tr>
                                             <td><?php echo htmlspecialchars($trade['trade_reference']); ?></td>
@@ -1435,7 +1468,15 @@ include '../includes/header.php';
                                                 </span>
                                             </td>
                                             <td class="fw-bold text-danger">TZS <?php echo number_format($trade['consideration'], 2); ?></td>
-                                            <td><?php echo date('Y-m-d', strtotime($trade['settlement_date'])); ?></td>
+                                            <td>
+                                                <?php 
+                                                if (!empty($trade['settlement_date']) && $trade['settlement_date'] != '0000-00-00') {
+                                                    echo date('Y-m-d', strtotime($trade['settlement_date']));
+                                                } else {
+                                                    echo 'N/A';
+                                                }
+                                                ?>
+                                            </td>
                                             <td>
                                                 <span class="badge bg-danger"><?php echo $days_overdue; ?> days</span>
                                             </td>
@@ -1515,7 +1556,15 @@ include '../includes/header.php';
                                                 </span>
                                             </td>
                                             <td class="fw-bold text-warning">TZS <?php echo number_format($trade['consideration'], 2); ?></td>
-                                            <td><?php echo date('Y-m-d', strtotime($trade['settlement_date'])); ?></td>
+                                            <td>
+                                                <?php 
+                                                if (!empty($trade['settlement_date']) && $trade['settlement_date'] != '0000-00-00') {
+                                                    echo date('Y-m-d', strtotime($trade['settlement_date']));
+                                                } else {
+                                                    echo 'N/A';
+                                                }
+                                                ?>
+                                            </td>
                                             <td>
                                                 <?php if ($trade['trade_side'] === 'sell'): ?>
                                                     <div class="btn-group btn-group-sm">
@@ -1591,7 +1640,15 @@ include '../includes/header.php';
                                                 </span>
                                             </td>
                                             <td class="fw-bold text-success">TZS <?php echo number_format($trade['consideration'], 2); ?></td>
-                                            <td><?php echo date('Y-m-d', strtotime($trade['settlement_date'])); ?></td>
+                                            <td>
+                                                <?php 
+                                                if (!empty($trade['settlement_date']) && $trade['settlement_date'] != '0000-00-00') {
+                                                    echo date('Y-m-d', strtotime($trade['settlement_date']));
+                                                } else {
+                                                    echo 'N/A';
+                                                }
+                                                ?>
+                                            </td>
                                             <td><?php echo $trade['settled_by_username'] ?? 'N/A'; ?></td>
                                             <td>
                                                 <?php 
@@ -1652,7 +1709,15 @@ include '../includes/header.php';
                                             <td><?php echo htmlspecialchars($trade['counterparty_name']); ?></td>
                                             <td><?php echo htmlspecialchars($trade['security_id']); ?></td>
                                             <td class="fw-bold text-info">TZS <?php echo number_format($trade['consideration'], 2); ?></td>
-                                            <td><?php echo date('Y-m-d', strtotime($trade['settlement_date'])); ?></td>
+                                            <td>
+                                                <?php 
+                                                if (!empty($trade['settlement_date']) && $trade['settlement_date'] != '0000-00-00') {
+                                                    echo date('Y-m-d', strtotime($trade['settlement_date']));
+                                                } else {
+                                                    echo 'N/A';
+                                                }
+                                                ?>
+                                            </td>
                                             <td>
                                                 <?php if ($trade['linked_trade_ref']): ?>
                                                     <?php echo htmlspecialchars($trade['linked_trade_ref']); ?>
@@ -1723,7 +1788,15 @@ include '../includes/header.php';
                                                 </span>
                                             </td>
                                             <td class="fw-bold text-dark">TZS <?php echo number_format($trade['consideration'], 2); ?></td>
-                                            <td><?php echo date('Y-m-d', strtotime($trade['settlement_date'])); ?></td>
+                                            <td>
+                                                <?php 
+                                                if (!empty($trade['settlement_date']) && $trade['settlement_date'] != '0000-00-00') {
+                                                    echo date('Y-m-d', strtotime($trade['settlement_date']));
+                                                } else {
+                                                    echo 'N/A';
+                                                }
+                                                ?>
+                                            </td>
                                             <td><?php echo htmlspecialchars($trade['failure_reason']); ?></td>
                                             <td><?php echo htmlspecialchars($trade['action_needed']); ?></td>
                                             <td>
@@ -1753,7 +1826,7 @@ include '../includes/header.php';
 <div class="modal fade" id="paymentModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header bg-success text-white">
+            <div class="modal-header bg-success">
                 <h5 class="modal-title">Record Payment</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
@@ -1812,7 +1885,7 @@ include '../includes/header.php';
 <div class="modal fade" id="bulkPaymentModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header bg-success text-white">
+            <div class="modal-header bg-success">
                 <h5 class="modal-title">Bulk Payment for Selected Trades</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
@@ -1871,7 +1944,7 @@ include '../includes/header.php';
 <div class="modal fade" id="linkTradeModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header bg-info text-white">
+            <div class="modal-header bg-info">
                 <h5 class="modal-title">Link Sale to Buy Trade</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
@@ -1914,7 +1987,7 @@ include '../includes/header.php';
 <div class="modal fade" id="linkedDetailsModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header bg-info text-white">
+            <div class="modal-header bg-info">
                 <h5 class="modal-title">Trade Link Details</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
@@ -1945,7 +2018,7 @@ include '../includes/header.php';
 <div class="modal fade" id="failureModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header bg-warning text-white">
+            <div class="modal-header bg-warning">
                 <h5 class="modal-title">Mark Settlement as Failed</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
@@ -1987,7 +2060,7 @@ include '../includes/header.php';
 <div class="modal fade" id="failureDetailsModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header bg-dark text-white">
+            <div class="modal-header bg-dark">
                 <h5 class="modal-title">Failure Details</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
@@ -2318,6 +2391,17 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Update bulk actions on page load
     updateBulkActions();
+    
+    // Show debug info on Ctrl+Shift+D
+    document.addEventListener('keydown', function(e) {
+        if (e.ctrlKey && e.shiftKey && e.key === 'D') {
+            e.preventDefault();
+            const debugInfo = document.getElementById('debugInfo');
+            if (debugInfo) {
+                debugInfo.style.display = debugInfo.style.display === 'none' ? 'block' : 'none';
+            }
+        }
+    });
 });
 </script>
 

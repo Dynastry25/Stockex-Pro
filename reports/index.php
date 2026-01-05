@@ -35,7 +35,7 @@ include '../includes/header.php';
                     <div class="me-3">
                         <div class="d-inline-flex align-items-center justify-content-center rounded-circle shadow-sm" 
                              style="width: 60px; height: 60px; background: linear-gradient(135deg, var(--info-color) 0%, #0ea5e9 100%);">
-                            <i class="bi bi-graph-up text-white" style="font-size: 1.5rem;"></i>
+                            <i class="bi bi-graph-up" style="font-size: 1.5rem;"></i>
                         </div>
                     </div>
                     <div>

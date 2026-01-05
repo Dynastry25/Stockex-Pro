@@ -19,6 +19,11 @@ $db->exec("SET NAMES utf8mb4 COLLATE utf8mb4_general_ci");
 $action_message = '';
 $assignments = [];
 
+// Fee calculation rates
+define('DSE_FEE_RATE', 0.003);      // 0.3%
+define('CMSA_FEE_RATE', 0.0025);    // 0.25%
+define('CSDR_FEE_RATE', 0.001);     // 0.1%
+
 // Filter parameters
 $filter_trade_ref = isset($_GET['trade_ref']) ? trim($_GET['trade_ref']) : '';
 $filter_client_name = isset($_GET['client_name']) ? trim($_GET['client_name']) : '';
@@ -41,7 +46,7 @@ function getCompanyDetails($db) {
         $result = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if (!$result) {
-            return ['company_code' => 'B13/C', 'company_name' => 'Victory Financial Services'];
+            return ['company_code' => 'B13/C', 'company_name' => 'Neovam LTD'];
         }
         
         return [
@@ -49,7 +54,119 @@ function getCompanyDetails($db) {
             'company_name' => $result['company_name']
         ];
     } catch (Exception $e) {
-        return ['company_code' => 'B13/C', 'company_name' => 'Victory Financial Services'];
+        return ['company_code' => 'B13/C', 'company_name' => 'Neovam LTD'];
+    }
+}
+
+/**
+ * Fetch and calculate regulatory fees from trades
+ */
+function fetchAndCalculateRegulatoryFees($db) {
+    try {
+        $currentDate = date('Y-m-d');
+        $daysBack = 30; // Look back 30 days for new trades
+        
+        // Query to find trades without fee assignments
+        $query = "
+            SELECT 
+                t.trade_reference,
+                t.client_name,
+                t.trade_date,
+                t.consideration,
+                t.security_id,
+                t.security_name,
+                t.trade_side,
+                -- Calculate DSE fee (0.3% of consideration)
+                ROUND(t.consideration * " . DSE_FEE_RATE . ", 2) as dse_fee,
+                -- Calculate CMSA fee (0.25% of consideration)
+                ROUND(t.consideration * " . CMSA_FEE_RATE . ", 2) as cmsa_fee,
+                -- Calculate CSDR fee (0.1% of consideration)
+                ROUND(t.consideration * " . CSDR_FEE_RATE . ", 2) as csd_fee,
+                -- Total fees
+                ROUND((t.consideration * " . DSE_FEE_RATE . ") + 
+                      (t.consideration * " . CMSA_FEE_RATE . ") + 
+                      (t.consideration * " . CSDR_FEE_RATE . "), 2) as total_fees
+            FROM trades t
+            WHERE t.trade_date >= DATE_SUB(?, INTERVAL ? DAY)
+            AND t.trade_reference NOT IN (
+                SELECT trade_reference 
+                FROM regulatory_fee_assignments 
+                WHERE trade_reference IS NOT NULL
+            )
+            AND t.consideration > 0
+            ORDER BY t.trade_date DESC
+        ";
+        
+        $stmt = $db->prepare($query);
+        $stmt->execute([$currentDate, $daysBack]);
+        $tradesWithFees = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        error_log("Fetched " . count($tradesWithFees) . " trades for fee calculation");
+        return $tradesWithFees;
+        
+    } catch (Exception $e) {
+        error_log("Error fetching regulatory fees: " . $e->getMessage());
+        return [];
+    }
+}
+
+/**
+ * Create new regulatory fee assignments
+ */
+function createNewRegulatoryFeeAssignments($db, $tradesWithFees) {
+    try {
+        $db->beginTransaction();
+        $createdCount = 0;
+        
+        foreach ($tradesWithFees as $trade) {
+            // Check if assignment already exists
+            $checkStmt = $db->prepare("
+                SELECT id FROM regulatory_fee_assignments 
+                WHERE trade_reference = ?
+            ");
+            $checkStmt->execute([$trade['trade_reference']]);
+            
+            if (!$checkStmt->fetch()) {
+                // Insert new assignment
+                $insertStmt = $db->prepare("
+                    INSERT INTO regulatory_fee_assignments (
+                        trade_reference, client_name, trade_date, consideration,
+                        security_id, security_name, trade_side,
+                        dse_fee, cmsa_fee, csd_fee, total_fees,
+                        status, created_by, created_at, updated_at,
+                        is_dismissed
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NOW(), NOW(), 0)
+                ");
+                
+                $insertStmt->execute([
+                    $trade['trade_reference'],
+                    $trade['client_name'],
+                    $trade['trade_date'],
+                    $trade['consideration'],
+                    $trade['security_id'] ?? '',
+                    $trade['security_name'] ?? '',
+                    $trade['trade_side'] ?? '',
+                    $trade['dse_fee'],
+                    $trade['cmsa_fee'],
+                    $trade['csd_fee'],
+                    $trade['total_fees'],
+                    $_SESSION['username'] ?? 'system'
+                ]);
+                
+                if ($insertStmt->rowCount() > 0) {
+                    $createdCount++;
+                    error_log("Created fee assignment for trade: " . $trade['trade_reference']);
+                }
+            }
+        }
+        
+        $db->commit();
+        return $createdCount;
+        
+    } catch (Exception $e) {
+        $db->rollBack();
+        error_log("Error creating fee assignments: " . $e->getMessage());
+        return 0;
     }
 }
 
@@ -629,6 +746,33 @@ try {
 
 // Handle form submissions
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Handle fetch new fees request
+    if (isset($_POST['action']) && $_POST['action'] === 'fetch_new_fees') {
+        try {
+            // Fetch trades with calculated fees
+            $tradesWithFees = fetchAndCalculateRegulatoryFees($db);
+            
+            if (empty($tradesWithFees)) {
+                $success_message = "No new trades found for fee calculation.";
+            } else {
+                // Create new fee assignments
+                $createdCount = createNewRegulatoryFeeAssignments($db, $tradesWithFees);
+                
+                if ($createdCount > 0) {
+                    $success_message = "Successfully fetched and created {$createdCount} new fee assignments.";
+                    // Auto-redirect to pending status
+                    header("Location: assign_regulatory_fees.php?status=pending");
+                    exit();
+                } else {
+                    $success_message = "No new fee assignments created. All trades may already have fee assignments.";
+                }
+            }
+            
+        } catch (Exception $e) {
+            $error_message = "Error fetching new fees: " . $e->getMessage();
+        }
+    }
+    
     if (isset($_POST['action']) && $_POST['action'] === 'assign_fees') {
         $assignment_id = (int)$_POST['assignment_id'];
         $treatment_type = $_POST['treatment_type'];
@@ -1144,6 +1288,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+// Auto-fetch new fees if no pending assignments
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && $filter_status === 'pending' && isset($_GET['autofetch']) && $_GET['autofetch'] == '1') {
+    // Check if there are any pending assignments
+    $checkPending = $db->prepare("
+        SELECT COUNT(*) as pending_count 
+        FROM regulatory_fee_assignments 
+        WHERE status = 'pending' AND is_dismissed = 0
+    ");
+    $checkPending->execute();
+    $pendingCount = $checkPending->fetch()['pending_count'];
+    
+    // If no pending assignments, auto-fetch new ones
+    if ($pendingCount == 0) {
+        $tradesWithFees = fetchAndCalculateRegulatoryFees($db);
+        if (!empty($tradesWithFees)) {
+            $createdCount = createNewRegulatoryFeeAssignments($db, $tradesWithFees);
+            if ($createdCount > 0) {
+                $success_message = "Auto-fetched {$createdCount} new fee assignments.";
+            }
+        }
+    }
+}
+
 // Build filter conditions
 $filter_conditions = [];
 $filter_params = [];
@@ -1303,6 +1470,39 @@ include '../includes/header.php';
             </ul>
         </div>
 
+        <!-- Fetch New Fees Section -->
+        <div class="card mb-4">
+            <div class="card-header bg-primary text-white">
+                <h6><i class="fas fa-sync-alt me-2"></i>Fetch New Regulatory Fees</h6>
+            </div>
+            <div class="card-body">
+                <form method="POST" action="">
+                    <div class="row align-items-center">
+                        <div class="col-md-8">
+                            <p class="mb-0">
+                                <i class="fas fa-info-circle me-2 text-info"></i>
+                                Click to fetch and calculate regulatory fees for recent trades from the last 30 days.
+                                <br>
+                                <small class="text-muted">
+                                    <strong>Fee Rates:</strong> DSE: 0.3% | CMSA: 0.25% | CSDR: 0.1% of trade consideration
+                                </small>
+                            </p>
+                        </div>
+                        <div class="col-md-4 text-end">
+                            <input type="hidden" name="action" value="fetch_new_fees">
+                            <button type="submit" class="btn btn-primary" 
+                                    onclick="return confirm('Fetch new regulatory fees? This will process recent trades without fee assignments.')">
+                                <i class="fas fa-sync-alt me-2"></i> Fetch New Fees
+                            </button>
+                            <a href="?status=pending&autofetch=1" class="btn btn-outline-primary ms-2">
+                                <i class="fas fa-bolt me-1"></i> Auto-fetch
+                            </a>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
         <!-- Bulk Actions Panel -->
         <div class="card mb-4" id="bulkActionsPanel" style="display: none;">
             <div class="card-header bg-primary text-white">
@@ -1412,9 +1612,17 @@ include '../includes/header.php';
                     <h4><i class="fas fa-inbox fa-lg mb-3"></i></h4>
                     <h4>No Assignments Found</h4>
                     <p class="text-muted">No regulatory fee assignments match your criteria.</p>
-                    <a href="?status=all" class="btn btn-primary">
-                        <i class="fas fa-eye"></i> View All Assignments
-                    </a>
+                    <div class="mt-3">
+                        <a href="?status=all" class="btn btn-primary">
+                            <i class="fas fa-eye"></i> View All Assignments
+                        </a>
+                        <form method="POST" class="d-inline">
+                            <input type="hidden" name="action" value="fetch_new_fees">
+                            <button type="submit" class="btn btn-success ms-2">
+                                <i class="fas fa-sync-alt me-1"></i> Fetch New Fees
+                            </button>
+                        </form>
+                    </div>
                 </div>
             </div>
         <?php else: ?>
@@ -2484,5 +2692,9 @@ document.addEventListener('keydown', function(event) {
 
 .select-all-group {
     margin-top: 0;
+}
+
+.card.bg-primary .card-header {
+    background-color: #0d6efd !important;
 }
 </style>

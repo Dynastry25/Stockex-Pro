@@ -62,7 +62,7 @@
                                 $dashboard_link = 'hr/dashboard.php';
                                 break;
                             case 'ceo':
-                                $dashboard_link = 'admin/dashboard.php'; // or create ceo/dashboard.php
+                                $dashboard_link = 'ceo/dashboard.php'; // or create ceo/dashboard.php
                                 break;
                             default:
                                 $dashboard_link = $current_user['role'] . '/dashboard.php';
@@ -75,7 +75,9 @@
                     </li>
                     
                     <!-- Leave Request - Available for all users -->
-                    <li class="nav-item">
+               
+                    
+                       <li class="nav-item">
                         <a class="nav-link" href="<?php echo BASE_URL; ?>leave_request.php">
                             <i class="bi bi-calendar-check"></i>
                             <span>Request Leave</span>
@@ -90,8 +92,21 @@
                         </a>
                     </li>
                     
+                   
                     <?php if ($current_user['role'] == 'system_admin' || $current_user['role'] == 'ceo'): ?>
                     <!-- Admin/CEO Features -->
+                        <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>../ceo/likizo.php">
+                            <i class="bi bi-calendar-check"></i>
+                            <span>Employees Leaves</span>
+                        </a>
+                    </li>
+                           <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>../ceo/pay_employees.php">
+                            <i class="bi bi-calendar-check"></i>
+                            <span>Pay employees</span>
+                        </a>
+                    </li>
                     <li class="nav-item">
                         <a class="nav-link" href="<?php echo BASE_URL; ?>admin/users.php">
                             <i class="bi bi-people"></i>
@@ -99,11 +114,7 @@
                         </a>
                     </li>
                     <!-- In your navigation menu -->
-<li class="nav-item">
-    <a class="nav-link" href="../chatbot/chatbot_interface.php">
-        <i class="bi bi-robot"></i> AI Assistant
-    </a>
-</li>
+
                     <li class="nav-item">
                         <a class="nav-link" href="<?php echo BASE_URL; ?>admin/client_management.php">
                             <i class="bi bi-person-lines-fill"></i>
@@ -153,12 +164,7 @@
                             <span>Bond Settings</span>
                         </a>
                     </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/bonds.php">
-                            <i class="bi bi-receipt"></i>
-                            <span>Bond Auctions</span>
-                        </a>
-                    </li>
+                   
                     <?php endif; ?>
                     
                     <?php if ($current_user['role'] == 'finance_officer' || $current_user['role'] == 'system_admin'): ?>
@@ -242,13 +248,19 @@
                     <li class="nav-item">
                         <a class="nav-link" href="<?php echo BASE_URL; ?>hr/payroll.php">
                             <i class="bi bi-cash-coin"></i>
-                            <span>Payroll</span>
+                            <span>Payroll Setup</span>
+                        </a>
+                    </li>
+                          <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>hr/pay_salary.php">
+                            <i class="bi bi-folder-fill"></i>
+                            <span>Pay Salaries</span>
                         </a>
                     </li>
                       <li class="nav-item">
                         <a class="nav-link" href="<?php echo BASE_URL; ?>hr/hr_payment_request.php">
                             <i class="bi bi-folder-fill"></i>
-                            <span>HR PAY</span>
+                            <span>HR Other payments</span>
                         </a>
                     </li>
                     <li class="nav-item">

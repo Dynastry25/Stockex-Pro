@@ -508,3 +508,32 @@ Stack trace:
 #1 /home1/jrozqhmy/public_html/website_02cf635f/reports/contract_note.php(8): loadMasterData(Object(PDO))
 #2 {main}
   thrown in /home1/jrozqhmy/public_html/website_02cf635f/reports/contract_note.php on line 135
+[04-Jan-2026 16:50:45 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.gl_account_types' doesn't exist in /home1/jrozqhmy/public_html/website_02cf635f/reports/generate_report.php:1552
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/reports/generate_report.php(1552): PDO->query('SELECT * FROM g...')
+#1 /home1/jrozqhmy/public_html/website_02cf635f/reports/generate_report.php(46): loadMasterData(Object(PDO))
+#2 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/reports/generate_report.php on line 1552
+[04-Jan-2026 16:51:04 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.gl_account_types' doesn't exist in /home1/jrozqhmy/public_html/website_02cf635f/reports/generate_report.php:1552
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/reports/generate_report.php(1552): PDO->query('SELECT * FROM g...')
+#1 /home1/jrozqhmy/public_html/website_02cf635f/reports/generate_report.php(46): loadMasterData(Object(PDO))
+#2 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/reports/generate_report.php on line 1552
+[04-Jan-2026 16:52:15 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.gl_account_types' doesn't exist in /home1/jrozqhmy/public_html/website_02cf635f/reports/generate_report.php:1552
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/reports/generate_report.php(1552): PDO->query('SELECT * FROM g...')
+#1 /home1/jrozqhmy/public_html/website_02cf635f/reports/generate_report.php(46): loadMasterData(Object(PDO))
+#2 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/reports/generate_report.php on line 1552
+[04-Jan-2026 16:52:23 UTC] PHP Fatal error:  Uncaught PDOException: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.gl_account_types' doesn't exist in /home1/jrozqhmy/public_html/website_02cf635f/reports/generate_report.php:1552
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/reports/generate_report.php(1552): PDO->query('SELECT * FROM g...')
+#1 /home1/jrozqhmy/public_html/website_02cf635f/reports/generate_report.php(46): loadMasterData(Object(PDO))
+#2 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/reports/generate_report.php on line 1552
+[04-Jan-2026 17:16:37 UTC] Error loading table gl_account_types: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.gl_account_types' doesn't exist
+[04-Jan-2026 17:16:43 UTC] Error loading table gl_account_types: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.gl_account_types' doesn't exist
+[04-Jan-2026 17:16:47 UTC] Error loading table gl_account_types: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.gl_account_types' doesn't exist
+[04-Jan-2026 17:21:15 UTC] Error loading table gl_account_types: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.gl_account_types' doesn't exist
+[05-Jan-2026 07:12:25 UTC] Error loading table gl_account_types: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.gl_account_types' doesn't exist

@@ -907,7 +907,27 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // Export function
 function exportAccounts() {
-    window.location.href = 'export_accounts.php?format=csv';
+    // Build URL with current filter parameters
+    let url = 'export_accounts.php?format=csv';
+    
+    // Get current filter values from the form
+    const searchInput = document.querySelector('input[name="search"]');
+    const accountTypeSelect = document.querySelector('select[name="account_type"]');
+    const statusSelect = document.querySelector('select[name="status"]');
+    
+    if (searchInput && searchInput.value) {
+        url += '&search=' + encodeURIComponent(searchInput.value);
+    }
+    
+    if (accountTypeSelect && accountTypeSelect.value) {
+        url += '&account_type=' + encodeURIComponent(accountTypeSelect.value);
+    }
+    
+    if (statusSelect && statusSelect.value) {
+        url += '&status=' + encodeURIComponent(statusSelect.value);
+    }
+    
+    window.location.href = url;
 }
 </script>
 

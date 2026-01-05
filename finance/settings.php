@@ -62,7 +62,7 @@ include '../includes/header.php';
     <div class="row">
         <div class="col-12">
             <div class="card">
-                <div class="card-header bg-primary text-white">
+                <div class="card-header bg-primary">
                     <h4 class="mb-0"><i class="bi bi-gear me-2"></i>Financial Statement Settings</h4>
                     <p class="mb-0">Configure components for financial reports</p>
                 </div>
@@ -78,7 +78,7 @@ include '../includes/header.php';
 
                     <!-- Balance Sheet Configuration -->
                     <div class="card mb-4">
-                        <div class="card-header bg-info text-white">
+                        <div class="card-header bg-info">
                             <h5 class="mb-0"><i class="bi bi-balance-scale me-2"></i>Balance Sheet Configuration</h5>
                         </div>
                         <div class="card-body">
@@ -163,7 +163,7 @@ include '../includes/header.php';
 
                     <!-- Cash Flow Statement Configuration -->
                     <div class="card mb-4">
-                        <div class="card-header bg-success text-white">
+                        <div class="card-header bg-success">
                             <h5 class="mb-0"><i class="bi bi-cash-coin me-2"></i>Cash Flow Statement Configuration</h5>
                         </div>
                         <div class="card-body">

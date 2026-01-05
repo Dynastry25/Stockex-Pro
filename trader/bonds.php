@@ -4,6 +4,8 @@ require_once '../auth/auth_middleware.php';
 require_once '../tcpdf/tcpdf.php';
 
 require_trader();
+require_ceo();
+
 require_mandate();
 
 $db = getDBConnection();
@@ -1214,7 +1216,7 @@ include '../includes/header.php';
                     <div class="me-3">
                         <div class="d-inline-flex align-items-center justify-content-center rounded-circle shadow-sm" 
                              style="width: 60px; height: 60px; background: linear-gradient(135deg, var(--success-color) 0%, #10b981 100%);">
-                            <i class="bi bi-graph-up text-white" style="font-size: 1.5rem;"></i>
+                            <i class="bi bi-graph-up" style="font-size: 1.5rem;"></i>
                         </div>
                     </div>
                     <div>
@@ -1326,11 +1328,11 @@ include '../includes/header.php';
                 <div class="modal-header border-0 pb-0" style="background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-color-dark) 100%);">
                     <div class="d-flex align-items-center w-100">
                         <div class="me-3">
-                            <i class="bi bi-file-earmark-text-fill text-white" style="font-size: 1.5rem;"></i>
+                            <i class="bi bi-file-earmark-text-fill" style="font-size: 1.5rem;"></i>
                         </div>
                         <div class="flex-grow-1">
-                            <h5 class="modal-title text-white mb-0" id="contractNoteModalLabel">Generate Contract Note</h5>
-                            <small class="text-white opacity-75">Multiple trades detected for <?php echo htmlspecialchars($client_data['client_name']); ?></small>
+                            <h5 class="modal-title mb-0" id="contractNoteModalLabel">Generate Contract Note</h5>
+                            <small class="opacity-75">Multiple trades detected for <?php echo htmlspecialchars($client_data['client_name']); ?></small>
                         </div>
                         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close" onclick="window.location.href='trades.php';"></button>
                     </div>

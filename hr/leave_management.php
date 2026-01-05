@@ -1,8 +1,11 @@
 <?php
+// Enable error reporting for debugging
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
 require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
 require_once '../includes/approval_helpers.php';
-require_once '../config/approval_constants.php';
 
 require_hr();
 $db = getDBConnection();
@@ -10,6 +13,236 @@ $db = getDBConnection();
 $page_title = 'Leave Management';
 $success_message = '';
 $error_message = '';
+
+// Helper functions
+function get_status_badge_class($status) {
+    $classes = [
+        'pending' => 'bg-warning',
+        'approved' => 'bg-success',
+        'rejected' => 'bg-danger',
+        'cancelled' => 'bg-secondary',
+        'finalized_by_hr_approved' => 'bg-success',
+        'finalized_by_hr_rejected' => 'bg-danger',
+        'pending_ceo_approval' => 'bg-info',
+        'ceo_approved' => 'bg-success',
+        'ceo_rejected' => 'bg-danger'
+    ];
+    
+    return $classes[$status] ?? 'bg-secondary';
+}
+
+function get_status_display_name($status) {
+    $names = [
+        'pending' => 'Pending',
+        'approved' => 'Approved',
+        'rejected' => 'Rejected',
+        'cancelled' => 'Cancelled',
+        'finalized_by_hr_approved' => 'Approved by HR',
+        'finalized_by_hr_rejected' => 'Rejected by HR',
+        'pending_ceo_approval' => 'Pending CEO',
+        'ceo_approved' => 'CEO Approved',
+        'ceo_rejected' => 'CEO Rejected'
+    ];
+    
+    return $names[$status] ?? ucfirst(str_replace('_', ' ', $status));
+}
+
+
+
+function hr_finalize_leave($leave_id, $decision, $hr_user_id, $reason = '') {
+    global $db;
+    
+    try {
+        $db->beginTransaction();
+        
+        // Get current leave details
+        $stmt = $db->prepare("
+            SELECT lr.*, e.employee_id, CONCAT(e.first_name, ' ', e.last_name) as employee_name
+            FROM leave_requests lr
+            JOIN users e ON lr.employee_id = e.id
+            WHERE lr.id = ? AND lr.status = 'pending'
+        ");
+        $stmt->execute([$leave_id]);
+        $leave = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if (!$leave) {
+            return [
+                'success' => false,
+                'message' => 'Leave request not found or already processed.'
+            ];
+        }
+        
+        // Update leave request - SIMPLIFIED VERSION
+        $new_status = ($decision === 'approve') ? 'approved' : 'rejected';
+        
+        // First, let's see what columns we actually have
+        $columns_stmt = $db->query("SHOW COLUMNS FROM leave_requests");
+        $columns = $columns_stmt->fetchAll(PDO::FETCH_COLUMN);
+        
+        // Build SQL dynamically based on actual columns
+        $sql_parts = [];
+        $params = [];
+        
+        $sql_parts[] = "status = ?";
+        $params[] = $new_status;
+        
+        $sql_parts[] = "finalized_by_hr_at = NOW()";
+        
+        // Check if hr_action_by exists and handle it
+        if (in_array('hr_action_by', $columns)) {
+            $sql_parts[] = "hr_action_by = ?";
+            $params[] = $hr_user_id;
+        }
+        // hr_decision_by column is removed - no longer used
+        
+        if ($decision === 'reject') {
+            $sql_parts[] = "rejection_reason = ?";
+            $params[] = $reason;
+        } else {
+            $sql_parts[] = "rejection_reason = NULL";
+        }
+        
+        $params[] = $leave_id;
+        
+        $sql = "UPDATE leave_requests SET " . implode(', ', $sql_parts) . " WHERE id = ?";
+        
+        $update_stmt = $db->prepare($sql);
+        $update_stmt->execute($params);
+        
+        // Also update approved_by if needed
+        if ($decision === 'approve') {
+            $approved_stmt = $db->prepare("
+                UPDATE leave_requests 
+                SET approved_by = ?,
+                    approved_at = NOW()
+                WHERE id = ?
+            ");
+            $approved_stmt->execute([$hr_user_id, $leave_id]);
+        }
+        
+        // Log HR activity
+        $activity_type = ($decision === 'approve') ? 'leave_approved_by_hr' : 'leave_rejected_by_hr';
+        $description = ($decision === 'approve') 
+            ? "Leave request approved by HR" 
+            : "Leave request rejected by HR: " . substr($reason, 0, 200);
+        
+        $activity_stmt = $db->prepare("
+            INSERT INTO hr_activities (activity_type, entity_type, entity_id, description, performed_by, created_at)
+            VALUES (?, 'leave', ?, ?, ?, NOW())
+        ");
+        $activity_stmt->execute([$activity_type, $leave_id, $description, $hr_user_id]);
+        
+        // Update approval workflow if function exists
+        if (function_exists('update_approval_workflow_status')) {
+            $workflow_status = ($decision === 'approve') ? 'approved_by_hr' : 'rejected_by_hr';
+            update_approval_workflow_status('leave_request', $leave_id, $workflow_status, $hr_user_id);
+        }
+        
+        $db->commit();
+        
+        return [
+            'success' => true,
+            'message' => "Leave request has been {$decision}d successfully."
+        ];
+        
+    } catch (Exception $e) {
+        $db->rollBack();
+        return [
+            'success' => false,
+            'message' => 'Error finalizing leave: ' . $e->getMessage()
+        ];
+    }
+}
+
+function hr_escalate_leave_to_ceo($leave_id, $hr_user_id, $escalation_reason) {
+    global $db;
+    
+    try {
+        $db->beginTransaction();
+        
+        // Get current leave details
+        $stmt = $db->prepare("
+            SELECT lr.*, e.employee_id, CONCAT(e.first_name, ' ', e.last_name) as employee_name
+            FROM leave_requests lr
+            JOIN users e ON lr.employee_id = e.id
+            WHERE lr.id = ? AND lr.status = 'pending'
+        ");
+        $stmt->execute([$leave_id]);
+        $leave = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if (!$leave) {
+            return [
+                'success' => false,
+                'message' => 'Leave request not found or already processed.'
+            ];
+        }
+        
+        // First, let's see what columns we actually have
+        $columns_stmt = $db->query("SHOW COLUMNS FROM leave_requests");
+        $columns = $columns_stmt->fetchAll(PDO::FETCH_COLUMN);
+        
+        // Build SQL dynamically
+        $sql_parts = [];
+        $params = [];
+        
+        $sql_parts[] = "requires_ceo_approval = 1";
+        $sql_parts[] = "ceo_decision_status = 'pending_ceo'";
+        $sql_parts[] = "finalized_by_hr_at = NOW()";
+        
+        // Check if escalation_reason exists
+        if (in_array('escalation_reason', $columns)) {
+            $sql_parts[] = "escalation_reason = ?";
+            $params[] = $escalation_reason;
+        } elseif (in_array('finality_reason', $columns)) {
+            $sql_parts[] = "finality_reason = ?";
+            $params[] = $escalation_reason;
+        }
+        
+        // Check if hr_action_by exists
+        if (in_array('hr_action_by', $columns)) {
+            $sql_parts[] = "hr_action_by = ?";
+            $params[] = $hr_user_id;
+        }
+        // hr_decision_by column is removed - no longer used
+        
+        $params[] = $leave_id;
+        
+        $sql = "UPDATE leave_requests SET " . implode(', ', $sql_parts) . " WHERE id = ?";
+        
+        $update_stmt = $db->prepare($sql);
+        $update_stmt->execute($params);
+        
+        // Log HR activity
+        $activity_stmt = $db->prepare("
+            INSERT INTO hr_activities (activity_type, entity_type, entity_id, description, performed_by, created_at)
+            VALUES ('leave_escalated_to_ceo', 'leave', ?, ?, ?, NOW())
+        ");
+        $activity_stmt->execute([
+            $leave_id, 
+            "Leave request escalated to CEO: " . substr($escalation_reason, 0, 200),
+            $hr_user_id
+        ]);
+        
+        // Update approval workflow if function exists
+        if (function_exists('update_approval_workflow_status')) {
+            update_approval_workflow_status('leave_request', $leave_id, 'pending_ceo', $hr_user_id);
+        }
+        
+        $db->commit();
+        
+        return [
+            'success' => true,
+            'message' => 'Leave request has been escalated to CEO for approval.'
+        ];
+        
+    } catch (Exception $e) {
+        $db->rollBack();
+        return [
+            'success' => false,
+            'message' => 'Error escalating leave to CEO: ' . $e->getMessage()
+        ];
+    }
+}
 
 // Handle POST actions for leave requests
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
@@ -30,8 +263,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             
             $stmt = $db->prepare("
                 INSERT INTO leave_requests (employee_id, leave_type_id, start_date, end_date, 
-                                          total_days, reason, handover_notes) 
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                                          total_days, reason, handover_notes, status, created_at) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', NOW())
             ");
             
             if ($stmt->execute([$employee_id, $leave_type_id, $start_date, $end_date, 
@@ -39,26 +272,29 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 
                 $leave_id = $db->lastInsertId();
                 
-                // Create approval workflow
-                create_approval_workflow(
-                    WORKFLOW_LEAVE, ENTITY_LEAVE_REQUEST, $leave_id, 
-                    $_SESSION['user_id'], LEAVE_PENDING_HR
-                );
+                // Create approval workflow if function exists
+                if (function_exists('create_approval_workflow')) {
+                    create_approval_workflow(
+                        'leave', 'leave_request', $leave_id, 
+                        $_SESSION['user_id'], 'pending_hr'
+                    );
+                }
                 
                 // Log activity
                 $activity_stmt = $db->prepare("
-                    INSERT INTO hr_activities (activity_type, entity_type, entity_id, description, performed_by)
-                    VALUES (?, 'leave', ?, ?, ?)
+                    INSERT INTO hr_activities (activity_type, entity_type, entity_id, description, performed_by, created_at)
+                    VALUES (?, 'leave', ?, ?, ?, NOW())
                 ");
                 $activity_stmt->execute([
-                    AUDIT_LEAVE_SUBMITTED,
+                    'leave_submitted',
                     $leave_id,
                     "Leave request submitted for {$total_days} days",
                     $_SESSION['user_id']
                 ]);
                 
-                show_alert('Leave request submitted successfully.', 'success');
-                redirect('hr/leave_management.php');
+                $_SESSION['success_message'] = 'Leave request submitted successfully.';
+                header('Location: leave_management.php');
+                exit();
             } else {
                 $error_message = 'Error submitting leave request.';
             }
@@ -67,7 +303,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             // HR makes final decision on leave (approve/reject without CEO)
             $leave_id = (int)$_POST['leave_id'];
             $decision = sanitize_input($_POST['decision']); // 'approve' or 'reject'
-            $reason = sanitize_input($_POST['reason']);
+            $reason = isset($_POST['reason']) ? sanitize_input($_POST['reason']) : '';
             
             if (!in_array($decision, ['approve', 'reject'])) {
                 $error_message = 'Invalid decision. Must be approve or reject.';
@@ -75,7 +311,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 $result = hr_finalize_leave($leave_id, $decision, $_SESSION['user_id'], $reason);
                 
                 if ($result['success']) {
-                    show_alert($result['message'], 'success');
+                    $_SESSION['success_message'] = $result['message'];
+                    header('Location: leave_management.php');
+                    exit();
                 } else {
                     $error_message = $result['message'];
                 }
@@ -92,7 +330,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 $result = hr_escalate_leave_to_ceo($leave_id, $_SESSION['user_id'], $escalation_reason);
                 
                 if ($result['success']) {
-                    show_alert($result['message'], 'info');
+                    $_SESSION['success_message'] = $result['message'];
+                    header('Location: leave_management.php');
+                    exit();
                 } else {
                     $error_message = $result['message'];
                 }
@@ -105,31 +345,25 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $stmt = $db->prepare("
                 UPDATE leave_requests 
                 SET status = 'cancelled' 
-                WHERE id = ? AND status = 'pending' AND employee_id IN (
-                    SELECT u.id FROM users u WHERE u.id = ? 
-                    OR ? IN (SELECT user_id FROM users WHERE role IN ('hr_manager', 'hr_officer'))
-                )
+                WHERE id = ? AND status = 'pending'
             ");
             
-            $stmt->execute([$leave_id, $_SESSION['user_id'], $_SESSION['user_id']]);
+            $stmt->execute([$leave_id]);
             
             if ($stmt->rowCount() > 0) {
                 // Log activity
                 $activity_stmt = $db->prepare("
-                    INSERT INTO hr_activities (activity_type, entity_type, entity_id, description, performed_by)
-                    VALUES ('leave_cancelled', 'leave', ?, 'Leave request cancelled', ?)
+                    INSERT INTO hr_activities (activity_type, entity_type, entity_id, description, performed_by, created_at)
+                    VALUES ('leave_cancelled', 'leave', ?, 'Leave request cancelled', ?, NOW())
                 ");
                 $activity_stmt->execute([$leave_id, $_SESSION['user_id']]);
                 
-                show_alert('Leave request cancelled successfully.', 'info');
+                $_SESSION['success_message'] = 'Leave request cancelled successfully.';
+                header('Location: leave_management.php');
+                exit();
             } else {
                 $error_message = 'Unable to cancel leave request.';
             }
-        }
-        
-        // Redirect to prevent resubmission
-        if (!$error_message) {
-            redirect('hr/leave_management.php');
         }
         
     } catch (Exception $e) {
@@ -137,43 +371,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     }
 }
 
-// Handle GET actions for leave details
-if (isset($_GET['action']) && isset($_GET['id'])) {
-    $action = $_GET['action'];
-    $leave_id = (int)$_GET['id'];
-    
-    // Get leave details for modal display
-    if ($action == 'view') {
-        try {
-            $stmt = $db->prepare("
-                SELECT lr.*, 
-                       CONCAT(e.first_name, ' ', e.last_name) as employee_name,
-                       e.employee_id as employee_code,
-                       d.name as department_name, 
-                       jp.title as position_name,
-                       lt.name as leave_type_name,
-                       approver.full_name as approved_by_name,
-                       ceo_user.full_name as ceo_approved_by_name
-                FROM leave_requests lr
-                JOIN users e ON lr.employee_id = e.id
-                JOIN departments d ON e.department_id = d.id
-                JOIN job_positions jp ON e.position_id = jp.id
-                JOIN leave_types lt ON lr.leave_type_id = lt.id
-                LEFT JOIN users approver ON lr.approved_by = approver.id
-                LEFT JOIN users ceo_user ON lr.ceo_approved_by = ceo_user.id
-                WHERE lr.id = ?
-            ");
-            $stmt->execute([$leave_id]);
-            $leave_detail = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            // Get workflow details
-            $workflow = get_approval_workflow(ENTITY_LEAVE_REQUEST, $leave_id);
-            
-        } catch (Exception $e) {
-            $leave_detail = null;
-            $workflow = null;
-        }
-    }
+// Check for success message from session
+if (isset($_SESSION['success_message'])) {
+    $success_message = $_SESSION['success_message'];
+    unset($_SESSION['success_message']);
 }
 
 // Get leave requests with employee and leave type details
@@ -187,6 +388,7 @@ try {
                lt.name as leave_type_name,
                approver.full_name as approved_by_name,
                ceo_user.full_name as ceo_approved_by_name,
+               hr_user.full_name as hr_action_by_name,
                CASE 
                    WHEN lr.requires_ceo_approval = 1 AND lr.ceo_decision_status = 'pending_ceo' THEN 'pending_ceo_approval'
                    WHEN lr.requires_ceo_approval = 1 AND lr.ceo_decision_status = 'ceo_approved' THEN 'ceo_approved'
@@ -196,14 +398,15 @@ try {
                END as display_status
         FROM leave_requests lr
         JOIN users e ON lr.employee_id = e.id
-        JOIN departments d ON e.department_id = d.id
-        JOIN job_positions jp ON e.position_id = jp.id
-        JOIN leave_types lt ON lr.leave_type_id = lt.id
+        LEFT JOIN departments d ON e.department_id = d.id
+        LEFT JOIN job_positions jp ON e.position_id = jp.id
+        LEFT JOIN leave_types lt ON lr.leave_type_id = lt.id
         LEFT JOIN users approver ON lr.approved_by = approver.id
         LEFT JOIN users ceo_user ON lr.ceo_approved_by = ceo_user.id
+        LEFT JOIN users hr_user ON lr.hr_action_by = hr_user.id
         ORDER BY lr.created_at DESC
     ");
-    $leave_requests = $stmt->fetchAll();
+    $leave_requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $leave_requests = [];
     $error_message = 'Error loading leave requests: ' . $e->getMessage();
@@ -214,11 +417,11 @@ try {
     $emp_stmt = $db->query("
         SELECT e.id, e.employee_id, CONCAT(e.first_name, ' ', e.last_name) as full_name, d.name as department_name
         FROM users e
-        JOIN departments d ON e.department_id = d.id
+        LEFT JOIN departments d ON e.department_id = d.id
         WHERE e.status = 'active' AND e.role IN ('trader', 'finance_officer', 'ceo', 'hr_manager', 'hr_officer')
         ORDER BY e.first_name, e.last_name
     ");
-    $employees = $emp_stmt->fetchAll();
+    $employees = $emp_stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $employees = [];
 }
@@ -226,7 +429,7 @@ try {
 // Get leave types
 try {
     $lt_stmt = $db->query("SELECT * FROM leave_types WHERE is_active = 1 ORDER BY name");
-    $leave_types = $lt_stmt->fetchAll();
+    $leave_types = $lt_stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $leave_types = [];
 }
@@ -240,10 +443,50 @@ try {
 } catch (Exception $e) {
     $pending_count = $approved_count = $rejected_count = $escalated_count = 0;
 }
+
+// Check if AJAX request
+if (isset($_GET['ajax']) && $_GET['ajax'] == '1' && isset($_GET['action']) && $_GET['action'] == 'view' && isset($_GET['id'])) {
+    try {
+        $leave_id = (int)$_GET['id'];
+        $stmt = $db->prepare("
+            SELECT lr.*, 
+                   CONCAT(e.first_name, ' ', e.last_name) as employee_name,
+                   e.employee_id as employee_code,
+                   d.name as department_name, 
+                   jp.title as position_name,
+                   lt.name as leave_type_name,
+                   approver.full_name as approved_by_name,
+                   ceo_user.full_name as ceo_approved_by_name,
+                   hr_user.full_name as hr_action_by_name
+            FROM leave_requests lr
+            JOIN users e ON lr.employee_id = e.id
+            LEFT JOIN departments d ON e.department_id = d.id
+            LEFT JOIN job_positions jp ON e.position_id = jp.id
+            LEFT JOIN leave_types lt ON lr.leave_type_id = lt.id
+            LEFT JOIN users approver ON lr.approved_by = approver.id
+            LEFT JOIN users ceo_user ON lr.ceo_approved_by = ceo_user.id
+            LEFT JOIN users hr_user ON lr.hr_action_by = hr_user.id
+            WHERE lr.id = ?
+        ");
+        $stmt->execute([$leave_id]);
+        $leave = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($leave) {
+            header('Content-Type: application/json');
+            echo json_encode(['success' => true, 'leave' => $leave]);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Leave request not found.']);
+        }
+        exit();
+    } catch (Exception $e) {
+        header('Content-Type: application/json');
+        echo json_encode(['success' => false, 'message' => 'Error loading leave details: ' . $e->getMessage()]);
+        exit();
+    }
+}
 ?>
 
 <?php include '../includes/header.php'; ?>
-?>
 
 <div class="container-fluid pt-4 px-4">
     <div class="d-sm-flex align-items-center justify-content-between mb-4">
@@ -382,9 +625,9 @@ try {
                                             <br><small class="text-muted"><?php echo htmlspecialchars($request['employee_code']); ?></small>
                                         </div>
                                     </td>
-                                    <td><?php echo htmlspecialchars($request['department_name']); ?></td>
+                                    <td><?php echo htmlspecialchars($request['department_name'] ?? 'N/A'); ?></td>
                                     <td>
-                                        <span class="badge bg-secondary"><?php echo htmlspecialchars($request['leave_type_name']); ?></span>
+                                        <span class="badge bg-secondary"><?php echo htmlspecialchars($request['leave_type_name'] ?? 'Unknown'); ?></span>
                                     </td>
                                     <td>
                                         <small>
@@ -399,25 +642,12 @@ try {
                                     </td>
                                     <td>
                                         <?php
-                                        $badge_class = get_status_badge_class($request['display_status']);
-                                        $display_name = get_status_display_name($request['display_status']);
+                                        $badge_class = get_status_badge_class($request['display_status'] ?? $request['status']);
+                                        $display_name = get_status_display_name($request['display_status'] ?? $request['status']);
                                         ?>
                                         <span class="badge <?php echo $badge_class; ?>">
                                             <?php echo $display_name; ?>
                                         </span>
-                                        
-                                        <?php if ($request['status'] == 'rejected'): ?>
-                                            <?php if (!empty($request['rejection_reason'])): ?>
-                                                <br><small class="text-muted" title="<?php echo htmlspecialchars($request['rejection_reason']); ?>">
-                                                    HR: <?php echo strlen($request['rejection_reason']) > 20 ? substr(htmlspecialchars($request['rejection_reason']), 0, 20) . '...' : htmlspecialchars($request['rejection_reason']); ?>
-                                                </small>
-                                            <?php endif; ?>
-                                            <?php if (!empty($request['ceo_rejection_reason'])): ?>
-                                                <br><small class="text-muted" title="<?php echo htmlspecialchars($request['ceo_rejection_reason']); ?>">
-                                                    CEO: <?php echo strlen($request['ceo_rejection_reason']) > 20 ? substr(htmlspecialchars($request['ceo_rejection_reason']), 0, 20) . '...' : htmlspecialchars($request['ceo_rejection_reason']); ?>
-                                                </small>
-                                            <?php endif; ?>
-                                        <?php endif; ?>
                                     </td>
                                     <td>
                                         <div class="workflow-timeline">
@@ -430,7 +660,7 @@ try {
                                             
                                             <?php if ($request['requires_ceo_approval']): ?>
                                                 <div class="timeline-item">
-                                                    <i class="bi bi-arrow-up-circle <?php echo $request['ceo_decision_status'] == 'pending_ceo' ? 'text-warning' : ($request['ceo_decision_status'] == 'ceo_approved' ? 'text-success' : 'text-danger'); ?>"></i>
+                                                    <i class="bi bi-arrow-up-circle <?php echo ($request['ceo_decision_status'] == 'pending_ceo') ? 'text-warning' : (($request['ceo_decision_status'] == 'ceo_approved') ? 'text-success' : 'text-danger'); ?>"></i>
                                                     <small class="text-muted">CEO: 
                                                         <?php if ($request['ceo_approved_at']): ?>
                                                             <?php echo format_date($request['ceo_approved_at']); ?>
@@ -446,7 +676,7 @@ try {
                                         <?php if ($request['status'] == 'pending'): ?>
                                             <div class="btn-group-vertical btn-group-sm">
                                                 <button class="btn btn-outline-primary btn-sm" 
-                                                        onclick="showDecisionModal(<?php echo $request['id']; ?>, '<?php echo htmlspecialchars($request['employee_name']); ?>', <?php echo $request['total_days']; ?>)"
+                                                        onclick="showDecisionModal(<?php echo $request['id']; ?>, '<?php echo htmlspecialchars(addslashes($request['employee_name'])); ?>', <?php echo $request['total_days']; ?>)"
                                                         title="Make HR Decision">
                                                     <i class="bi bi-clipboard-check"></i> Decide
                                                 </button>
@@ -504,7 +734,7 @@ try {
                                     <option value="<?php echo $emp['id']; ?>">
                                         <?php echo htmlspecialchars($emp['full_name']); ?> 
                                         (<?php echo htmlspecialchars($emp['employee_id']); ?>) - 
-                                        <?php echo htmlspecialchars($emp['department_name']); ?>
+                                        <?php echo htmlspecialchars($emp['department_name'] ?? 'N/A'); ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
@@ -558,53 +788,6 @@ try {
                     </button>
                 </div>
             </form>
-        </div>
-    </div>
-</div>
-
-<!-- Process Leave Modal -->
-<div class="modal fade" id="processLeaveModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <form method="POST" action="">
-                <input type="hidden" name="leave_id" id="processLeaveId">
-                <input type="hidden" name="status" id="processStatus">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="processModalTitle"></h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <div id="processModalBody"></div>
-                    <div id="rejectionReasonDiv" class="mt-3" style="display: none;">
-                        <label class="form-label">Reason for Rejection <span class="text-danger">*</span></label>
-                        <textarea name="rejection_reason" class="form-control" rows="3" 
-                                  placeholder="Please provide a reason for rejecting this leave request..."></textarea>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" name="update_leave_status" class="btn" id="processButton"></button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
-
-<!-- View Leave Details Modal -->
-<div class="modal fade" id="viewLeaveModal" tabindex="-1">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="bi bi-eye me-2"></i>Leave Request Details
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body" id="leaveDetailsContent">
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-            </div>
         </div>
     </div>
 </div>
@@ -714,11 +897,31 @@ try {
     </div>
 </div>
 
+<!-- View Leave Details Modal -->
+<div class="modal fade" id="viewLeaveModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="bi bi-eye me-2"></i>Leave Request Details
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="leaveDetailsContent">
+                <!-- Content will be loaded via AJAX -->
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
 // Calculate days between dates
 function calculateDays() {
-    const startDate = document.getElementById('startDate').value;
-    const endDate = document.getElementById('endDate').value;
+    const startDate = document.getElementById('startDate')?.value;
+    const endDate = document.getElementById('endDate')?.value;
     
     if (startDate && endDate) {
         const start = new Date(startDate);
@@ -735,8 +938,11 @@ function calculateDays() {
     }
 }
 
-document.getElementById('startDate').addEventListener('change', calculateDays);
-document.getElementById('endDate').addEventListener('change', calculateDays);
+// Add event listeners if elements exist
+const startDateInput = document.getElementById('startDate');
+const endDateInput = document.getElementById('endDate');
+if (startDateInput) startDateInput.addEventListener('change', calculateDays);
+if (endDateInput) endDateInput.addEventListener('change', calculateDays);
 
 // Show HR decision modal for pending leaves
 function showDecisionModal(leaveId, employeeName, totalDays) {
@@ -764,123 +970,188 @@ function showDecisionModal(leaveId, employeeName, totalDays) {
     // Reset forms
     document.getElementById('hrFinalizeForm').reset();
     document.getElementById('hrEscalateForm').reset();
-    document.getElementById('finalizeLeaveId').value = leaveId;
-    document.getElementById('escalateLeaveId').value = leaveId;
     
     // Show modal
     new bootstrap.Modal(document.getElementById('hrDecisionModal')).show();
 }
 
-// View leave details function (simplified for now)
+// View leave details via AJAX
 function viewLeaveDetails(leaveId) {
-    // For now, just show an alert. In a full implementation, this would fetch details via AJAX
-    alert(`Viewing details for Leave #${leaveId}. Full implementation would show workflow details, approvals, etc.`);
-}
-
-// Process leave function (legacy - kept for compatibility)
-function processLeave(leaveId, status, employeeName) {
-    document.getElementById('processLeaveId').value = leaveId;
-    document.getElementById('processStatus').value = status;
-    
-    if (status === 'approved') {
-        document.getElementById('processModalTitle').innerHTML = '<i class="bi bi-check-circle me-2 text-success"></i>Approve Leave Request';
-        document.getElementById('processModalBody').innerHTML = `<div class="alert alert-success"><i class="bi bi-question-circle me-2"></i>Are you sure you want to approve the leave request for <strong>${employeeName}</strong>?</div>`;
-        document.getElementById('processButton').className = 'btn btn-success';
-        document.getElementById('processButton').innerHTML = '<i class="bi bi-check-lg me-1"></i>Approve';
-        document.getElementById('rejectionReasonDiv').style.display = 'none';
-    } else if (status === 'rejected') {
-        document.getElementById('processModalTitle').innerHTML = '<i class="bi bi-x-circle me-2 text-danger"></i>Reject Leave Request';
-        document.getElementById('processModalBody').innerHTML = `<div class="alert alert-warning"><i class="bi bi-exclamation-triangle me-2"></i>Are you sure you want to reject the leave request for <strong>${employeeName}</strong>?</div>`;
-        document.getElementById('processButton').className = 'btn btn-danger';
-        document.getElementById('processButton').innerHTML = '<i class="bi bi-x-lg me-1"></i>Reject';
-        document.getElementById('rejectionReasonDiv').style.display = 'block';
-        document.querySelector('#rejectionReasonDiv textarea').required = true;
-    }
-    
-    new bootstrap.Modal(document.getElementById('processLeaveModal')).show();
-}
-
-// View leave details function
-function viewLeaveDetails(leave) {
-    const statusColors = {
-        'pending': 'warning',
-        'approved': 'success',
-        'rejected': 'danger',
-        'cancelled': 'secondary'
-    };
-    
-    const content = `
-        <div class="row">
-            <div class="col-md-6">
-                <h6 class="text-primary">Employee Information</h6>
-                <p><strong>Name:</strong> ${leave.employee_name}</p>
-                <p><strong>Employee ID:</strong> ${leave.employee_id}</p>
-                <p><strong>Department:</strong> ${leave.department_name}</p>
+    // Create loading content
+    document.getElementById('leaveDetailsContent').innerHTML = `
+        <div class="text-center py-4">
+            <div class="spinner-border text-primary mb-3" role="status">
+                <span class="visually-hidden">Loading...</span>
             </div>
-            <div class="col-md-6">
-                <h6 class="text-primary">Leave Details</h6>
-                <p><strong>Leave Type:</strong> <span class="badge bg-secondary">${leave.leave_type_name}</span></p>
-                <p><strong>Duration:</strong> ${leave.total_days} day(s)</p>
-                <p><strong>Status:</strong> <span class="badge bg-${statusColors[leave.status]}">${leave.status.charAt(0).toUpperCase() + leave.status.slice(1)}</span></p>
-            </div>
+            <p>Loading leave details...</p>
         </div>
-        <hr>
-        <div class="row">
-            <div class="col-md-6">
-                <h6 class="text-primary">Period</h6>
-                <p><strong>Start Date:</strong> ${new Date(leave.start_date).toLocaleDateString()}</p>
-                <p><strong>End Date:</strong> ${new Date(leave.end_date).toLocaleDateString()}</p>
-            </div>
-            <div class="col-md-6">
-                <h6 class="text-primary">Approval Information</h6>
-                ${leave.approved_by_name ? `<p><strong>Approved By:</strong> ${leave.approved_by_name}</p>` : '<p class="text-muted">Not yet processed</p>'}
-                ${leave.approved_at ? `<p><strong>Approved On:</strong> ${new Date(leave.approved_at).toLocaleDateString()}</p>` : ''}
-            </div>
-        </div>
-        <hr>
-        <h6 class="text-primary">Reason for Leave</h6>
-        <p class="mb-3">${leave.reason}</p>
-        
-        ${leave.handover_notes ? `<h6 class="text-primary">Handover Notes</h6><p class="mb-3">${leave.handover_notes}</p>` : ''}
-        
-        ${leave.rejection_reason ? `<h6 class="text-danger">Rejection Reason</h6><div class="alert alert-danger">${leave.rejection_reason}</div>` : ''}
     `;
     
-    document.getElementById('leaveDetailsContent').innerHTML = content;
-    new bootstrap.Modal(document.getElementById('viewLeaveModal')).show();
+    // Show modal first
+    const modal = new bootstrap.Modal(document.getElementById('viewLeaveModal'));
+    modal.show();
+    
+    // Fetch leave details via AJAX
+    fetch(`?action=view&id=${leaveId}&ajax=1`)
+        .then(response => {
+            if (!response.ok) throw new Error('Network response was not ok');
+            return response.json();
+        })
+        .then(data => {
+            if (data.success) {
+                const leave = data.leave;
+                const statusColors = {
+                    'pending': 'warning',
+                    'approved': 'success',
+                    'rejected': 'danger',
+                    'cancelled': 'secondary'
+                };
+                
+                const status = leave.status || 'pending';
+                const content = `
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h6 class="text-primary">Employee Information</h6>
+                            <p><strong>Name:</strong> ${leave.employee_name || 'N/A'}</p>
+                            <p><strong>Employee ID:</strong> ${leave.employee_code || 'N/A'}</p>
+                            <p><strong>Department:</strong> ${leave.department_name || 'N/A'}</p>
+                            <p><strong>Position:</strong> ${leave.position_name || 'N/A'}</p>
+                        </div>
+                        <div class="col-md-6">
+                            <h6 class="text-primary">Leave Details</h6>
+                            <p><strong>Leave Type:</strong> <span class="badge bg-secondary">${leave.leave_type_name || 'Unknown'}</span></p>
+                            <p><strong>Duration:</strong> ${leave.total_days || 0} day(s)</p>
+                            <p><strong>Status:</strong> <span class="badge bg-${statusColors[status] || 'secondary'}">${status.charAt(0).toUpperCase() + status.slice(1)}</span></p>
+                            <p><strong>Created:</strong> ${leave.created_at ? new Date(leave.created_at).toLocaleDateString() : 'N/A'}</p>
+                        </div>
+                    </div>
+                    <hr>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h6 class="text-primary">Period</h6>
+                            <p><strong>Start Date:</strong> ${leave.start_date ? new Date(leave.start_date).toLocaleDateString() : 'N/A'}</p>
+                            <p><strong>End Date:</strong> ${leave.end_date ? new Date(leave.end_date).toLocaleDateString() : 'N/A'}</p>
+                        </div>
+                        <div class="col-md-6">
+                            <h6 class="text-primary">Approval Information</h6>
+                            ${leave.approved_by_name ? `<p><strong>Approved By:</strong> ${leave.approved_by_name}</p>` : '<p class="text-muted">Not yet approved</p>'}
+                            ${leave.approved_at ? `<p><strong>Approved On:</strong> ${new Date(leave.approved_at).toLocaleDateString()}</p>` : ''}
+                            ${leave.hr_action_by_name ? `<p><strong>HR Action By:</strong> ${leave.hr_action_by_name}</p>` : ''}
+                            ${leave.finalized_by_hr_at ? `<p><strong>HR Decision Date:</strong> ${new Date(leave.finalized_by_hr_at).toLocaleDateString()}</p>` : ''}
+                        </div>
+                    </div>
+                    ${leave.requires_ceo_approval ? `
+                    <hr>
+                    <div class="row">
+                        <div class="col-md-12">
+                            <h6 class="text-primary">CEO Approval</h6>
+                            <p><strong>Status:</strong> <span class="badge bg-${leave.ceo_decision_status === 'approved' ? 'success' : (leave.ceo_decision_status === 'rejected' ? 'danger' : 'warning')}">${leave.ceo_decision_status ? leave.ceo_decision_status.replace('_', ' ').charAt(0).toUpperCase() + leave.ceo_decision_status.slice(1) : 'Pending'}</span></p>
+                            ${leave.finality_reason ? `<p><strong>Escalation Reason:</strong> ${leave.finality_reason}</p>` : ''}
+                            ${leave.ceo_approved_by_name ? `<p><strong>CEO Approved By:</strong> ${leave.ceo_approved_by_name}</p>` : ''}
+                            ${leave.ceo_approved_at ? `<p><strong>CEO Decision Date:</strong> ${new Date(leave.ceo_approved_at).toLocaleDateString()}</p>` : ''}
+                        </div>
+                    </div>
+                    ` : ''}
+                    <hr>
+                    <h6 class="text-primary">Reason for Leave</h6>
+                    <div class="bg-light p-3 rounded mb-3">
+                        ${leave.reason ? leave.reason.replace(/\n/g, '<br>') : 'No reason provided'}
+                    </div>
+                    
+                    ${leave.handover_notes ? `<h6 class="text-primary">Handover Notes</h6><div class="bg-light p-3 rounded mb-3">${leave.handover_notes.replace(/\n/g, '<br>')}</div>` : ''}
+                    
+                    ${leave.rejection_reason ? `<h6 class="text-danger">Rejection Reason (HR)</h6><div class="alert alert-danger">${leave.rejection_reason.replace(/\n/g, '<br>')}</div>` : ''}
+                    
+                    ${leave.ceo_rejection_reason ? `<h6 class="text-danger">Rejection Reason (CEO)</h6><div class="alert alert-danger">${leave.ceo_rejection_reason.replace(/\n/g, '<br>')}</div>` : ''}
+                `;
+                
+                document.getElementById('leaveDetailsContent').innerHTML = content;
+            } else {
+                document.getElementById('leaveDetailsContent').innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="bi bi-exclamation-triangle me-2"></i>
+                        Error loading leave details: ${data.message || 'Unknown error'}
+                    </div>
+                `;
+            }
+        })
+        .catch(error => {
+            document.getElementById('leaveDetailsContent').innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="bi bi-exclamation-triangle me-2"></i>
+                    Error loading leave details: ${error.message}
+                </div>
+            `;
+        });
 }
 
 // Search functionality
-document.getElementById('leaveSearch').addEventListener('keyup', function() {
-    const searchTerm = this.value.toLowerCase();
-    const table = document.getElementById('leaveRequestsTable');
-    const rows = table.getElementsByTagName('tbody')[0].getElementsByTagName('tr');
-    
-    for (let i = 0; i < rows.length; i++) {
-        const row = rows[i];
-        const text = row.textContent.toLowerCase();
-        row.style.display = text.includes(searchTerm) ? '' : 'none';
-    }
-});
+const leaveSearchInput = document.getElementById('leaveSearch');
+if (leaveSearchInput) {
+    leaveSearchInput.addEventListener('keyup', function() {
+        const searchTerm = this.value.toLowerCase();
+        const table = document.getElementById('leaveRequestsTable');
+        const rows = table.getElementsByTagName('tbody')[0].getElementsByTagName('tr');
+        
+        for (let i = 0; i < rows.length; i++) {
+            const row = rows[i];
+            const text = row.textContent.toLowerCase();
+            row.style.display = text.includes(searchTerm) ? '' : 'none';
+        }
+    });
+}
 
 // Status filter
-document.getElementById('statusFilter').addEventListener('change', function() {
-    const filterValue = this.value.toLowerCase();
-    const table = document.getElementById('leaveRequestsTable');
-    const rows = table.getElementsByTagName('tbody')[0].getElementsByTagName('tr');
-    
-    for (let i = 0; i < rows.length; i++) {
-        const row = rows[i];
-        const statusCell = row.cells[6]; // Status column
-        if (statusCell) {
-            const statusText = statusCell.textContent.toLowerCase();
-            row.style.display = filterValue === '' || statusText.includes(filterValue) ? '' : 'none';
+const statusFilterInput = document.getElementById('statusFilter');
+if (statusFilterInput) {
+    statusFilterInput.addEventListener('change', function() {
+        const filterValue = this.value.toLowerCase();
+        const table = document.getElementById('leaveRequestsTable');
+        const rows = table.getElementsByTagName('tbody')[0].getElementsByTagName('tr');
+        
+        for (let i = 0; i <rows.length; i++) {
+            const row = rows[i];
+            const statusCell = row.cells[5]; // Status column (0-based index)
+            if (statusCell) {
+                const statusText = statusCell.textContent.toLowerCase();
+                row.style.display = filterValue === '' || statusText.includes(filterValue) ? '' : 'none';
+            }
         }
-    }
-});
+    });
+}
 
 // Set minimum date to today for new leave requests
-document.getElementById('startDate').min = new Date().toISOString().split('T')[0];
+const today = new Date().toISOString().split('T')[0];
+if (startDateInput) startDateInput.min = today;
+if (endDateInput) endDateInput.min = today;
+
+// Initialize any tooltips
+var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+    return new bootstrap.Tooltip(tooltipTriggerEl);
+});
 </script>
+
+<style>
+.workflow-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+.timeline-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.timeline-item i {
+    font-size: 1.2em;
+}
+.card {
+    margin-bottom: 1rem;
+}
+.badge {
+    font-size: 0.85em;
+}
+</style>
 
 <?php include '../includes/footer.php'; ?>

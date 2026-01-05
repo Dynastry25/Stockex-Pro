@@ -1498,13 +1498,13 @@ include '../includes/header.php';
             <!-- Sidebar -->
             <div class="col-md-3">
                 <div class="card mb-3">
-                    <div class="card-header bg-primary text-white">
+                    <div class="card-header bg-primary">
                         <h5 class="mb-0"><i class="bi bi-robot me-2"></i>Financial & Trading Assistant</h5>
                     </div>
                     <div class="card-body">
                         <!-- User Info -->
                         <div class="d-flex align-items-center mb-3">
-                            <div class="bg-primary rounded-circle p-2 text-white me-3">
+                            <div class="bg-primary rounded-circle p-2 me-3">
                                 <i class="bi bi-person-fill fs-5"></i>
                             </div>
                             <div>

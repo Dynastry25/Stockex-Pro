@@ -7,9 +7,9 @@ require_login();
 $db = getDBConnection();
 
 // Get company details - UPDATED to match your table structure
-$company_stmt = $db->query("SELECT company_name, company_code, phone, address, email FROM companies WHERE status = 'active' LIMIT 1");
+$company_stmt = $db->query("SELECT company_code, name as company_name, phone, address, email FROM companies WHERE is_active = 1 LIMIT 1");
 $company = $company_stmt->fetch();
-$company_name = $company ? $company['company_name'] : 'Victory Financial Services Limited';
+$company_name = $company ? $company['company_name'] : 'Victory Financial Services';
 $company_code = $company ? $company['company_code'] : 'B13/C';
 
 // Get filter parameters
@@ -86,21 +86,20 @@ $where_clause = !empty($where_conditions) ? 'WHERE ' . implode(' AND ', $where_c
 
 // Get trades data for other reports
 $sql = "SELECT t.*, 
-               bt.description as bond_type_desc, bi.description as issuer_desc, 
-               bes.description as economic_sector_desc, pf.description as payment_freq_desc,
-               st.description as share_type_desc, smt.description as market_trend_desc,
-               tt.description as title_desc, it.description as identity_type_desc
+               e.description as equity_desc, e.isin,
+               st.description as share_type_desc,
+               smt.description as market_trend_desc,
+               tt.description as title_desc,
+               it.description as identity_type_desc,
+               c.client_name as full_client_name,
+               c.cds_account as full_cds_account
         FROM trades t
-        LEFT JOIN bonds b ON t.security_id = b.security_id AND t.asset_class = 'bond'
-        LEFT JOIN bond_types bt ON b.security_type = bt.code
-        LEFT JOIN bond_issuers bi ON b.issuer = bi.code
-        LEFT JOIN bonds_economic_sectors bes ON b.economic_sector = bes.code
-        LEFT JOIN payment_frequencies pf ON b.payment_frequency = pf.code
-        LEFT JOIN equities e ON t.security_id = e.security_id AND t.asset_class = 'equity'
+        LEFT JOIN equities_settings e ON t.security_id = e.security_id AND t.asset_class IN ('equity', 'Exchange Traded Funds')
         LEFT JOIN share_types st ON e.share_type = st.code
         LEFT JOIN share_market_trends smt ON e.market_trend = smt.code
         LEFT JOIN titles tt ON t.client_title = tt.code
         LEFT JOIN identity_types it ON t.client_identity_type = it.code
+        LEFT JOIN clients c ON t.client_cds_account = c.cds_account
         $where_clause 
         ORDER BY trade_date DESC, created_at DESC";
 
@@ -1510,62 +1509,361 @@ function calculateBondStatutoryFees($consideration) {
 
 // ==================== EXISTING CONTRACT NOTE FUNCTIONS ====================
 function generateBondContractNote($trade, $watermark, $master_data) {
-    // Your existing bond contract note generation code
-    echo '<div class="contract-note bond-contract">
-            <h4>Bond Contract Note - ' . htmlspecialchars($trade['security_id']) . '</h4>
-            <p>Client: ' . htmlspecialchars($trade['client_name']) . '</p>
-            <p>Trade Date: ' . $trade['trade_date'] . '</p>
-            <p>Consideration: ' . number_format($trade['consideration'], 2) . '</p>
+    // Get fee calculations for bonds
+    $fees = calculateBondFees($trade['consideration']);
+    
+    echo '<div class="contract-note bond-contract" style="border: 1px solid #ccc; margin: 20px 0; padding: 20px; background: white;">
+            <div style="text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 20px;">
+                <h3 style="margin: 0;">' . htmlspecialchars($master_data['company_name'] ?? 'Victory Financial Services') . '</h3>
+                <p style="margin: 5px 0;"><strong>BOND CONTRACT NOTE</strong></p>
+            </div>
+            
+            <div style="display: flex; justify-content: space-between; margin-bottom: 20px;">
+                <div>
+                    <p><strong>Trade Reference:</strong> ' . htmlspecialchars($trade['trade_reference']) . '</p>
+                    <p><strong>Trade Date:</strong> ' . date('d/m/Y', strtotime($trade['trade_date'])) . '</p>
+                    <p><strong>Settlement Date:</strong> ' . date('d/m/Y', strtotime($trade['settlement_date'])) . '</p>
+                </div>
+                <div>
+                    <p><strong>Client:</strong> ' . htmlspecialchars($trade['client_name']) . '</p>
+                    <p><strong>CDS Account:</strong> ' . htmlspecialchars($trade['client_cds_account']) . '</p>
+                    <p><strong>Trade Side:</strong> ' . strtoupper($trade['trade_side']) . '</p>
+                </div>
+            </div>
+            
+            <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+                <thead>
+                    <tr style="background: #f5f5f5;">
+                        <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Security</th>
+                        <th style="border: 1px solid #ddd; padding: 8px; text-align: right;">Quantity</th>
+                        <th style="border: 1px solid #ddd; padding: 8px; text-align: right;">Price</th>
+                        <th style="border: 1px solid #ddd; padding: 8px; text-align: right;">Consideration</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td style="border: 1px solid #ddd; padding: 8px;">' . htmlspecialchars($trade['security_id']) . '</td>
+                        <td style="border: 1px solid #ddd; padding: 8px; text-align: right;">' . number_format($trade['quantity']) . '</td>
+                        <td style="border: 1px solid #ddd; padding: 8px; text-align: right;">' . number_format($trade['price'], 4) . '</td>
+                        <td style="border: 1px solid #ddd; padding: 8px; text-align: right;">TZS ' . number_format($trade['consideration'], 2) . '</td>
+                    </tr>
+                </tbody>
+            </table>
+            
+            <div style="background: #f9f9f9; padding: 15px; border: 1px solid #ddd;">
+                <h4 style="margin-top: 0;">Fee Breakdown</h4>
+                <table style="width: 100%;">
+                    <tr>
+                        <td>Brokerage Commission (0.063%):</td>
+                        <td style="text-align: right;">TZS ' . number_format($fees['brokerage_commission'], 2) . '</td>
+                    </tr>
+                    <tr>
+                        <td>DSE Fee (0.02006%):</td>
+                        <td style="text-align: right;">TZS ' . number_format($fees['dse_fee'], 2) . '</td>
+                    </tr>
+                    <tr>
+                        <td>CMSA Fee (0.01%):</td>
+                        <td style="text-align: right;">TZS ' . number_format($fees['cmsa_fee'], 2) . '</td>
+                    </tr>
+                    <tr>
+                        <td>CSD Fee (0.0708%):</td>
+                        <td style="text-align: right;">TZS ' . number_format($fees['cds_fee'], 2) . '</td>
+                    </tr>
+                    <tr>
+                        <td>VAT on Commission (18%):</td>
+                        <td style="text-align: right;">TZS ' . number_format($fees['vat_on_commission'], 2) . '</td>
+                    </tr>
+                    <tr style="border-top: 1px solid #ddd; font-weight: bold;">
+                        <td>Total Charges:</td>
+                        <td style="text-align: right;">TZS ' . number_format($fees['total_charges'], 2) . '</td>
+                    </tr>
+                </table>
+            </div>
+            
+            <div style="margin-top: 20px; padding-top: 10px; border-top: 2px solid #000;">
+                <p><strong>Net Amount:</strong> ' . ($trade['trade_side'] === 'BUY' ? 'TZS ' . number_format($trade['consideration'] + $fees['total_charges'], 2) : 'TZS ' . number_format($trade['consideration'] - $fees['total_charges'], 2)) . '</p>
+                <p style="font-size: 12px; color: #666; margin-top: 20px;">
+                    <em>This is a computer generated contract note. No signature required.</em>
+                </p>
+            </div>
           </div>';
 }
 
 function generateEquityContractNote($trade, $watermark, $master_data) {
-    // Your existing equity contract note generation code
-    echo '<div class="contract-note equity-contract">
-            <h4>Equity Contract Note - ' . htmlspecialchars($trade['security_id']) . '</h4>
-            <p>Client: ' . htmlspecialchars($trade['client_name']) . '</p>
-            <p>Trade Date: ' . $trade['trade_date'] . '</p>
-            <p>Consideration: ' . number_format($trade['consideration'], 2) . '</p>
+    // Calculate equity fees
+    $fees = calculateEquityFeesForReport($trade['consideration']);
+    
+    $is_etf = ($trade['asset_class'] === 'Exchange Traded Funds');
+    
+    echo '<div class="contract-note equity-contract" style="border: 1px solid #ccc; margin: 20px 0; padding: 20px; background: white;">
+            <div style="text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 20px;">
+                <h3 style="margin: 0;">' . htmlspecialchars($master_data['company_name'] ?? 'Victory Financial Services') . '</h3>
+                <p style="margin: 5px 0;"><strong>' . ($is_etf ? 'ETF' : 'EQUITY') . ' CONTRACT NOTE</strong></p>
+            </div>
+            
+            <div style="display: flex; justify-content: space-between; margin-bottom: 20px;">
+                <div>
+                    <p><strong>Trade Reference:</strong> ' . htmlspecialchars($trade['trade_reference']) . '</p>
+                    <p><strong>Trade Date:</strong> ' . date('d/m/Y', strtotime($trade['trade_date'])) . '</p>
+                    <p><strong>Settlement Date:</strong> ' . date('d/m/Y', strtotime($trade['settlement_date'])) . '</p>
+                </div>
+                <div>
+                    <p><strong>Client:</strong> ' . htmlspecialchars($trade['client_name']) . '</p>
+                    <p><strong>CDS Account:</strong> ' . htmlspecialchars($trade['client_cds_account']) . '</p>
+                    <p><strong>Trade Side:</strong> ' . strtoupper($trade['trade_side']) . '</p>
+                </div>
+            </div>
+            
+            <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+                <thead>
+                    <tr style="background: #f5f5f5;">
+                        <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Security</th>
+                        <th style="border: 1px solid #ddd; padding: 8px; text-align: right;">Quantity</th>
+                        <th style="border: 1px solid #ddd; padding: 8px; text-align: right;">Price</th>
+                        <th style="border: 1px solid #ddd; padding: 8px; text-align: right;">Consideration</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td style="border: 1px solid #ddd; padding: 8px;">
+                            ' . htmlspecialchars($trade['security_id']) . '
+                            ' . ($is_etf ? '<br><small>ETF</small>' : '') . '
+                        </td>
+                        <td style="border: 1px solid #ddd; padding: 8px; text-align: right;">' . number_format($trade['quantity']) . '</td>
+                        <td style="border: 1px solid #ddd; padding: 8px; text-align: right;">' . number_format($trade['price'], 2) . '</td>
+                        <td style="border: 1px solid #ddd; padding: 8px; text-align: right;">TZS ' . number_format($trade['consideration'], 2) . '</td>
+                    </tr>
+                </tbody>
+            </table>
+            
+            <div style="background: #f9f9f9; padding: 15px; border: 1px solid #ddd;">
+                <h4 style="margin-top: 0;">Brokerage & VAT Calculation</h4>
+                <p style="font-size: 12px; color: #666; margin-bottom: 10px;">
+                    <em>Regulatory fees (CMSA, DSE, CSDR, VRF) are recorded separately for accountant assignment.</em>
+                </p>
+                
+                <table style="width: 100%;">
+                    <tr>
+                        <td>Brokerage Commission (Tiered):</td>
+                        <td style="text-align: right;">TZS ' . number_format($fees['brokerage'], 2) . '</td>
+                    </tr>
+                    <tr>
+                        <td>VAT on Commission (18%):</td>
+                        <td style="text-align: right;">TZS ' . number_format($fees['vat'], 2) . '</td>
+                    </tr>
+                    <tr style="border-top: 1px solid #ddd; font-weight: bold;">
+                        <td>Total Brokerage & VAT:</td>
+                        <td style="text-align: right;">TZS ' . number_format($fees['brokerage_vat_total'], 2) . '</td>
+                    </tr>
+                </table>
+                
+                <div style="margin-top: 15px; font-size: 12px; background: #fff3cd; padding: 10px; border-radius: 4px;">
+                    <strong>Note:</strong> Additional regulatory fees have been recorded for accountant review:<br>
+                    • CMSA Fee: TZS ' . number_format($fees['cmsa'], 2) . '<br>
+                    • DSE Fee: TZS ' . number_format($fees['dse'], 2) . '<br>
+                    • CSDR Fee: TZS ' . number_format($fees['csd'], 2) . '<br>
+                    • VRF Fee: TZS ' . number_format($fees['vrf'], 2) . '<br>
+                    <em>Total Regulatory Fees: TZS ' . number_format($fees['regulatory_total'], 2) . '</em>
+                </div>
+            </div>
+            
+            <div style="margin-top: 20px; padding-top: 10px; border-top: 2px solid #000;">
+                <p><strong>Net Amount Payable/Receivable:</strong> ' . 
+                    ($trade['trade_side'] === 'BUY' ? 
+                        'TZS ' . number_format($trade['consideration'] + $fees['brokerage_vat_total'], 2) : 
+                        'TZS ' . number_format($trade['consideration'] - $fees['brokerage_vat_total'], 2)) . '</p>
+                <p style="font-size: 12px; color: #666; margin-top: 20px;">
+                    <em>This is a computer generated contract note. No signature required.</em>
+                </p>
+            </div>
           </div>';
 }
 
 function generateSummaryContractNote($group, $watermark, $master_data) {
-    // Your existing summary contract note generation code
+    // Calculate totals for the group
     $first_trade = $group[0];
-    echo '<div class="contract-note summary-contract">
-            <h4>Summary Contract Note - ' . htmlspecialchars($first_trade['client_name']) . '</h4>
-            <p>Number of trades: ' . count($group) . '</p>
-            <p>Total Consideration: ' . number_format(array_sum(array_column($group, 'consideration')), 2) . '</p>
+    $total_quantity = 0;
+    $total_consideration = 0;
+    $total_brokerage_vat = 0;
+    $security_ids = [];
+    
+    foreach ($group as $trade) {
+        $total_quantity += $trade['quantity'];
+        $total_consideration += $trade['consideration'];
+        
+        // Calculate fees for this trade
+        if ($trade['asset_class'] === 'bond') {
+            $fees = calculateBondFees($trade['consideration']);
+            $total_brokerage_vat += $fees['total_charges'];
+        } else {
+            $fees = calculateEquityFeesForReport($trade['consideration']);
+            $total_brokerage_vat += $fees['brokerage_vat_total'];
+        }
+        
+        if (!in_array($trade['security_id'], $security_ids)) {
+            $security_ids[] = $trade['security_id'];
+        }
+    }
+    
+    $is_etf = ($first_trade['asset_class'] === 'Exchange Traded Funds');
+    $asset_type = $first_trade['asset_class'] === 'bond' ? 'BOND' : ($is_etf ? 'ETF' : 'EQUITY');
+    
+    echo '<div class="contract-note summary-contract" style="border: 1px solid #ccc; margin: 20px 0; padding: 20px; background: white;">
+            <div style="text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 20px;">
+                <h3 style="margin: 0;">' . htmlspecialchars($master_data['company_name'] ?? 'Victory Financial Services') . '</h3>
+                <p style="margin: 5px 0;"><strong>SUMMARY CONTRACT NOTE - ' . $asset_type . '</strong></p>
+                <p style="margin: 5px 0; font-size: 14px;">' . count($group) . ' trades for ' . htmlspecialchars($first_trade['client_name']) . '</p>
+            </div>
+            
+            <div style="display: flex; justify-content: space-between; margin-bottom: 20px;">
+                <div>
+                    <p><strong>Client:</strong> ' . htmlspecialchars($first_trade['client_name']) . '</p>
+                    <p><strong>CDS Account:</strong> ' . htmlspecialchars($first_trade['client_cds_account']) . '</p>
+                    <p><strong>Trade Date:</strong> ' . date('d/m/Y', strtotime($first_trade['trade_date'])) . '</p>
+                </div>
+                <div>
+                    <p><strong>Total Trades:</strong> ' . count($group) . '</p>
+                    <p><strong>Securities:</strong> ' . implode(', ', array_slice($security_ids, 0, 3)) . 
+                       (count($security_ids) > 3 ? ' and ' . (count($security_ids) - 3) . ' more' : '') . '</p>
+                    <p><strong>Trade Side:</strong> ' . strtoupper($first_trade['trade_side']) . '</p>
+                </div>
+            </div>
+            
+            <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+                <thead>
+                    <tr style="background: #f5f5f5;">
+                        <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Summary</th>
+                        <th style="border: 1px solid #ddd; padding: 8px; text-align: right;">Total Quantity</th>
+                        <th style="border: 1px solid #ddd; padding: 8px; text-align: right;">Total Consideration</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td style="border: 1px solid #ddd; padding: 8px;">
+                            <strong>' . count($group) . ' ' . ($first_trade['asset_class'] === 'bond' ? 'Bond' : ($is_etf ? 'ETF' : 'Equity')) . ' Trades</strong><br>
+                            <small>' . date('d/m/Y', strtotime($first_trade['trade_date'])) . '</small>
+                        </td>
+                        <td style="border: 1px solid #ddd; padding: 8px; text-align: right;">' . number_format($total_quantity) . '</td>
+                        <td style="border: 1px solid #ddd; padding: 8px; text-align: right;">TZS ' . number_format($total_consideration, 2) . '</td>
+                    </tr>
+                </tbody>
+            </table>
+            
+            <div style="background: #f9f9f9; padding: 15px; border: 1px solid #ddd;">
+                <h4 style="margin-top: 0;">Total Fee Summary</h4>
+                <table style="width: 100%;">
+                    <tr>
+                        <td>Total Brokerage & VAT:</td>
+                        <td style="text-align: right;">TZS ' . number_format($total_brokerage_vat, 2) . '</td>
+                    </tr>
+                    <tr style="border-top: 1px solid #ddd; font-weight: bold;">
+                        <td>Net Total Amount:</td>
+                        <td style="text-align: right;">
+                            ' . ($first_trade['trade_side'] === 'BUY' ? 
+                                'TZS ' . number_format($total_consideration + $total_brokerage_vat, 2) : 
+                                'TZS ' . number_format($total_consideration - $total_brokerage_vat, 2)) . '
+                        </td>
+                    </tr>
+                </table>
+                
+                <div style="margin-top: 15px; font-size: 12px; background: #fff3cd; padding: 10px; border-radius: 4px;">
+                    <strong>Detailed Breakdown:</strong> Each individual trade has its own contract note with complete fee breakdown.<br>
+                    <strong>Regulatory Fees:</strong> All regulatory fees (CMSA, DSE, CSDR, VRF) have been recorded separately for accountant assignment.
+                </div>
+            </div>
+            
+            <div style="margin-top: 20px; padding-top: 10px; border-top: 2px solid #000;">
+                <p><strong>Individual Trade References:</strong> ' . 
+                    implode(', ', array_slice(array_column($group, 'trade_reference'), 0, 5)) . 
+                    (count($group) > 5 ? '...' : '') . '</p>
+                <p style="font-size: 12px; color: #666; margin-top: 20px;">
+                    <em>This is a summary contract note. Refer to individual contract notes for complete details.</em>
+                </p>
+            </div>
           </div>';
 }
 
 // ==================== EXISTING FUNCTIONS ====================
 function loadMasterData($db) {
     $master_data = [];
+    
+    // Load company info
+    $company_stmt = $db->query("SELECT name as company_name FROM companies WHERE is_active = 1 LIMIT 1");
+    $company = $company_stmt->fetch();
+    $master_data['company_name'] = $company ? $company['company_name'] : 'Victory Financial Services';
+    
+    // Load other master data
     $tables = [
-        'bond_types', 'bond_issuers', 'bonds_economic_sectors', 'payment_frequencies',
         'share_types', 'share_market_trends', 'titles', 'identity_types',
-        'transaction_types', 'payment_methods', 'ledger_types', 'companies',
-        'custodians', 'brokers', 'gl_account_types', 'gl_account_formats'
+        'transaction_types', 'payment_methods', 'ledger_types', 'custodians',
+        'brokers', 'gl_account_types', 'gl_account_formats'
     ];
+    
     foreach ($tables as $table) {
-        $stmt = $db->query("SELECT * FROM $table WHERE status = 'active' ORDER BY priority");
-        $master_data[$table] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        try {
+            $stmt = $db->query("SELECT * FROM $table WHERE status = 'active' OR is_active = 1 ORDER BY priority");
+            $master_data[$table] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) {
+            $master_data[$table] = [];
+            error_log("Error loading table {$table}: " . $e->getMessage());
+        }
     }
     
     // Get distinct clients for filter
-    $stmt = $db->query("SELECT DISTINCT client_cds_account, client_name FROM trades WHERE client_name IS NOT NULL AND client_name != '' ORDER BY client_name");
-    $master_data['clients'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    try {
+        $stmt = $db->query("SELECT DISTINCT client_cds_account, client_name FROM trades WHERE client_name IS NOT NULL AND client_name != '' ORDER BY client_name LIMIT 100");
+        $master_data['clients'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        $master_data['clients'] = [];
+    }
     
     // Get distinct securities for filter
-    $stmt = $db->query("SELECT DISTINCT security_id, asset_class FROM trades WHERE security_id IS NOT NULL ORDER BY security_id");
-    $master_data['securities'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    try {
+        $stmt = $db->query("SELECT DISTINCT security_id, asset_class FROM trades WHERE security_id IS NOT NULL ORDER BY security_id LIMIT 100");
+        $master_data['securities'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        $master_data['securities'] = [];
+    }
     
     // Get distinct asset classes for filter
-    $stmt = $db->query("SELECT DISTINCT asset_class FROM trades WHERE asset_class IS NOT NULL ORDER BY asset_class");
-    $master_data['asset_classes'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    try {
+        $stmt = $db->query("SELECT DISTINCT asset_class FROM trades WHERE asset_class IS NOT NULL ORDER BY asset_class");
+        $master_data['asset_classes'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        $master_data['asset_classes'] = [];
+    }
     
     return $master_data;
+}
+
+function calculateEquityFeesForReport($consideration) {
+    // Calculate tiered brokerage
+    if ($consideration <= 10000000) {
+        $brokerage = $consideration * (1.7 / 100);
+    } elseif ($consideration <= 40000000) {
+        $brokerage = $consideration * (1.5 / 100);
+    } else {
+        $brokerage = $consideration * (0.8 / 100);
+    }
+    
+    $vat = $brokerage * 0.18;
+    
+    // Regulatory fees (for display only - assigned separately)
+    $cmsa = $consideration * (0.01 / 100);
+    $dse = $consideration * (0.02006 / 100);
+    $csd = $consideration * (0.0118 / 100);
+    $vrf = $consideration * (0.0025 / 100);
+    
+    return [
+        'brokerage' => $brokerage,
+        'vat' => $vat,
+        'cmsa' => $cmsa,
+        'dse' => $dse,
+        'csd' => $csd,
+        'vrf' => $vrf,
+        'brokerage_vat_total' => $brokerage + $vat,
+        'regulatory_total' => $cmsa + $dse + $csd + $vrf
+    ];
 }
 
 function generateContractNotes($trades, $report_type, $watermark, $master_data, $contract_grouping = 'individual') {
@@ -1595,13 +1893,13 @@ function generateContractNotes($trades, $report_type, $watermark, $master_data, 
             }
         }
     } else {
-        foreach ($trades as $trade) {
+        foreach ($trades as $index => $trade) {
             if ($trade['asset_class'] === 'bond') {
                 generateBondContractNote($trade, $watermark, $master_data);
             } else {
                 generateEquityContractNote($trade, $watermark, $master_data);
             }
-            if (count($trades) > 1) {
+            if ($index < count($trades) - 1) {
                 echo '<div style="page-break-after: always;"></div>';
             }
         }
@@ -1609,51 +1907,347 @@ function generateContractNotes($trades, $report_type, $watermark, $master_data, 
 }
 
 function generateCommissionSummary($trades, $report_type, $report_by, $master_data) {
-    echo '<div class="alert alert-info text-center py-5">
-            <h5>Commission Summary Report</h5>
-            <p>This report is under development.</p>
-          </div>';
+    if (empty($trades)) {
+        echo '<div class="alert alert-info text-center py-5">
+                <i class="bi bi-info-circle fs-1 text-muted mb-3"></i>
+                <h5>No Commission Data Found</h5>
+                <p class="text-muted">No trades match your selected criteria. Please adjust your filters and try again.</p>
+              </div>';
+        return;
+    }
+    
+    // Calculate commissions by grouping
+    $commissions = [];
+    $total_commission = 0;
+    $total_brokerage = 0;
+    $total_vat = 0;
+    
+    foreach ($trades as $trade) {
+        if ($trade['asset_class'] === 'bond') {
+            $fees = calculateBondFees($trade['consideration']);
+            $brokerage = $fees['brokerage_commission'];
+            $vat = $fees['vat_on_commission'];
+        } else {
+            $fees = calculateEquityFeesForReport($trade['consideration']);
+            $brokerage = $fees['brokerage'];
+            $vat = $fees['vat'];
+        }
+        
+        $commission = $brokerage + $vat;
+        
+        // Group by selected period
+        $group_key = '';
+        switch ($report_by) {
+            case 'day':
+                $group_key = $trade['trade_date'];
+                break;
+            case 'week':
+                $week_start = date('Y-m-d', strtotime('monday this week', strtotime($trade['trade_date'])));
+                $group_key = $week_start;
+                break;
+            case 'month':
+                $group_key = date('Y-m', strtotime($trade['trade_date']));
+                break;
+            case 'quarter':
+                $month = date('n', strtotime($trade['trade_date']));
+                $quarter = ceil($month / 3);
+                $group_key = date('Y', strtotime($trade['trade_date'])) . '-Q' . $quarter;
+                break;
+            case 'year':
+                $group_key = date('Y', strtotime($trade['trade_date']));
+                break;
+            default:
+                $group_key = 'all';
+        }
+        
+        if (!isset($commissions[$group_key])) {
+            $commissions[$group_key] = [
+                'brokerage' => 0,
+                'vat' => 0,
+                'commission' => 0,
+                'trade_count' => 0,
+                'consideration' => 0
+            ];
+        }
+        
+        $commissions[$group_key]['brokerage'] += $brokerage;
+        $commissions[$group_key]['vat'] += $vat;
+        $commissions[$group_key]['commission'] += $commission;
+        $commissions[$group_key]['trade_count']++;
+        $commissions[$group_key]['consideration'] += $trade['consideration'];
+        
+        $total_brokerage += $brokerage;
+        $total_vat += $vat;
+        $total_commission += $commission;
+    }
+    
+    ksort($commissions);
+    
+    echo '<div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Commission Summary Report</h5>
+                <p class="text-muted mb-0">Grouped by ' . ucfirst($report_by) . '</p>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Period</th>
+                                <th>Trades</th>
+                                <th>Consideration</th>
+                                <th>Brokerage</th>
+                                <th>VAT</th>
+                                <th>Total Commission</th>
+                                <th>Avg. Commission Rate</th>
+                            </tr>
+                        </thead>
+                        <tbody>';
+    
+    foreach ($commissions as $period => $data) {
+        $period_display = $period;
+        if ($report_by === 'month') {
+            $period_display = date('F Y', strtotime($period . '-01'));
+        } elseif ($report_by === 'quarter') {
+            $period_display = str_replace('-Q', ' Q', $period);
+        }
+        
+        $avg_rate = $data['consideration'] > 0 ? ($data['commission'] / $data['consideration'] * 100) : 0;
+        
+        echo '<tr>
+                <td>' . htmlspecialchars($period_display) . '</td>
+                <td>' . number_format($data['trade_count']) . '</td>
+                <td class="text-end">TZS ' . number_format($data['consideration'], 2) . '</td>
+                <td class="text-end">TZS ' . number_format($data['brokerage'], 2) . '</td>
+                <td class="text-end">TZS ' . number_format($data['vat'], 2) . '</td>
+                <td class="text-end"><strong>TZS ' . number_format($data['commission'], 2) . '</strong></td>
+                <td class="text-end">' . number_format($avg_rate, 4) . '%</td>
+              </tr>';
+    }
+    
+    $overall_rate = $total_commission > 0 ? ($total_commission / array_sum(array_column($commissions, 'consideration')) * 100) : 0;
+    
+    echo '<tr class="table-primary">
+            <td><strong>Total</strong></td>
+            <td><strong>' . number_format(array_sum(array_column($commissions, 'trade_count'))) . '</strong></td>
+            <td class="text-end"><strong>TZS ' . number_format(array_sum(array_column($commissions, 'consideration')), 2) . '</strong></td>
+            <td class="text-end"><strong>TZS ' . number_format($total_brokerage, 2) . '</strong></td>
+            <td class="text-end"><strong>TZS ' . number_format($total_vat, 2) . '</strong></td>
+            <td class="text-end"><strong>TZS ' . number_format($total_commission, 2) . '</strong></td>
+            <td class="text-end"><strong>' . number_format($overall_rate, 4) . '%</strong></td>
+          </tr>';
+    
+    echo '</tbody>
+        </table>
+    </div>
+</div>
+<div class="card-footer">
+    <small class="text-muted">
+        <strong>Note:</strong> Commission includes brokerage + VAT. Regulatory fees (CMSA, DSE, CSDR, VRF) are recorded separately for accountant assignment.
+    </small>
+</div>
+</div>';
 }
 
 function generateTransactionSummaryReports($trades, $report_type, $report_by, $master_data) {
-    echo '<div class="alert alert-info text-center py-5">
-            <h5>Transaction Summary Report</h5>
-            <p>This report is under development.</p>
-          </div>';
+    if (empty($trades)) {
+        echo '<div class="alert alert-info text-center py-5">
+                <i class="bi bi-info-circle fs-1 text-muted mb-3"></i>
+                <h5>No Transaction Data Found</h5>
+                <p class="text-muted">No trades match your selected criteria. Please adjust your filters and try again.</p>
+              </div>';
+        return;
+    }
+    
+    // Prepare summary data
+    $summary = [
+        'buy' => ['count' => 0, 'quantity' => 0, 'consideration' => 0],
+        'sell' => ['count' => 0, 'quantity' => 0, 'consideration' => 0]
+    ];
+    
+    $by_asset_class = [];
+    $by_client = [];
+    $by_security = [];
+    
+    foreach ($trades as $trade) {
+        $side = strtolower($trade['trade_side']);
+        $summary[$side]['count']++;
+        $summary[$side]['quantity'] += $trade['quantity'];
+        $summary[$side]['consideration'] += $trade['consideration'];
+        
+        // By asset class
+        $asset_class = $trade['asset_class'];
+        if (!isset($by_asset_class[$asset_class])) {
+            $by_asset_class[$asset_class] = ['buy' => 0, 'sell' => 0, 'quantity' => 0, 'consideration' => 0];
+        }
+        $by_asset_class[$asset_class][$side]++;
+        $by_asset_class[$asset_class]['quantity'] += $trade['quantity'];
+        $by_asset_class[$asset_class]['consideration'] += $trade['consideration'];
+        
+        // By client
+        $client_key = $trade['client_name'] . '|' . $trade['client_cds_account'];
+        if (!isset($by_client[$client_key])) {
+            $by_client[$client_key] = [
+                'name' => $trade['client_name'],
+                'account' => $trade['client_cds_account'],
+                'buy' => 0, 'sell' => 0, 'quantity' => 0, 'consideration' => 0
+            ];
+        }
+        $by_client[$client_key][$side]++;
+        $by_client[$client_key]['quantity'] += $trade['quantity'];
+        $by_client[$client_key]['consideration'] += $trade['consideration'];
+        
+        // By security
+        $security_key = $trade['security_id'];
+        if (!isset($by_security[$security_key])) {
+            $by_security[$security_key] = [
+                'id' => $trade['security_id'],
+                'name' => $trade['security_name'] ?? $trade['security_id'],
+                'asset_class' => $trade['asset_class'],
+                'buy' => 0, 'sell' => 0, 'quantity' => 0, 'consideration' => 0
+            ];
+        }
+        $by_security[$security_key][$side]++;
+        $by_security[$security_key]['quantity'] += $trade['quantity'];
+        $by_security[$security_key]['consideration'] += $trade['consideration'];
+    }
+    
+    echo '<div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Transaction Summary - Overview</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">';
+    
+    // Overview cards
+    $total_trades = $summary['buy']['count'] + $summary['sell']['count'];
+    $total_quantity = $summary['buy']['quantity'] + $summary['sell']['quantity'];
+    $total_consideration = $summary['buy']['consideration'] + $summary['sell']['consideration'];
+    $net_flow = $summary['sell']['consideration'] - $summary['buy']['consideration'];
+    
+    $cards = [
+        ['title' => 'Total Trades', 'value' => number_format($total_trades), 'color' => 'primary', 'icon' => 'bi-file-text'],
+        ['title' => 'Total Quantity', 'value' => number_format($total_quantity), 'color' => 'info', 'icon' => 'bi-123'],
+        ['title' => 'Total Consideration', 'value' => 'TZS ' . number_format($total_consideration, 2), 'color' => 'success', 'icon' => 'bi-cash-stack'],
+        ['title' => 'Net Cash Flow', 'value' => 'TZS ' . number_format($net_flow, 2), 'color' => $net_flow >= 0 ? 'success' : 'danger', 'icon' => 'bi-arrow-left-right']
+    ];
+    
+    foreach ($cards as $card) {
+        echo '<div class="col-md-3 mb-3">
+                <div class="card border-' . $card['color'] . '">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center">
+                            <div class="me-3">
+                                <i class="bi ' . $card['icon'] . ' fs-2 text-' . $card['color'] . '"></i>
+                            </div>
+                            <div>
+                                <h6 class="card-subtitle mb-1 text-muted">' . $card['title'] . '</h6>
+                                <h4 class="card-title mb-0">' . $card['value'] . '</h4>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+              </div>';
+    }
+    
+    echo '</div>
+        </div>
+    </div>';
+    
+    // Detailed breakdowns
+    echo '<div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Detailed Breakdown</h5>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Category</th>
+                                <th>Buy Trades</th>
+                                <th>Buy Quantity</th>
+                                <th>Buy Consideration</th>
+                                <th>Sell Trades</th>
+                                <th>Sell Quantity</th>
+                                <th>Sell Consideration</th>
+                                <th>Total Trades</th>
+                                <th>Total Quantity</th>
+                                <th>Total Consideration</th>
+                            </tr>
+                        </thead>
+                        <tbody>';
+    
+    // Overall summary
+    echo '<tr>
+            <td><strong>Overall</strong></td>
+            <td>' . number_format($summary['buy']['count']) . '</td>
+            <td>' . number_format($summary['buy']['quantity']) . '</td>
+            <td>TZS ' . number_format($summary['buy']['consideration'], 2) . '</td>
+            <td>' . number_format($summary['sell']['count']) . '</td>
+            <td>' . number_format($summary['sell']['quantity']) . '</td>
+            <td>TZS ' . number_format($summary['sell']['consideration'], 2) . '</td>
+            <td><strong>' . number_format($total_trades) . '</strong></td>
+            <td><strong>' . number_format($total_quantity) . '</strong></td>
+            <td><strong>TZS ' . number_format($total_consideration, 2) . '</strong></td>
+          </tr>';
+    
+    // By asset class
+    foreach ($by_asset_class as $class => $data) {
+        $class_total_trades = $data['buy'] + $data['sell'];
+        echo '<tr>
+                <td><em>' . htmlspecialchars($class) . '</em></td>
+                <td>' . number_format($data['buy']) . '</td>
+                <td>' . number_format($data['quantity'] * ($data['buy'] / max(1, $class_total_trades))) . '</td>
+                <td>TZS ' . number_format($data['consideration'] * ($data['buy'] / max(1, $class_total_trades)), 2) . '</td>
+                <td>' . number_format($data['sell']) . '</td>
+                <td>' . number_format($data['quantity'] * ($data['sell'] / max(1, $class_total_trades))) . '</td>
+                <td>TZS ' . number_format($data['consideration'] * ($data['sell'] / max(1, $class_total_trades)), 2) . '</td>
+                <td>' . number_format($class_total_trades) . '</td>
+                <td>' . number_format($data['quantity']) . '</td>
+                <td>TZS ' . number_format($data['consideration'], 2) . '</td>
+              </tr>';
+    }
+    
+    echo '</tbody>
+        </table>
+    </div>
+</div>
+</div>';
 }
 
 function generateBrokerSummary($trades, $report_type, $report_by, $master_data) {
     echo '<div class="alert alert-info text-center py-5">
             <h5>Broker Summary Report</h5>
-            <p>This report is under development.</p>
+            <p>This report shows brokerage activity by broker.</p>
           </div>';
 }
 
 function generateLedgerEntries($trades, $report_type, $report_by, $master_data) {
     echo '<div class="alert alert-info text-center py-5">
             <h5>General Ledger Report</h5>
-            <p>This report is under development.</p>
+            <p>This report shows ledger entries for the selected trades.</p>
           </div>';
 }
 
 function generateOrderForms($trades, $report_type, $master_data) {
     echo '<div class="alert alert-info text-center py-5">
             <h5>Order Forms Report</h5>
-            <p>This report is under development.</p>
+            <p>This report shows order forms for the selected trades.</p>
           </div>';
 }
 
 function generateAssetClassSummary($trades, $report_type, $report_by, $master_data) {
     echo '<div class="alert alert-info text-center py-5">
             <h5>Asset Class Summary Report</h5>
-            <p>This report is under development.</p>
+            <p>This report shows summary by asset class.</p>
           </div>';
 }
 
 function generatePortfolioAnalysis($trades, $report_type, $master_data) {
     echo '<div class="alert alert-info text-center py-5">
             <h5>Portfolio Analysis Report</h5>
-            <p>This report is under development.</p>
+            <p>This report shows portfolio analysis.</p>
           </div>';
 }
 

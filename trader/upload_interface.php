@@ -17,7 +17,7 @@ include '../includes/header.php';
                     <div class="me-3">
                         <div class="d-inline-flex align-items-center justify-content-center rounded-circle shadow-sm" 
                              style="width: 60px; height: 60px; background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-light) 100%);">
-                            <i class="bi bi-cloud-upload text-white" style="font-size: 1.5rem;"></i>
+                            <i class="bi bi-cloud-upload" style="font-size: 1.5rem;"></i>
                         </div>
                     </div>
                     <div>
@@ -41,7 +41,7 @@ include '../includes/header.php';
                             <div class="mb-4">
                                 <div class="d-inline-flex align-items-center justify-content-center rounded-circle mb-3" 
                                      style="width: 80px; height: 80px; background: linear-gradient(135deg, var(--warning-color) 0%, #f59e0b 100%);">
-                                    <i class="bi bi-file-earmark-text text-white" style="font-size: 2rem;"></i>
+                                    <i class="bi bi-file-earmark-text" style="font-size: 2rem;"></i>
                                 </div>
                             </div>
                             <h4 class="fw-semibold mb-3">Upload Bonds</h4>
@@ -68,7 +68,7 @@ include '../includes/header.php';
                             <div class="mb-4">
                                 <div class="d-inline-flex align-items-center justify-content-center rounded-circle mb-3" 
                                      style="width: 80px; height: 80px; background: linear-gradient(135deg, var(--info-color) 0%, #0ea5e9 100%);">
-                                    <i class="bi bi-graph-up text-white" style="font-size: 2rem;"></i>
+                                    <i class="bi bi-graph-up" style="font-size: 2rem;"></i>
                                 </div>
                             </div>
                             <h4 class="fw-semibold mb-3">Upload Shares</h4>

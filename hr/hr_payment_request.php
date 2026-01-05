@@ -732,7 +732,7 @@ include '../includes/header.php';
                     <div class="me-3">
                         <div class="d-inline-flex align-items-center justify-content-center rounded-circle shadow-sm" 
                              style="width: 60px; height: 60px; background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);">
-                            <i class="bi bi-cash-stack text-white" style="font-size: 1.5rem;"></i>
+                            <i class="bi bi-cash-stack" style="font-size: 1.5rem;"></i>
                         </div>
                     </div>
                     <div>
@@ -771,7 +771,7 @@ include '../includes/header.php';
     <div class="row">
         <div class="col-12">
             <div class="card">
-                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                <div class="card-header bg-primary d-flex justify-content-between align-items-center">
                     <h5 class="mb-0"><i class="bi bi-plus-circle me-2"></i>Create New Payment Request</h5>
                     <button type="button" class="btn btn-sm btn-light" id="toggleFormBtn">
                         <i class="bi bi-dash-lg" id="toggleFormIcon"></i>
@@ -914,7 +914,7 @@ include '../includes/header.php';
     <div class="row mt-4">
         <div class="col-12">
             <div class="card">
-                <div class="card-header bg-info text-white">
+                <div class="card-header bg-info">
                     <h5 class="mb-0"><i class="bi bi-list-check me-2"></i>My Payment Requests</h5>
                 </div>
                 <div class="card-body">
@@ -1054,7 +1054,7 @@ include '../includes/header.php';
     <div class="modal fade" id="viewRequestModal" tabindex="-1" aria-labelledby="viewRequestModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-lg">
             <div class="modal-content">
-                <div class="modal-header bg-primary text-white">
+                <div class="modal-header bg-primary">
                     <h5 class="modal-title" id="viewRequestModalLabel">
                         <i class="bi bi-receipt me-2"></i>Payment Request Details
                     </h5>
@@ -1074,7 +1074,7 @@ include '../includes/header.php';
     <div class="modal fade" id="trackRequestModal" tabindex="-1" aria-labelledby="trackRequestModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-lg">
             <div class="modal-content">
-                <div class="modal-header bg-info text-white">
+                <div class="modal-header bg-info">
                     <h5 class="modal-title" id="trackRequestModalLabel">
                         <i class="bi bi-diagram-3 me-2"></i>Request Approval Tracking
                     </h5>
@@ -1094,7 +1094,7 @@ include '../includes/header.php';
     <div class="modal fade" id="accountTypesModal" tabindex="-1" aria-labelledby="accountTypesModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-lg">
             <div class="modal-content">
-                <div class="modal-header bg-primary text-white">
+                <div class="modal-header bg-primary">
                     <h5 class="modal-title" id="accountTypesModalLabel">Select Account Type</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
@@ -1134,7 +1134,7 @@ include '../includes/header.php';
     <div class="modal fade" id="payeeModal" tabindex="-1" aria-labelledby="payeeModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-xl">
             <div class="modal-content">
-                <div class="modal-header bg-success text-white">
+                <div class="modal-header bg-success">
                     <h5 class="modal-title" id="payeeModalLabel">Select Payee</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
