@@ -2,7 +2,13 @@
 require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
 
-require_finance_officer();
+// Allow both finance officers and CEOs to access this page
+$user = get_logged_in_user();
+$allowed_roles = ['finance_officer', 'ceo', 'system_admin'];
+if (!in_array($user['role'], $allowed_roles)) {
+    show_alert('You do not have permission to access financial reports.', 'danger');
+    redirect('auth/login.php');
+}
 
 $db = getDBConnection();
 

@@ -96,39 +96,38 @@
                     <?php if ($current_user['role'] == 'system_admin' || $current_user['role'] == 'ceo'): ?>
                     <!-- Admin/CEO Features -->
                         <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>../ceo/likizo.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/likizo.php">
                             <i class="bi bi-calendar-check"></i>
                             <span>Employees Leaves</span>
                         </a>
                     </li>
                            <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>../ceo/pay_employees.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/pay_employees.php">
                             <i class="bi bi-calendar-check"></i>
                             <span>Pay employees</span>
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>admin/users.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/users.php">
                             <i class="bi bi-people"></i>
                             <span>User Management</span>
                         </a>
                     </li>
-                    <!-- In your navigation menu -->
 
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>admin/client_management.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/client_management.php">
                             <i class="bi bi-person-lines-fill"></i>
                             <span>Client Management</span>
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>admin/master_data.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/master_data.php">
                             <i class="bi bi-database"></i>
                             <span>Master Data</span>
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>admin/fee_management.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/fee_management.php">
                             <i class="bi bi-currency-dollar"></i>
                             <span>Fee Management</span>
                         </a>
@@ -292,6 +291,12 @@
                         <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/approvals_dashboard.php">
                             <i class="bi bi-check-circle"></i>
                             <span>Approval Dashboard</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/reports_dashboard.php">
+                            <i class="bi bi-graph-up"></i>
+                            <span>Finance Reports</span>
                         </a>
                     </li>
                     <?php endif; ?>

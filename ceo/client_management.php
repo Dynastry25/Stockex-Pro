@@ -1,10 +1,15 @@
 <?php
 require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
-require_ceo();
 
-require_admin();
-require_trader();
+// Allow CEOs, admins, and traders to access this page
+require_login();
+$user = get_logged_in_user();
+$allowed_roles = ['system_admin', 'ceo', 'trader'];
+if (!in_array($user['role'], $allowed_roles)) {
+    show_alert('You do not have permission to access client management.', 'danger');
+    redirect('auth/login.php');
+}
 
 require_mandate();
 

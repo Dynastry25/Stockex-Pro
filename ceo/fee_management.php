@@ -2,8 +2,14 @@
 require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
 
-require_admin();
-require_ceo();
+// Allow both CEOs and admins to access this page
+require_login();
+$user = get_logged_in_user();
+$allowed_roles = ['system_admin', 'ceo'];
+if (!in_array($user['role'], $allowed_roles)) {
+    show_alert('You do not have permission to access fee management.', 'danger');
+    redirect('auth/login.php');
+}
 
 $db = getDBConnection();
 
