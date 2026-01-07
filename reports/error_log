@@ -537,3 +537,11 @@ Stack trace:
 [04-Jan-2026 17:16:47 UTC] Error loading table gl_account_types: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.gl_account_types' doesn't exist
 [04-Jan-2026 17:21:15 UTC] Error loading table gl_account_types: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.gl_account_types' doesn't exist
 [05-Jan-2026 07:12:25 UTC] Error loading table gl_account_types: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.gl_account_types' doesn't exist
+[06-Jan-2026 12:58:37 UTC] Error loading table gl_account_types: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.gl_account_types' doesn't exist
+[06-Jan-2026 12:59:27 UTC] Error loading table gl_account_types: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.gl_account_types' doesn't exist
+[06-Jan-2026 14:42:37 UTC] Error loading table gl_account_types: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.gl_account_types' doesn't exist
+[06-Jan-2026 14:42:44 UTC] Error loading table gl_account_types: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.gl_account_types' doesn't exist
+[06-Jan-2026 14:42:52 UTC] Error loading table gl_account_types: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.gl_account_types' doesn't exist
+[06-Jan-2026 14:57:49 UTC] Error loading table gl_account_types: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.gl_account_types' doesn't exist
+[06-Jan-2026 14:58:20 UTC] Error loading table gl_account_types: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.gl_account_types' doesn't exist
+[06-Jan-2026 14:58:25 UTC] Error loading table gl_account_types: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.gl_account_types' doesn't exist

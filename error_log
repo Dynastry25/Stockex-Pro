@@ -85,3 +85,23 @@
 [01-Jan-2026 11:30:14 UTC] PHP Warning:  Constant WORKFLOW_RECRUITMENT already defined in /home1/jrozqhmy/public_html/website_02cf635f/config/approval_constants.php on line 133
 [01-Jan-2026 11:30:14 UTC] PHP Warning:  Constant ENTITY_LEAVE_REQUEST already defined in /home1/jrozqhmy/public_html/website_02cf635f/config/approval_constants.php on line 141
 [01-Jan-2026 11:30:14 UTC] PHP Warning:  Constant ENTITY_PAYROLL already defined in /home1/jrozqhmy/public_html/website_02cf635f/config/approval_constants.php on line 142
+[06-Jan-2026 12:33:46 America/Boise] PHP Warning:  require_once(../config/config.php): Failed to open stream: No such file or directory in /home1/jrozqhmy/public_html/website_02cf635f/bond_calculator.php on line 3
+[06-Jan-2026 12:33:46 America/Boise] PHP Fatal error:  Uncaught Error: Failed opening required '../config/config.php' (include_path='.:/opt/cpanel/ea-php84/root/usr/share/pear') in /home1/jrozqhmy/public_html/website_02cf635f/bond_calculator.php:3
+Stack trace:
+#0 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/bond_calculator.php on line 3
+[06-Jan-2026 12:35:59 America/Boise] PHP Warning:  require_once(../config/config.php): Failed to open stream: No such file or directory in /home1/jrozqhmy/public_html/website_02cf635f/bond_calculator.php on line 3
+[06-Jan-2026 12:35:59 America/Boise] PHP Fatal error:  Uncaught Error: Failed opening required '../config/config.php' (include_path='.:/opt/cpanel/ea-php84/root/usr/share/pear') in /home1/jrozqhmy/public_html/website_02cf635f/bond_calculator.php:3
+Stack trace:
+#0 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/bond_calculator.php on line 3
+[06-Jan-2026 12:36:02 America/Boise] PHP Warning:  require_once(../config/config.php): Failed to open stream: No such file or directory in /home1/jrozqhmy/public_html/website_02cf635f/bond_calculator.php on line 3
+[06-Jan-2026 12:36:02 America/Boise] PHP Fatal error:  Uncaught Error: Failed opening required '../config/config.php' (include_path='.:/opt/cpanel/ea-php84/root/usr/share/pear') in /home1/jrozqhmy/public_html/website_02cf635f/bond_calculator.php:3
+Stack trace:
+#0 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/bond_calculator.php on line 3
+[06-Jan-2026 12:36:33 America/Boise] PHP Warning:  require_once(../config/config.php): Failed to open stream: No such file or directory in /home1/jrozqhmy/public_html/website_02cf635f/bond_calculator.php on line 3
+[06-Jan-2026 12:36:33 America/Boise] PHP Fatal error:  Uncaught Error: Failed opening required '../config/config.php' (include_path='.:/opt/cpanel/ea-php84/root/usr/share/pear') in /home1/jrozqhmy/public_html/website_02cf635f/bond_calculator.php:3
+Stack trace:
+#0 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/bond_calculator.php on line 3

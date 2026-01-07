@@ -414,4 +414,177 @@ function log_workflow_action($entity_type, $entity_id, $action_type, $action_by,
         return false;
     }
 }
+
+/**
+ * Get summary of pending CEO approvals
+ *
+ * @return array Array with counts of pending approvals by type
+ */
+function get_ceo_pending_approvals() {
+    global $db;
+
+    try {
+        $summary = [
+            'leaves' => 0,
+            'payroll' => 0,
+            'recruitment' => 0,
+            'targets' => 0,
+            'total' => 0
+        ];
+
+        // Count pending leave approvals
+        $stmt = $db->query("SELECT COUNT(*) FROM leave_requests WHERE requires_ceo_approval = 1 AND ceo_decision_status = 'pending_ceo'");
+        $summary['leaves'] = $stmt->fetchColumn();
+
+        // Count pending payroll approvals
+        $stmt = $db->query("SELECT COUNT(*) FROM payroll WHERE status = 'pending_ceo_approval'");
+        $summary['payroll'] = $stmt->fetchColumn();
+
+        // Count pending recruitment approvals
+        $stmt = $db->query("SELECT COUNT(*) FROM job_applications WHERE ceo_approval_status = 'pending_ceo'");
+        $summary['recruitment'] = $stmt->fetchColumn();
+
+        // Count pending target approvals
+        $stmt = $db->query("SELECT COUNT(*) FROM performance_targets WHERE requires_ceo_approval = TRUE AND ceo_decision_status = 'pending_ceo'");
+        $summary['targets'] = $stmt->fetchColumn();
+
+        $summary['total'] = $summary['leaves'] + $summary['payroll'] + $summary['recruitment'] + $summary['targets'];
+
+        return $summary;
+
+    } catch (Exception $e) {
+        error_log("Error getting CEO pending approvals summary: " . $e->getMessage());
+        return [
+            'leaves' => 0,
+            'payroll' => 0,
+            'recruitment' => 0,
+            'targets' => 0,
+            'total' => 0
+        ];
+    }
+}
+
+/**
+ * Get detailed pending leave approvals for CEO
+ *
+ * @return array Array of pending leave requests
+ */
+function get_ceo_pending_leaves() {
+    global $db;
+
+    try {
+        $stmt = $db->query("
+            SELECT lr.*, 
+                   CONCAT(e.first_name, ' ', e.last_name) as employee_name,
+                   e.employee_id as employee_code,
+                   d.name as department_name, 
+                   jp.title as position_name,
+                   lt.name as leave_type_name,
+                   hr_user.full_name as hr_action_by_name,
+                   lr.escalation_reason as escalation_reason,
+                   lr.finality_reason as escalation_reason_alt
+            FROM leave_requests lr
+            JOIN users e ON lr.employee_id = e.id
+            LEFT JOIN departments d ON e.department_id = d.id
+            LEFT JOIN job_positions jp ON e.position_id = jp.id
+            LEFT JOIN leave_types lt ON lr.leave_type_id = lt.id
+            LEFT JOIN users hr_user ON lr.hr_action_by = hr_user.id
+            WHERE lr.requires_ceo_approval = 1 
+            AND lr.ceo_decision_status = 'pending_ceo'
+            ORDER BY lr.finalized_by_hr_at ASC
+        ");
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    } catch (Exception $e) {
+        error_log("Error getting CEO pending leaves: " . $e->getMessage());
+        return [];
+    }
+}
+
+/**
+ * CEO approve or reject a payroll
+ *
+ * @param int $payroll_id The payroll ID
+ * @param string $decision 'approve' or 'reject'
+ * @param int $ceo_user_id The CEO user ID
+ * @param string $reason Optional reason for rejection
+ * @return array Result array with success and message
+ */
+function ceo_approve_payroll($payroll_id, $decision, $ceo_user_id, $reason = '') {
+    global $db;
+    
+    try {
+        $db->beginTransaction();
+        
+        // Get current payroll details
+        $stmt = $db->prepare("
+            SELECT p.*, CONCAT(u.first_name, ' ', u.last_name) as employee_name, u.employee_id
+            FROM payroll p
+            JOIN users u ON p.user_id = u.id
+            WHERE p.id = ? AND p.status = 'pending_ceo_approval'
+        ");
+        $stmt->execute([$payroll_id]);
+        $payroll = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if (!$payroll) {
+            return [
+                'success' => false,
+                'message' => 'Payroll not found or not pending CEO approval.'
+            ];
+        }
+        
+        // Update payroll status
+        $new_status = ($decision === 'approve') ? 'ceo_approved' : 'rejected';
+        
+        $update_stmt = $db->prepare("
+            UPDATE payroll 
+            SET status = ?,
+                ceo_approved_by = ?,
+                ceo_approved_at = NOW(),
+                ceo_rejection_reason = ?
+            WHERE id = ?
+        ");
+        
+        $rejection_reason = ($decision === 'reject') ? $reason : NULL;
+        $update_stmt->execute([
+            $new_status,
+            $ceo_user_id,
+            $rejection_reason,
+            $payroll_id
+        ]);
+        
+        // Log CEO activity
+        $activity_type = ($decision === 'approve') ? 'ceo_payroll_approved' : 'ceo_payroll_rejected';
+        $description = ($decision === 'approve') 
+            ? "Payroll approved by CEO" 
+            : "Payroll rejected by CEO: " . substr($reason, 0, 200);
+        
+        $activity_stmt = $db->prepare("
+            INSERT INTO hr_activities (activity_type, entity_type, entity_id, description, performed_by, performed_at, created_at)
+            VALUES (?, 'payroll', ?, ?, ?, NOW(), NOW())
+        ");
+        $activity_stmt->execute([$activity_type, $payroll_id, $description, $ceo_user_id]);
+        
+        // Update approval workflow if function exists
+        if (function_exists('update_approval_workflow_status')) {
+            $workflow_status = ($decision === 'approve') ? 'approved_by_ceo' : 'rejected_by_ceo';
+            update_approval_workflow_status('payroll', $payroll_id, $workflow_status, $ceo_user_id);
+        }
+        
+        $db->commit();
+        
+        return [
+            'success' => true,
+            'message' => "Payroll has been {$decision}d by CEO successfully."
+        ];
+        
+    } catch (Exception $e) {
+        $db->rollBack();
+        return [
+            'success' => false,
+            'message' => 'Error processing CEO decision: ' . $e->getMessage()
+        ];
+    }
+}
+
 ?>

@@ -5,17 +5,17 @@
  */
 
 class Database {
-    // private $host = 'localhost';
-    // private $db_name = 'jrozqhmy_stock_exchange_db';
-    // private $username = 'jrozqhmy_ernest';
-    // private $password = 'Ernestmswima@123';
-    // private $conn;
-
     private $host = 'localhost';
-    private $db_name = 'stock_exchange_db';
-    private $username = 'root';
-    private $password = '';
+    private $db_name = 'jrozqhmy_stock_exchange_db';
+    private $username = 'jrozqhmy_ernest';
+    private $password = 'Ernestmswima@123';
     private $conn;
+
+    // private $host = 'localhost';
+    // private $db_name = 'stock_exchange_db';
+    // private $username = 'root';
+    // private $password = '';
+    // private $conn;
     
     public function getConnection() {
         $this->conn = null;

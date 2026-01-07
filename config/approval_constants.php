@@ -11,187 +11,187 @@
 // ===============================================
 
 // Basic approval decisions
-define('APPROVAL_PENDING', 'pending');
-define('APPROVAL_APPROVED', 'approved');
-define('APPROVAL_REJECTED', 'rejected');
-define('APPROVAL_ESCALATED', 'escalated');
-define('APPROVAL_CANCELLED', 'cancelled');
+if (!defined('APPROVAL_PENDING')) define('APPROVAL_PENDING', 'pending');
+if (!defined('APPROVAL_APPROVED')) define('APPROVAL_APPROVED', 'approved');
+if (!defined('APPROVAL_REJECTED')) define('APPROVAL_REJECTED', 'rejected');
+if (!defined('APPROVAL_ESCALATED')) define('APPROVAL_ESCALATED', 'escalated');
+if (!defined('APPROVAL_CANCELLED')) define('APPROVAL_CANCELLED', 'cancelled');
 
 // Workflow statuses
-define('WORKFLOW_IN_PROGRESS', 'in_progress');
-define('WORKFLOW_COMPLETED', 'completed');
-define('WORKFLOW_REJECTED', 'rejected');
-define('WORKFLOW_CANCELLED', 'cancelled');
+if (!defined('WORKFLOW_IN_PROGRESS')) define('WORKFLOW_IN_PROGRESS', 'in_progress');
+if (!defined('WORKFLOW_COMPLETED')) define('WORKFLOW_COMPLETED', 'completed');
+if (!defined('WORKFLOW_REJECTED')) define('WORKFLOW_REJECTED', 'rejected');
+if (!defined('WORKFLOW_CANCELLED')) define('WORKFLOW_CANCELLED', 'cancelled');
 
 // ===============================================
 // LEAVE REQUEST WORKFLOW CONSTANTS
 // ===============================================
 
 // Leave request statuses
-define('LEAVE_PENDING', 'pending');
-define('LEAVE_APPROVED', 'approved');
-define('LEAVE_REJECTED', 'rejected');
-define('LEAVE_CANCELLED', 'cancelled');
+if (!defined('LEAVE_PENDING')) define('LEAVE_PENDING', 'pending');
+if (!defined('LEAVE_APPROVED')) define('LEAVE_APPROVED', 'approved');
+if (!defined('LEAVE_REJECTED')) define('LEAVE_REJECTED', 'rejected');
+if (!defined('LEAVE_CANCELLED')) define('LEAVE_CANCELLED', 'cancelled');
 
 // HR decision statuses
-define('LEAVE_PENDING_HR', 'pending_hr');
-define('LEAVE_FINALIZED_BY_HR', 'finalized_by_hr');
-define('LEAVE_ESCALATED_TO_CEO', 'escalated_to_ceo');
+if (!defined('LEAVE_PENDING_HR')) define('LEAVE_PENDING_HR', 'pending_hr');
+if (!defined('LEAVE_FINALIZED_BY_HR')) define('LEAVE_FINALIZED_BY_HR', 'finalized_by_hr');
+if (!defined('LEAVE_ESCALATED_TO_CEO')) define('LEAVE_ESCALATED_TO_CEO', 'escalated_to_ceo');
 
 // CEO decision statuses  
-define('LEAVE_PENDING_CEO', 'pending_ceo');
-define('LEAVE_CEO_APPROVED', 'ceo_approved');
-define('LEAVE_CEO_REJECTED', 'ceo_rejected');
+if (!defined('LEAVE_PENDING_CEO')) define('LEAVE_PENDING_CEO', 'pending_ceo');
+if (!defined('LEAVE_CEO_APPROVED')) define('LEAVE_CEO_APPROVED', 'ceo_approved');
+if (!defined('LEAVE_CEO_REJECTED')) define('LEAVE_CEO_REJECTED', 'ceo_rejected');
 
 // Combined workflow statuses
-define('LEAVE_APPROVED_BY_HR', 'approved_by_hr');
-define('LEAVE_REJECTED_BY_HR', 'rejected_by_hr');
-define('LEAVE_ESCALATED_PENDING_CEO', 'escalated_pending_ceo');
-define('LEAVE_FINAL_APPROVED', 'final_approved');
-define('LEAVE_FINAL_REJECTED', 'final_rejected');
+if (!defined('LEAVE_APPROVED_BY_HR')) define('LEAVE_APPROVED_BY_HR', 'approved_by_hr');
+if (!defined('LEAVE_REJECTED_BY_HR')) define('LEAVE_REJECTED_BY_HR', 'rejected_by_hr');
+if (!defined('LEAVE_ESCALATED_PENDING_CEO')) define('LEAVE_ESCALATED_PENDING_CEO', 'escalated_pending_ceo');
+if (!defined('LEAVE_FINAL_APPROVED')) define('LEAVE_FINAL_APPROVED', 'final_approved');
+if (!defined('LEAVE_FINAL_REJECTED')) define('LEAVE_FINAL_REJECTED', 'final_rejected');
 
 // ===============================================
 // PAYROLL WORKFLOW CONSTANTS  
 // ===============================================
 
 // Payroll processing stages
-define('PAYROLL_DRAFT', 'draft');
-define('PAYROLL_CALCULATED', 'calculated');
-define('PAYROLL_SUBMITTED_FOR_APPROVAL', 'submitted_for_approval');
-define('PAYROLL_PENDING_CEO_APPROVAL', 'pending_ceo_approval');
-define('PAYROLL_CEO_APPROVED', 'ceo_approved');
-define('PAYROLL_READY_FOR_PAYMENT', 'ready_for_payment');
-define('PAYROLL_PAID', 'paid');
-define('PAYROLL_REJECTED', 'rejected');
+if (!defined('PAYROLL_DRAFT')) define('PAYROLL_DRAFT', 'draft');
+if (!defined('PAYROLL_CALCULATED')) define('PAYROLL_CALCULATED', 'calculated');
+if (!defined('PAYROLL_SUBMITTED_FOR_APPROVAL')) define('PAYROLL_SUBMITTED_FOR_APPROVAL', 'submitted_for_approval');
+if (!defined('PAYROLL_PENDING_CEO_APPROVAL')) define('PAYROLL_PENDING_CEO_APPROVAL', 'pending_ceo_approval');
+if (!defined('PAYROLL_CEO_APPROVED')) define('PAYROLL_CEO_APPROVED', 'ceo_approved');
+if (!defined('PAYROLL_READY_FOR_PAYMENT')) define('PAYROLL_READY_FOR_PAYMENT', 'ready_for_payment');
+if (!defined('PAYROLL_PAID')) define('PAYROLL_PAID', 'paid');
+if (!defined('PAYROLL_REJECTED')) define('PAYROLL_REJECTED', 'rejected');
 
 // Payroll action statuses
-define('PAYROLL_HR_SUBMITTED', 'hr_submitted');
-define('PAYROLL_CEO_DECISION_PENDING', 'ceo_decision_pending');
-define('PAYROLL_FINANCE_PROCESSING', 'finance_processing');
-define('PAYROLL_PAYMENT_COMPLETED', 'payment_completed');
+if (!defined('PAYROLL_HR_SUBMITTED')) define('PAYROLL_HR_SUBMITTED', 'hr_submitted');
+if (!defined('PAYROLL_CEO_DECISION_PENDING')) define('PAYROLL_CEO_DECISION_PENDING', 'ceo_decision_pending');
+if (!defined('PAYROLL_FINANCE_PROCESSING')) define('PAYROLL_FINANCE_PROCESSING', 'finance_processing');
+if (!defined('PAYROLL_PAYMENT_COMPLETED')) define('PAYROLL_PAYMENT_COMPLETED', 'payment_completed');
 
 // ===============================================
 // RECRUITMENT WORKFLOW CONSTANTS
 // ===============================================
 
 // Job application statuses (existing)
-define('APPLICATION_RECEIVED', 'received');
-define('APPLICATION_REVIEWING', 'reviewing');
-define('APPLICATION_SHORTLISTED', 'shortlisted');
-define('APPLICATION_INTERVIEWED', 'interviewed');
-define('APPLICATION_SELECTED', 'selected');
-define('APPLICATION_REJECTED', 'rejected');
-define('APPLICATION_HIRED', 'hired');
+if (!defined('APPLICATION_RECEIVED')) define('APPLICATION_RECEIVED', 'received');
+if (!defined('APPLICATION_REVIEWING')) define('APPLICATION_REVIEWING', 'reviewing');
+if (!defined('APPLICATION_SHORTLISTED')) define('APPLICATION_SHORTLISTED', 'shortlisted');
+if (!defined('APPLICATION_INTERVIEWED')) define('APPLICATION_INTERVIEWED', 'interviewed');
+if (!defined('APPLICATION_SELECTED')) define('APPLICATION_SELECTED', 'selected');
+if (!defined('APPLICATION_REJECTED')) define('APPLICATION_REJECTED', 'rejected');
+if (!defined('APPLICATION_HIRED')) define('APPLICATION_HIRED', 'hired');
 
 // HR recommendation statuses
-define('HR_NOT_RECOMMENDED', 'not_recommended');
-define('HR_RECOMMENDED', 'recommended');
-define('HR_STRONGLY_RECOMMENDED', 'strongly_recommended');
+if (!defined('HR_NOT_RECOMMENDED')) define('HR_NOT_RECOMMENDED', 'not_recommended');
+if (!defined('HR_RECOMMENDED')) define('HR_RECOMMENDED', 'recommended');
+if (!defined('HR_STRONGLY_RECOMMENDED')) define('HR_STRONGLY_RECOMMENDED', 'strongly_recommended');
 
 // CEO hiring approval statuses
-define('HIRE_PENDING_CEO', 'pending_ceo');
-define('HIRE_CEO_APPROVED', 'ceo_approved');
-define('HIRE_CEO_REJECTED', 'ceo_rejected');
+if (!defined('HIRE_PENDING_CEO')) define('HIRE_PENDING_CEO', 'pending_ceo');
+if (!defined('HIRE_CEO_APPROVED')) define('HIRE_CEO_APPROVED', 'ceo_approved');
+if (!defined('HIRE_CEO_REJECTED')) define('HIRE_CEO_REJECTED', 'ceo_rejected');
 
 // ===============================================
 // PERFORMANCE TARGETS WORKFLOW CONSTANTS
 // ===============================================
 
 // Target statuses (existing)
-define('TARGET_ACTIVE', 'active');
-define('TARGET_COMPLETED', 'completed');
-define('TARGET_CANCELLED', 'cancelled');
+if (!defined('TARGET_ACTIVE')) define('TARGET_ACTIVE', 'active');
+if (!defined('TARGET_COMPLETED')) define('TARGET_COMPLETED', 'completed');
+if (!defined('TARGET_CANCELLED')) define('TARGET_CANCELLED', 'cancelled');
 
 // Target approval statuses
-define('TARGET_DRAFT', 'draft');
-define('TARGET_PENDING_CEO_APPROVAL', 'pending_ceo_approval');
-define('TARGET_CEO_APPROVED', 'ceo_approved');
-define('TARGET_CEO_REJECTED', 'ceo_rejected');
+if (!defined('TARGET_DRAFT')) define('TARGET_DRAFT', 'draft');
+if (!defined('TARGET_PENDING_CEO_APPROVAL')) define('TARGET_PENDING_CEO_APPROVAL', 'pending_ceo_approval');
+if (!defined('TARGET_CEO_APPROVED')) define('TARGET_CEO_APPROVED', 'ceo_approved');
+if (!defined('TARGET_CEO_REJECTED')) define('TARGET_CEO_REJECTED', 'ceo_rejected');
 
 // ===============================================
 // EMPLOYEE CHANGE WORKFLOW CONSTANTS
 // ===============================================
 
 // Employee statuses (existing)
-define('EMPLOYEE_ACTIVE', 'active');
-define('EMPLOYEE_TERMINATED', 'terminated');
-define('EMPLOYEE_SUSPENDED', 'suspended');
-define('EMPLOYEE_ON_LEAVE', 'on_leave');
+if (!defined('EMPLOYEE_ACTIVE')) define('EMPLOYEE_ACTIVE', 'active');
+if (!defined('EMPLOYEE_TERMINATED')) define('EMPLOYEE_TERMINATED', 'terminated');
+if (!defined('EMPLOYEE_SUSPENDED')) define('EMPLOYEE_SUSPENDED', 'suspended');
+if (!defined('EMPLOYEE_ON_LEAVE')) define('EMPLOYEE_ON_LEAVE', 'on_leave');
 
 // Employee change approval statuses
-define('EMPLOYEE_CHANGE_PENDING', 'change_pending');
-define('EMPLOYEE_CHANGE_CEO_APPROVED', 'change_ceo_approved');
-define('EMPLOYEE_CHANGE_CEO_REJECTED', 'change_ceo_rejected');
-define('EMPLOYEE_CHANGE_EFFECTIVE', 'change_effective');
+if (!defined('EMPLOYEE_CHANGE_PENDING')) define('EMPLOYEE_CHANGE_PENDING', 'change_pending');
+if (!defined('EMPLOYEE_CHANGE_CEO_APPROVED')) define('EMPLOYEE_CHANGE_CEO_APPROVED', 'change_ceo_approved');
+if (!defined('EMPLOYEE_CHANGE_CEO_REJECTED')) define('EMPLOYEE_CHANGE_CEO_REJECTED', 'change_ceo_rejected');
+if (!defined('EMPLOYEE_CHANGE_EFFECTIVE')) define('EMPLOYEE_CHANGE_EFFECTIVE', 'change_effective');
 
 // ===============================================
 // WORKFLOW TYPE CONSTANTS
 // ===============================================
 
-define('WORKFLOW_LEAVE', 'leave');
-define('WORKFLOW_PAYROLL', 'payroll');
-define('WORKFLOW_RECRUITMENT', 'recruitment');
-define('WORKFLOW_TARGET', 'target');
-define('WORKFLOW_EMPLOYEE_CHANGE', 'employee_change');
+if (!defined('WORKFLOW_LEAVE')) define('WORKFLOW_LEAVE', 'leave');
+if (!defined('WORKFLOW_PAYROLL')) define('WORKFLOW_PAYROLL', 'payroll');
+if (!defined('WORKFLOW_RECRUITMENT')) define('WORKFLOW_RECRUITMENT', 'recruitment');
+if (!defined('WORKFLOW_TARGET')) define('WORKFLOW_TARGET', 'target');
+if (!defined('WORKFLOW_EMPLOYEE_CHANGE')) define('WORKFLOW_EMPLOYEE_CHANGE', 'employee_change');
 
 // ===============================================
 // ENTITY TYPE CONSTANTS  
 // ===============================================
 
-define('ENTITY_LEAVE_REQUEST', 'leave_request');
-define('ENTITY_PAYROLL', 'payroll');
-define('ENTITY_JOB_APPLICATION', 'job_application');
-define('ENTITY_PERFORMANCE_TARGET', 'performance_target');
-define('ENTITY_EMPLOYEE', 'employee');
+if (!defined('ENTITY_LEAVE_REQUEST')) define('ENTITY_LEAVE_REQUEST', 'leave_request');
+if (!defined('ENTITY_PAYROLL')) define('ENTITY_PAYROLL', 'payroll');
+if (!defined('ENTITY_JOB_APPLICATION')) define('ENTITY_JOB_APPLICATION', 'job_application');
+if (!defined('ENTITY_PERFORMANCE_TARGET')) define('ENTITY_PERFORMANCE_TARGET', 'performance_target');
+if (!defined('ENTITY_EMPLOYEE')) define('ENTITY_EMPLOYEE', 'employee');
 
 // ===============================================
 // APPROVAL STAGE CONSTANTS
 // ===============================================
 
-define('STAGE_HR', 'hr');
-define('STAGE_CEO', 'ceo');
-define('STAGE_FINANCE', 'finance');
+if (!defined('STAGE_HR')) define('STAGE_HR', 'hr');
+if (!defined('STAGE_CEO')) define('STAGE_CEO', 'ceo');
+if (!defined('STAGE_FINANCE')) define('STAGE_FINANCE', 'finance');
 
 // ===============================================
 // NOTIFICATION TYPE CONSTANTS
 // ===============================================
 
-define('NOTIFICATION_ESCALATION', 'escalation');
-define('NOTIFICATION_APPROVAL_REQUIRED', 'approval_required');
-define('NOTIFICATION_APPROVED', 'approved');
-define('NOTIFICATION_REJECTED', 'rejected');
-define('NOTIFICATION_REMINDER', 'reminder');
+if (!defined('NOTIFICATION_ESCALATION')) define('NOTIFICATION_ESCALATION', 'escalation');
+if (!defined('NOTIFICATION_APPROVAL_REQUIRED')) define('NOTIFICATION_APPROVAL_REQUIRED', 'approval_required');
+if (!defined('NOTIFICATION_APPROVED')) define('NOTIFICATION_APPROVED', 'approved');
+if (!defined('NOTIFICATION_REJECTED')) define('NOTIFICATION_REJECTED', 'rejected');
+if (!defined('NOTIFICATION_REMINDER')) define('NOTIFICATION_REMINDER', 'reminder');
 
 // ===============================================
 // AUDIT ACTION CONSTANTS
 // ===============================================
 
-define('AUDIT_LEAVE_SUBMITTED', 'leave_submitted');
-define('AUDIT_LEAVE_FINALIZED', 'leave_finalized');
-define('AUDIT_LEAVE_ESCALATED', 'leave_escalated');
-define('AUDIT_LEAVE_CEO_DECISION', 'leave_ceo_decision');
+if (!defined('AUDIT_LEAVE_SUBMITTED')) define('AUDIT_LEAVE_SUBMITTED', 'leave_submitted');
+if (!defined('AUDIT_LEAVE_FINALIZED')) define('AUDIT_LEAVE_FINALIZED', 'leave_finalized');
+if (!defined('AUDIT_LEAVE_ESCALATED')) define('AUDIT_LEAVE_ESCALATED', 'leave_escalated');
+if (!defined('AUDIT_LEAVE_CEO_DECISION')) define('AUDIT_LEAVE_CEO_DECISION', 'leave_ceo_decision');
 
-define('AUDIT_PAYROLL_SUBMITTED', 'payroll_submitted');
-define('AUDIT_PAYROLL_CEO_DECISION', 'payroll_ceo_decision');
-define('AUDIT_PAYROLL_PAYMENT', 'payroll_payment');
+if (!defined('AUDIT_PAYROLL_SUBMITTED')) define('AUDIT_PAYROLL_SUBMITTED', 'payroll_submitted');
+if (!defined('AUDIT_PAYROLL_CEO_DECISION')) define('AUDIT_PAYROLL_CEO_DECISION', 'payroll_ceo_decision');
+if (!defined('AUDIT_PAYROLL_PAYMENT')) define('AUDIT_PAYROLL_PAYMENT', 'payroll_payment');
 
-define('AUDIT_RECRUITMENT_RECOMMENDED', 'recruitment_recommended');
-define('AUDIT_RECRUITMENT_CEO_DECISION', 'recruitment_ceo_decision');
-define('AUDIT_EMPLOYEE_CREATED', 'employee_created');
+if (!defined('AUDIT_RECRUITMENT_RECOMMENDED')) define('AUDIT_RECRUITMENT_RECOMMENDED', 'recruitment_recommended');
+if (!defined('AUDIT_RECRUITMENT_CEO_DECISION')) define('AUDIT_RECRUITMENT_CEO_DECISION', 'recruitment_ceo_decision');
+if (!defined('AUDIT_EMPLOYEE_CREATED')) define('AUDIT_EMPLOYEE_CREATED', 'employee_created');
 
-define('AUDIT_TARGET_SUBMITTED', 'target_submitted');
-define('AUDIT_TARGET_CEO_DECISION', 'target_ceo_decision');
+if (!defined('AUDIT_TARGET_SUBMITTED')) define('AUDIT_TARGET_SUBMITTED', 'target_submitted');
+if (!defined('AUDIT_TARGET_CEO_DECISION')) define('AUDIT_TARGET_CEO_DECISION', 'target_ceo_decision');
 
 // ===============================================
 // APPROVAL DECISION REASONS (COMMON)
 // ===============================================
 
-define('REASON_BUSINESS_IMPACT', 'business_impact');
-define('REASON_POLICY_COMPLIANCE', 'policy_compliance');
-define('REASON_BUDGET_CONSTRAINTS', 'budget_constraints');
-define('REASON_INSUFFICIENT_DOCUMENTATION', 'insufficient_documentation');
-define('REASON_STRATEGIC_ALIGNMENT', 'strategic_alignment');
-define('REASON_RESOURCE_AVAILABILITY', 'resource_availability');
+if (!defined('REASON_BUSINESS_IMPACT')) define('REASON_BUSINESS_IMPACT', 'business_impact');
+if (!defined('REASON_POLICY_COMPLIANCE')) define('REASON_POLICY_COMPLIANCE', 'policy_compliance');
+if (!defined('REASON_BUDGET_CONSTRAINTS')) define('REASON_BUDGET_CONSTRAINTS', 'budget_constraints');
+if (!defined('REASON_INSUFFICIENT_DOCUMENTATION')) define('REASON_INSUFFICIENT_DOCUMENTATION', 'insufficient_documentation');
+if (!defined('REASON_STRATEGIC_ALIGNMENT')) define('REASON_STRATEGIC_ALIGNMENT', 'strategic_alignment');
+if (!defined('REASON_RESOURCE_AVAILABILITY')) define('REASON_RESOURCE_AVAILABILITY', 'resource_availability');
 
 // ===============================================
 // HELPER ARRAYS FOR VALIDATION & DISPLAY
