@@ -43,7 +43,7 @@ if (isset($_GET['export'])) {
     $company_stmt = $db->prepare("SELECT * FROM companies WHERE status = 'active' ORDER BY id ASC LIMIT 1");
     $company_stmt->execute();
     $company = $company_stmt->fetch(PDO::FETCH_ASSOC) ?: [
-        'company_name' => 'Victory Financial Services',
+        'company_name' => 'NEOVAM',
         'registration_number' => '',
         'address' => 'P.O Box, Dar es Salaam, Tanzania',
         'currency' => 'TZS'
@@ -735,7 +735,7 @@ $company = $company_stmt->fetch(PDO::FETCH_ASSOC);
 // If no company exists, create default values
 if (!$company) {
     $company = [
-        'company_name' => 'Victory Financial Services',
+        'company_name' => 'NEOVAM',
         'registration_number' => '',
         'address' => 'P.O Box, Dar es Salaam, Tanzania',
         'currency' => 'TZS'

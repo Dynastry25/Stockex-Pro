@@ -27,7 +27,7 @@ $print_mode = $_GET['print_mode'] ?? $_POST['print_mode'] ?? '0';
 // Get company details
 $company_stmt = $db->query("SELECT company_name FROM companies WHERE status = 'active' LIMIT 1");
 $company = $company_stmt->fetch();
-$company_name = $company ? $company['company_name'] : 'Victory Financial Services Limited';
+$company_name = $company ? $company['company_name'] : 'NEOVAM Limited';
 
 // Function to get fee configuration from database
 function getFeeConfiguration($db, $fee_type, $applies_to = 'ALL') {

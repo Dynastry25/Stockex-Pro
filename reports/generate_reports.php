@@ -9,7 +9,7 @@ $db = getDBConnection();
 // Get company details
 $company_stmt = $db->query("SELECT company_name, phone, address, email FROM companies WHERE status = 'active' LIMIT 1");
 $company = $company_stmt->fetch();
-$company_name = $company ? $company['company_name'] : 'Victory Financial Services Limited';
+$company_name = $company ? $company['company_name'] : 'NEOVAM Limited';
 
 // Get filter parameters
 $filters = [

@@ -67,7 +67,7 @@ try {
 $company_stmt = $db->prepare("SELECT * FROM companies WHERE status = 'active' ORDER BY id ASC LIMIT 1");
 $company_stmt->execute();
 $company = $company_stmt->fetch(PDO::FETCH_ASSOC) ?? [
-    'company_name' => 'VICTORY FINANCIAL SERVICES LIMITED',
+    'company_name' => 'NEOVAM LIMITED',
     'currency' => 'TZS'
 ];
 

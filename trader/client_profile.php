@@ -20,7 +20,7 @@ $show_individual_cds = false;
 // Get company details from database
 $company_stmt = $db->query("SELECT * FROM companies WHERE status = 'active' ORDER BY id LIMIT 1");
 $company = $company_stmt->fetch();
-$company_name = $company ? $company['company_name'] : 'Victory Financial Services LTD';
+$company_name = $company ? $company['company_name'] : 'NEOVAM LTD';
 
 // Get all active clients for the dropdown (excluding current client if set)
 try {

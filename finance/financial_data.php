@@ -96,7 +96,7 @@ if ($offset < 0) $offset = 0;
 $company_stmt = $db->prepare("SELECT * FROM companies WHERE status = 'active' ORDER BY id ASC LIMIT 1");
 $company_stmt->execute();
 $company = $company_stmt->fetch(PDO::FETCH_ASSOC) ?? [
-    'company_name' => 'VICTORY FINANCIAL SERVICES LIMITED',
+    'company_name' => 'NEOVAM LIMITED',
     'registration_number' => 'Not Registered',
     'address' => 'Address Not Set',
     'city' => 'Dar es Salaam',

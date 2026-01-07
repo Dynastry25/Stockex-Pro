@@ -9,7 +9,7 @@ $db = getDBConnection();
 // Get company details - UPDATED to match your table structure
 $company_stmt = $db->query("SELECT company_code, name as company_name, phone, address, email FROM companies WHERE is_active = 1 LIMIT 1");
 $company = $company_stmt->fetch();
-$company_name = $company ? $company['company_name'] : 'Victory Financial Services';
+$company_name = $company ? $company['company_name'] : 'NEOVAM';
 $company_code = $company ? $company['company_code'] : 'B13/C';
 
 // Get filter parameters
@@ -1514,7 +1514,7 @@ function generateBondContractNote($trade, $watermark, $master_data) {
     
     echo '<div class="contract-note bond-contract" style="border: 1px solid #ccc; margin: 20px 0; padding: 20px; background: white;">
             <div style="text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 20px;">
-                <h3 style="margin: 0;">' . htmlspecialchars($master_data['company_name'] ?? 'Victory Financial Services') . '</h3>
+                <h3 style="margin: 0;">' . htmlspecialchars($master_data['company_name'] ?? 'NEOVAM') . '</h3>
                 <p style="margin: 5px 0;"><strong>BOND CONTRACT NOTE</strong></p>
             </div>
             
@@ -1597,7 +1597,7 @@ function generateEquityContractNote($trade, $watermark, $master_data) {
     
     echo '<div class="contract-note equity-contract" style="border: 1px solid #ccc; margin: 20px 0; padding: 20px; background: white;">
             <div style="text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 20px;">
-                <h3 style="margin: 0;">' . htmlspecialchars($master_data['company_name'] ?? 'Victory Financial Services') . '</h3>
+                <h3 style="margin: 0;">' . htmlspecialchars($master_data['company_name'] ?? 'NEOVAM') . '</h3>
                 <p style="margin: 5px 0;"><strong>' . ($is_etf ? 'ETF' : 'EQUITY') . ' CONTRACT NOTE</strong></p>
             </div>
             
@@ -1710,7 +1710,7 @@ function generateSummaryContractNote($group, $watermark, $master_data) {
     
     echo '<div class="contract-note summary-contract" style="border: 1px solid #ccc; margin: 20px 0; padding: 20px; background: white;">
             <div style="text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 20px;">
-                <h3 style="margin: 0;">' . htmlspecialchars($master_data['company_name'] ?? 'Victory Financial Services') . '</h3>
+                <h3 style="margin: 0;">' . htmlspecialchars($master_data['company_name'] ?? 'NEOVAM') . '</h3>
                 <p style="margin: 5px 0;"><strong>SUMMARY CONTRACT NOTE - ' . $asset_type . '</strong></p>
                 <p style="margin: 5px 0; font-size: 14px;">' . count($group) . ' trades for ' . htmlspecialchars($first_trade['client_name']) . '</p>
             </div>
@@ -1790,7 +1790,7 @@ function loadMasterData($db) {
     // Load company info
     $company_stmt = $db->query("SELECT name as company_name FROM companies WHERE is_active = 1 LIMIT 1");
     $company = $company_stmt->fetch();
-    $master_data['company_name'] = $company ? $company['company_name'] : 'Victory Financial Services';
+    $master_data['company_name'] = $company ? $company['company_name'] : 'NEOVAM';
     
     // Load other master data
     $tables = [

@@ -11,7 +11,7 @@ $current_user = get_logged_in_user($db);
 // Get company details
 $company_stmt = $db->query("SELECT company_name FROM companies WHERE status = 'active' LIMIT 1");
 $company = $company_stmt->fetch();
-$company_name = $company ? $company['company_name'] : 'Victory Financial Services Limited';
+$company_name = $company ? $company['company_name'] : 'NEOVAM Limited';
 
 // Get filter options from database with name-based filtering
 $clients_query = "SELECT DISTINCT client_name, client_cds_account FROM trades WHERE status = 'active' AND client_name IS NOT NULL AND client_name != '' ORDER BY client_name";

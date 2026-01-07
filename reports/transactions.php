@@ -24,7 +24,7 @@ FROM companies WHERE status = 'active' LIMIT 1");
 $company = $company_stmt->fetch();
 
 // Use correct column names from your table
-$company_name = $company ? $company['company_name'] : ($company ? $company['name'] : 'Victory Financial Services Limited');
+$company_name = $company ? $company['company_name'] : ($company ? $company['name'] : 'NEOVAM Limited');
 $company_code = $company ? $company['company_code'] : 'B13/C';
 $company_phone = $company ? $company['phone'] : ($company ? $company['mobile'] : '');
 $company_address = $company ? $company['address'] : '';

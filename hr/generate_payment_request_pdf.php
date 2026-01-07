@@ -76,7 +76,7 @@ if (isset($_GET['request_id'])) {
         </head>
         <body>
             <div class="header">
-                <div class="company-name">VICTORY FINANCIAL SERVICES LTD</div>
+                <div class="company-name">NEOVAM LTD</div>
                 <div class="document-title">PAYMENT REQUEST FORM</div>
                 <div class="request-no">Request No: <?php echo htmlspecialchars($request['request_no']); ?></div>
                 <div>Generated on: <?php echo date('F d, Y H:i:s'); ?></div>
@@ -230,7 +230,7 @@ if (isset($_GET['request_id'])) {
             <div class="footer">
                 <p>This is a computer generated document. No physical signature is required.</p>
                 <p>Confidential Document - For Internal Use Only</p>
-                <p>Victory Financial Services Ltd | <?php echo date('Y'); ?></p>
+                <p>NEOVAM Ltd | <?php echo date('Y'); ?></p>
             </div>
             
             <script>

@@ -178,7 +178,7 @@ WHERE status = 'active'
 LIMIT 1");
 
 $company = $company_stmt->fetch();
-$company_name = $company ? $company['company_name'] : 'Victory Financial Services Limited';
+$company_name = $company ? $company['company_name'] : 'NEOVAM Limited';
 $company_address = $company ? $company['address'] : '';
 $company_phone = $company ? $company['phone'] : '';
 $company_email = $company ? $company['email'] : '';

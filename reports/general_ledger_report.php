@@ -41,7 +41,7 @@ function generateGeneralLedgerReport($db, $filters) {
     $company = $company_stmt->fetch();
     
     // Set default values if company not found
-    $company_name = $company ? $company['company_name'] : 'Victory Financial Services Limited';
+    $company_name = $company ? $company['company_name'] : 'NEOVAM Limited';
     $company_address = $company ? $company['address'] : 'ATC HOUSE, OHIO STREET / GARDEN AVENUE PO BOX 8706 DAR ES SALAAM';
     $company_phone = $company ? $company['phone'] : '+255 22 2112091';
     $company_mobile = $company ? $company['mobile'] : '+255 788 284 540';

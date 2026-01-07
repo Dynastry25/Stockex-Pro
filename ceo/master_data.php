@@ -85,7 +85,7 @@ include '../includes/header.php';
             <div class="col-md-4 text-end">
                 <div class="d-flex flex-column align-items-end">
                     <span class="text-muted small">System Configuration</span>
-                    <span class="fw-semibold">Victory Financial Services</span>
+                    <span class="fw-semibold">NEOVAM</span>
                 </div>
             </div>
         </div>

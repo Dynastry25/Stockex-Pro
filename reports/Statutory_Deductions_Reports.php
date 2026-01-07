@@ -102,7 +102,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' || isset($_GET['action']) || isset($_G
             $company = $company_stmt->fetch(PDO::FETCH_ASSOC);
         }
         
-        $company_name = $company['company_name'] ?? 'Victory Financial Services Limited';
+        $company_name = $company['company_name'] ?? 'NEOVAM Limited';
         
         // Determine report type and fetch data
         if ($report_type === 'bonds_statutory') {
