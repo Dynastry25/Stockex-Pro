@@ -14,8 +14,8 @@ $error_message = '';
 $company_stmt = $db->query("SELECT * FROM companies WHERE status = 'active' ORDER BY id LIMIT 1");
 $company = $company_stmt->fetch();
 $company_name = $company ? $company['company_name'] : 'Neovam LTD';
-$company_phone = $company ? $company['phone'] : '0767676767';
-$company_address = $company ? $company['address'] : 'P.O Box 675, Dar es Salaam, Tanzania';
+$company_phone = $company ? $company['phone'] : '+255 746 177 230';
+$company_address = $company ? $company['address'] : 'P.O BOX 36098 Kigamboni, Dar es Salaam';
 $company_email = $company ? $company['email'] : 'info@neovam.com';
 
 // Handle CSV export
@@ -545,7 +545,7 @@ if (isset($_GET['action']) && isset($_GET['id'])) {
                     ];
                     
                     // Redirect back to show modal
-                    header('Location: trades.php?show_contract_modal=1');
+                    header('Location: trades?show_contract_modal=1');
                     exit;
                 } else {
                     // Single trade - generate contract note directly
@@ -1071,20 +1071,32 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['upload_trade'])) {
     } elseif ($quantity <= 0 || $price <= 0) {
         $error_message = 'Quantity and price must be greater than zero.';
     } else {
+        // Check if trade reference already exists
+        $check_ref_stmt = $db->prepare("SELECT COUNT(*) FROM trades WHERE trade_reference = ?");
+        $check_ref_stmt->execute([$trade_reference]);
+        $ref_exists = $check_ref_stmt->fetchColumn() > 0;
+        
+        if ($ref_exists) {
+            $error_message = 'Trade reference "' . htmlspecialchars($trade_reference) . '" already exists. Please use a unique reference.';
+        } else {
+            // Generate SCA code (format: S###)
+            $sca_code = 'S' . str_pad(rand(1, 999999), 6, '0', STR_PAD_LEFT);
+        
         $stmt = $db->prepare("
             INSERT INTO trades (trade_reference, asset_class, security_id, security_name, trade_side, quantity, price, 
                                 consideration, client_name, counterparty_name, client_cds_account, counterparty_cds_account, 
-                                trade_date, settlement_date, uploaded_by) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                trade_date, settlement_date, uploaded_by, sca_code, settled_at) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         ");
-        
-        if ($stmt->execute([$trade_reference, $asset_class, $security_id, $security_id, $trade_side, $quantity, $price,
-                            $consideration, $client_name, $counterparty_name, $client_cds_account, $counterparty_cds_account,
-                            $trade_date, $settlement_date, $_SESSION['user_id']])) {
-            show_alert('Trade uploaded successfully with reference: ' . $trade_reference, 'success');
-            redirect('trader/trades.php');
-        } else {
-            $error_message = 'Error uploading trade. Please try again.';
+            
+            if ($stmt->execute([$trade_reference, $asset_class, $security_id, $security_id, $trade_side, $quantity, $price,
+                                $consideration, $client_name, $counterparty_name, $client_cds_account, $counterparty_cds_account,
+                                $trade_date, $settlement_date, $_SESSION['user_id'], $sca_code])) {
+                show_alert('Trade uploaded successfully with reference: ' . $trade_reference, 'success');
+                redirect('trader/trades.php');
+            } else {
+                $error_message = 'Error uploading trade. Please try again.';
+            }
         }
     }
 }
@@ -1107,6 +1119,11 @@ $etfs = $stmt->fetchAll();
 $companies = [];
 $stmt = $db->query("SELECT id, company_name, company_code FROM companies WHERE status = 'active' ORDER BY company_name");
 $companies = $stmt->fetchAll();
+
+// Get clients from database for client dropdown
+$clients = [];
+$stmt = $db->query("SELECT id, client_name, cds_account FROM clients WHERE status = 'active' ORDER BY client_name");
+$clients = $stmt->fetchAll();
 
 // Get trades with extensive filtering including dates - WITHOUT PAGINATION (client-side)
 $where_conditions = [];
@@ -1328,7 +1345,7 @@ include '../includes/header.php';
                             <h5 class="modal-title mb-0" id="contractNoteModalLabel">Generate Contract Note</h5>
                             <small class="opacity-75">Multiple trades detected for <?php echo htmlspecialchars($client_data['client_name']); ?></small>
                         </div>
-                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close" onclick="window.location.href='trades.php';"></button>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close" onclick="window.location.href='trades';"></button>
                     </div>
                 </div>
                 <div class="modal-body p-4">
@@ -1840,7 +1857,7 @@ include '../includes/header.php';
     <div>
         <!-- Clickable client name -->
         <?php if ($trade['client_id']): ?>
-            <a href="client_profile.php?id=<?php echo $trade['client_id']; ?>" 
+            <a href="client_profile?id=<?php echo $trade['client_id']; ?>" 
                class="fw-medium text-decoration-none text-primary hover-underline" 
                title="View Client Profile">
                 <?php echo htmlspecialchars($trade['proper_client_name'] ?? $trade['client_name']); ?>
@@ -1908,7 +1925,7 @@ include '../includes/header.php';
                                                title="Generate Contract Note">
                                                 <i class="bi bi-file-earmark-text"></i>
                                             </a>
-                                            <a href="view_trade.php?id=<?php echo $trade['id']; ?>" 
+                                            <a href="view_trade?id=<?php echo $trade['id']; ?>" 
                                                class="btn btn-outline-secondary btn-sm" 
                                                title="View Details">
                                                 <i class="bi bi-eye"></i>
@@ -2016,9 +2033,9 @@ include '../includes/header.php';
                             <label for="client_name" class="form-label fw-semibold">Client</label>
                             <select class="form-select" id="client_name" name="client_name" required>
                                 <option value="">Select Client</option>
-                                <?php foreach ($companies as $company): ?>
-                                    <option value="<?php echo htmlspecialchars($company['company_name']); ?>">
-                                        <?php echo htmlspecialchars($company['company_name']); ?> (<?php echo htmlspecialchars($company['company_code']); ?>)
+                                <?php foreach ($clients as $client): ?>
+                                    <option value="<?php echo htmlspecialchars($client['client_name']); ?>">
+                                        <?php echo htmlspecialchars($client['client_name']); ?> (<?php echo htmlspecialchars($client['cds_account']); ?>)
                                     </option>
                                 <?php endforeach; ?>
                             </select>
@@ -2125,7 +2142,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (contractModal) {
         contractModal.addEventListener('click', function(e) {
             if (e.target === this) {
-                window.location.href = 'trades.php';
+                window.location.href = 'trades';
             }
         });
     }
@@ -2166,6 +2183,28 @@ function calculateTotal() {
         maximumFractionDigits: 2
     });
 }
+
+// Auto-populate client CDS account when client is selected
+document.addEventListener('DOMContentLoaded', function() {
+    const clientSelect = document.getElementById('client_name');
+    const clientCdsAccount = document.getElementById('client_cds_account');
+    
+    if (clientSelect && clientCdsAccount) {
+        clientSelect.addEventListener('change', function() {
+            const selectedOption = this.options[this.selectedIndex];
+            if (selectedOption.value) {
+                // Extract CDS account from the option text (format: "Client Name (CDS123)")
+                const optionText = selectedOption.textContent;
+                const cdsMatch = optionText.match(/\((\w+)\)/);
+                if (cdsMatch && cdsMatch[1]) {
+                    clientCdsAccount.value = cdsMatch[1];
+                }
+            } else {
+                clientCdsAccount.value = '';
+            }
+        });
+    }
+});
 
 // Client-side pagination function
 function initPagination() {

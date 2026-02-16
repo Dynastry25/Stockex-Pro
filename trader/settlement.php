@@ -332,6 +332,16 @@ if (isset($_POST['bulk_payment']) && isset($_POST['trade_ids'])) {
                         $existing_payment = $existing_stmt->fetch();
                         
                         if (!$existing_payment) {
+                            // Determine ac_credit: use selected bank account or get default
+                            $ac_credit_id = $bank_account_id > 0 ? $bank_account_id : 1;
+                            if ($bank_account_id <= 0) {
+                                $default_bank_stmt = $db->query("SELECT id FROM banks_accounts WHERE status = 'active' LIMIT 1");
+                                $default_bank = $default_bank_stmt->fetch();
+                                if ($default_bank) {
+                                    $ac_credit_id = $default_bank['id'];
+                                }
+                            }
+                            
                             // Insert new payment into payments table
                             $payment_stmt = $db->prepare("
                                 INSERT INTO payments (
@@ -348,7 +358,7 @@ if (isset($_POST['bulk_payment']) && isset($_POST['trade_ids'])) {
                                 $payment_mode,
                                 $payee_type,
                                 $payee_name,
-                                $bank_account_id > 0 ? $bank_account_id : null,
+                                $ac_credit_id,
                                 'Tsh',
                                 $amount,
                                 $description,
@@ -379,6 +389,16 @@ if (isset($_POST['bulk_payment']) && isset($_POST['trade_ids'])) {
                             }
                         } else {
                             // Update existing payment to active
+                            // Determine ac_credit: use selected bank account or get default
+                            $ac_credit_id = $bank_account_id > 0 ? $bank_account_id : 1;
+                            if ($bank_account_id <= 0) {
+                                $default_bank_stmt = $db->query("SELECT id FROM banks_accounts WHERE status = 'active' LIMIT 1");
+                                $default_bank = $default_bank_stmt->fetch();
+                                if ($default_bank) {
+                                    $ac_credit_id = $default_bank['id'];
+                                }
+                            }
+                            
                             $update_payment_stmt = $db->prepare("
                                 UPDATE payments 
                                 SET status = 'active',
@@ -388,7 +408,7 @@ if (isset($_POST['bulk_payment']) && isset($_POST['trade_ids'])) {
                                     narration = ?
                                 WHERE id = ?
                             ");
-                            $update_payment_stmt->execute([$payment_mode, $bank_account_id > 0 ? $bank_account_id : null, $narration, $existing_payment['id']]);
+                            $update_payment_stmt->execute([$payment_mode, $ac_credit_id, $narration, $existing_payment['id']]);
                             
                             // Update bank balance if bank account is selected
                             if ($bank_account_id > 0 && $bank_account) {
@@ -517,7 +537,7 @@ if (isset($_POST['single_payment']) && isset($_POST['trade_id'])) {
             
             if ($update_stmt->execute([$user_id, $notes, $trade_id])) {
                 if (!$existing_payment) {
-                    // Create payment record in payment book
+                    // Update payment record in payment book
                     $amount = $trade['consideration'];
                     $description = $narration ?: "Payment for " . $trade['security_id'] . " shares " . ($trade['trade_side'] === 'sell' ? 'sold' : 'purchased') . " - Trade Ref: " . $trade['trade_reference'];
                     
@@ -528,6 +548,16 @@ if (isset($_POST['single_payment']) && isset($_POST['trade_id'])) {
                     } else {
                         $payee_name = $trade['client_name'];
                         $payee_type = 'C'; // Customer/Client
+                    }
+                    
+                    // Determine ac_credit: use selected bank account or get default
+                    $ac_credit_id = $bank_account_id > 0 ? $bank_account_id : 1;
+                    if ($bank_account_id <= 0) {
+                        $default_bank_stmt = $db->query("SELECT id FROM banks_accounts WHERE status = 'active' LIMIT 1");
+                        $default_bank = $default_bank_stmt->fetch();
+                        if ($default_bank) {
+                            $ac_credit_id = $default_bank['id'];
+                        }
                     }
                     
                     // Insert into payments table
@@ -546,7 +576,7 @@ if (isset($_POST['single_payment']) && isset($_POST['trade_id'])) {
                         $payment_mode,
                         $payee_type,
                         $payee_name,
-                        $bank_account_id > 0 ? $bank_account_id : null,
+                        $ac_credit_id,
                         'Tsh',
                         $amount,
                         $description,
@@ -873,6 +903,47 @@ $next_30_days = date('Y-m-d', strtotime('+30 days'));
 // Debug: Show date ranges
 error_log("Settlement Date Range: $two_days_ago to $next_30_days");
 
+// PAGINATION SETUP
+$records_per_page = 50; // Number of records per page
+$page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+if ($page < 1) $page = 1;
+$offset = ($page - 1) * $records_per_page;
+
+// Get total count for pagination
+$count_query = "
+    SELECT COUNT(*) as total
+    FROM trades t
+    LEFT JOIN users u ON t.settled_by = u.id
+    LEFT JOIN companies c_buyer ON t.client_name = c_buyer.company_name
+    LEFT JOIN companies c_seller ON t.counterparty_name = c_seller.company_name
+    LEFT JOIN linked_trades lt ON t.id = lt.trade_id
+    LEFT JOIN trades lt2 ON lt.linked_trade_id = lt2.id
+    WHERE t.settlement_date IS NOT NULL 
+    AND t.settlement_date BETWEEN ? AND ?
+    AND t.status = 'active'
+    AND (t.settlement_status IS NULL OR t.settlement_status != 'cancelled')
+";
+
+// Add trade side filter if needed
+if ($hide_buy_orders === '1') {
+    $count_query .= " AND t.trade_side = 'sell' ";
+} elseif ($trade_side_filter !== 'all') {
+    $count_query .= " AND t.trade_side = ? ";
+}
+
+$count_stmt = $db->prepare($count_query);
+
+if ($hide_buy_orders === '1') {
+    $count_stmt->execute([$two_days_ago, $next_30_days]);
+} elseif ($trade_side_filter !== 'all') {
+    $count_stmt->execute([$two_days_ago, $next_30_days, $trade_side_filter]);
+} else {
+    $count_stmt->execute([$two_days_ago, $next_30_days]);
+}
+
+$total_records = $count_stmt->fetch()['total'];
+$total_pages = ceil($total_records / $records_per_page);
+
 // Get settlement trades - from 2 days ago to 30 days in the future
 $query = "
     SELECT t.*, 
@@ -915,7 +986,8 @@ $query .= " ORDER BY
         ELSE 3
     END,
     t.settlement_date ASC,
-    t.created_at DESC";
+    t.created_at DESC
+    LIMIT " . (int)$records_per_page . " OFFSET " . (int)$offset; // FIXED: Direct concatenation with casting
 
 // Prepare and execute query
 $stmt = $db->prepare($query);
@@ -931,55 +1003,66 @@ if ($hide_buy_orders === '1') {
 $settlement_trades = $stmt->fetchAll();
 
 // Debug: Log how many trades were fetched
-error_log("Total settlement trades fetched: " . count($settlement_trades));
+error_log("Total settlement trades fetched: " . count($settlement_trades) . " (Page: $page, Offset: $offset)");
 
-// Calculate summary statistics
-$total_trades = count($settlement_trades);
-$total_value = 0;
-$overdue_count = 0;
-$overdue_value = 0;
-$today_count = 0;
-$today_value = 0;
-$upcoming_count = 0;
-$upcoming_value = 0;
-$paid_count = 0;
-$paid_value = 0;
-$unpaid_count = 0;
-$unpaid_value = 0;
-$failed_count = 0;
-$failed_value = 0;
-$linked_count = 0;
-$linked_value = 0;
+// Calculate summary statistics (we need to fetch all for stats, but this should be quick)
+$stats_query = "
+    SELECT 
+        COUNT(*) as total_count,
+        SUM(CASE WHEN t.settlement_status = 'paid' THEN 1 ELSE 0 END) as paid_count,
+        SUM(CASE WHEN t.settlement_status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+        SUM(CASE WHEN t.settlement_status = 'linked' THEN 1 ELSE 0 END) as linked_count,
+        SUM(CASE WHEN t.settlement_status = 'paid' THEN t.consideration ELSE 0 END) as paid_value,
+        SUM(CASE WHEN t.settlement_status = 'failed' THEN t.consideration ELSE 0 END) as failed_value,
+        SUM(CASE WHEN t.settlement_status = 'linked' THEN t.consideration ELSE 0 END) as linked_value,
+        SUM(CASE WHEN t.settlement_status NOT IN ('paid', 'failed', 'linked') AND t.settlement_date < ? THEN 1 ELSE 0 END) as overdue_count,
+        SUM(CASE WHEN t.settlement_status NOT IN ('paid', 'failed', 'linked') AND t.settlement_date < ? THEN t.consideration ELSE 0 END) as overdue_value,
+        SUM(CASE WHEN t.settlement_status NOT IN ('paid', 'failed', 'linked') AND t.settlement_date = ? THEN 1 ELSE 0 END) as today_count,
+        SUM(CASE WHEN t.settlement_status NOT IN ('paid', 'failed', 'linked') AND t.settlement_date = ? THEN t.consideration ELSE 0 END) as today_value,
+        SUM(CASE WHEN t.settlement_status NOT IN ('paid', 'failed', 'linked') AND t.settlement_date > ? THEN 1 ELSE 0 END) as upcoming_count,
+        SUM(CASE WHEN t.settlement_status NOT IN ('paid', 'failed', 'linked') AND t.settlement_date > ? THEN t.consideration ELSE 0 END) as upcoming_value,
+        SUM(t.consideration) as total_value
+    FROM trades t
+    WHERE t.settlement_date IS NOT NULL 
+    AND t.settlement_date BETWEEN ? AND ?
+    AND t.status = 'active'
+    AND (t.settlement_status IS NULL OR t.settlement_status != 'cancelled')
+";
 
-foreach ($settlement_trades as $trade) {
-    $value = floatval($trade['consideration']);
-    $total_value += $value;
-    
-    if ($trade['settlement_status'] === 'paid') {
-        $paid_count++;
-        $paid_value += $value;
-    } elseif ($trade['settlement_status'] === 'failed') {
-        $failed_count++;
-        $failed_value += $value;
-    } elseif ($trade['settlement_status'] === 'linked') {
-        $linked_count++;
-        $linked_value += $value;
-    } else {
-        $unpaid_count++;
-        $unpaid_value += $value;
-        
-        if ($trade['settlement_status_category'] === 'overdue') {
-            $overdue_count++;
-            $overdue_value += $value;
-        } elseif ($trade['settlement_status_category'] === 'today') {
-            $today_count++;
-            $today_value += $value;
-        } else {
-            $upcoming_count++;
-            $upcoming_value += $value;
-        }
-    }
+// Add trade side filter if needed
+if ($hide_buy_orders === '1') {
+    $stats_query .= " AND t.trade_side = 'sell' ";
+} elseif ($trade_side_filter !== 'all') {
+    $stats_query .= " AND t.trade_side = ? ";
 }
+
+$stats_stmt = $db->prepare($stats_query);
+
+if ($hide_buy_orders === '1') {
+    $stats_stmt->execute([$today, $today, $today, $today, $today, $today, $two_days_ago, $next_30_days]);
+} elseif ($trade_side_filter !== 'all') {
+    $stats_stmt->execute([$today, $today, $today, $today, $today, $today, $two_days_ago, $next_30_days, $trade_side_filter]);
+} else {
+    $stats_stmt->execute([$today, $today, $today, $today, $today, $today, $two_days_ago, $next_30_days]);
+}
+
+$stats = $stats_stmt->fetch();
+
+// Assign stats to variables
+$total_trades = $stats['total_count'] ?? 0;
+$total_value = $stats['total_value'] ?? 0;
+$overdue_count = $stats['overdue_count'] ?? 0;
+$overdue_value = $stats['overdue_value'] ?? 0;
+$today_count = $stats['today_count'] ?? 0;
+$today_value = $stats['today_value'] ?? 0;
+$upcoming_count = $stats['upcoming_count'] ?? 0;
+$upcoming_value = $stats['upcoming_value'] ?? 0;
+$paid_count = $stats['paid_count'] ?? 0;
+$paid_value = $stats['paid_value'] ?? 0;
+$failed_count = $stats['failed_count'] ?? 0;
+$failed_value = $stats['failed_value'] ?? 0;
+$linked_count = $stats['linked_count'] ?? 0;
+$linked_value = $stats['linked_value'] ?? 0;
 
 $page_title = 'Trade Settlement';
 include '../includes/header.php';
@@ -1011,7 +1094,7 @@ include '../includes/header.php';
             </div>
             <div class="col-md-4 text-end">
                 <div class="d-flex gap-2 justify-content-end flex-wrap">
-                    <a href="trades.php" class="btn btn-outline-secondary d-flex align-items-center">
+                    <a href="trades" class="btn btn-outline-secondary d-flex align-items-center">
                         <i class="bi bi-arrow-left me-2"></i>
                         <span class="d-none d-sm-inline">Back to Trades</span>
                     </a>
@@ -1042,6 +1125,7 @@ include '../includes/header.php';
                 </div>
                 <div class="col-md-6 text-end">
                     <form method="GET" class="d-inline">
+                        <input type="hidden" name="page" value="1">
                         <div class="row g-2 justify-content-end">
                             <div class="col-auto">
                                 <select class="form-select form-select-sm" name="side" onchange="this.form.submit()">
@@ -1414,6 +1498,58 @@ include '../includes/header.php';
                                 </tbody>
                             </table>
                         </div>
+                        
+                        <!-- Pagination -->
+                        <?php if ($total_pages > 1): ?>
+                        <nav aria-label="Page navigation">
+                            <ul class="pagination justify-content-center">
+                                <?php if ($page > 1): ?>
+                                    <li class="page-item">
+                                        <a class="page-link" href="?page=1&side=<?php echo $trade_side_filter; ?>&hide_buy=<?php echo $hide_buy_orders; ?>" aria-label="First">
+                                            <span aria-hidden="true">&laquo;&laquo;</span>
+                                        </a>
+                                    </li>
+                                    <li class="page-item">
+                                        <a class="page-link" href="?page=<?php echo $page - 1; ?>&side=<?php echo $trade_side_filter; ?>&hide_buy=<?php echo $hide_buy_orders; ?>" aria-label="Previous">
+                                            <span aria-hidden="true">&laquo;</span>
+                                        </a>
+                                    </li>
+                                <?php endif; ?>
+                                
+                                <?php
+                                $start_page = max(1, $page - 2);
+                                $end_page = min($total_pages, $start_page + 4);
+                                
+                                if ($end_page - $start_page < 4) {
+                                    $start_page = max(1, $end_page - 4);
+                                }
+                                
+                                for ($i = $start_page; $i <= $end_page; $i++): ?>
+                                    <li class="page-item <?php echo $i == $page ? 'active' : ''; ?>">
+                                        <a class="page-link" href="?page=<?php echo $i; ?>&side=<?php echo $trade_side_filter; ?>&hide_buy=<?php echo $hide_buy_orders; ?>">
+                                            <?php echo $i; ?>
+                                        </a>
+                                    </li>
+                                <?php endfor; ?>
+                                
+                                <?php if ($page < $total_pages): ?>
+                                    <li class="page-item">
+                                        <a class="page-link" href="?page=<?php echo $page + 1; ?>&side=<?php echo $trade_side_filter; ?>&hide_buy=<?php echo $hide_buy_orders; ?>" aria-label="Next">
+                                            <span aria-hidden="true">&raquo;</span>
+                                        </a>
+                                    </li>
+                                    <li class="page-item">
+                                        <a class="page-link" href="?page=<?php echo $total_pages; ?>&side=<?php echo $trade_side_filter; ?>&hide_buy=<?php echo $hide_buy_orders; ?>" aria-label="Last">
+                                            <span aria-hidden="true">&raquo;&raquo;</span>
+                                        </a>
+                                    </li>
+                                <?php endif; ?>
+                            </ul>
+                            <div class="text-center text-muted small mt-2">
+                                Showing <?php echo min($records_per_page, count($settlement_trades)); ?> of <?php echo $total_records; ?> records
+                            </div>
+                        </nav>
+                        <?php endif; ?>
                     <?php endif; ?>
                 </div>
                 
@@ -2119,6 +2255,11 @@ include '../includes/header.php';
     background-color: var(--success-color);
     border-color: var(--success-color);
 }
+
+.pagination .page-item.active .page-link {
+    background-color: var(--success-color);
+    border-color: var(--success-color);
+}
 </style>
 
 <script>
@@ -2170,7 +2311,7 @@ function clearSelection() {
 }
 
 function resetFilters() {
-    window.location.href = 'settlement.php';
+    window.location.href = 'settlement';
 }
 
 // Single payment functions

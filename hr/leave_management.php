@@ -293,7 +293,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 ]);
                 
                 $_SESSION['success_message'] = 'Leave request submitted successfully.';
-                header('Location: leave_management.php');
+                header('Location: leave_management');
                 exit();
             } else {
                 $error_message = 'Error submitting leave request.';
@@ -331,7 +331,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 
                 if ($result['success']) {
                     $_SESSION['success_message'] = $result['message'];
-                    header('Location: leave_management.php');
+                    header('Location: leave_management');
                     exit();
                 } else {
                     $error_message = $result['message'];
@@ -359,7 +359,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 $activity_stmt->execute([$leave_id, $_SESSION['user_id']]);
                 
                 $_SESSION['success_message'] = 'Leave request cancelled successfully.';
-                header('Location: leave_management.php');
+                header('Location: leave_management');
                 exit();
             } else {
                 $error_message = 'Unable to cancel leave request.';

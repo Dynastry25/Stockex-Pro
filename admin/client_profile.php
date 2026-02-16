@@ -127,17 +127,8 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
         $client = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if ($client) {
-            // Check if trader has access to this client's data
-            $stmt = $db->prepare("SELECT COUNT(*) as trade_count FROM trades WHERE client_cds_account = ? AND uploaded_by = ?");
-            $stmt->execute([$client['cds_account'], $_SESSION['user_id']]);
-            $trade_check = $stmt->fetch();
-            
-            if ($trade_check['trade_count'] > 0) {
-                generateClientTransactionCSV($client);
-                exit;
-            } else {
-                $error_message = "Access denied. You don't have any trades with this client.";
-            }
+            generateClientTransactionCSV($client);
+            exit;
         } else {
             $error_message = "Client not found or is inactive.";
         }
@@ -155,17 +146,8 @@ if (isset($_GET['export_filtered']) && $_GET['export_filtered'] == 'csv') {
         $client = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if ($client) {
-            // Check if trader has access to this client's data
-            $stmt = $db->prepare("SELECT COUNT(*) as trade_count FROM trades WHERE client_cds_account = ? AND uploaded_by = ?");
-            $stmt->execute([$client['cds_account'], $_SESSION['user_id']]);
-            $trade_check = $stmt->fetch();
-            
-            if ($trade_check['trade_count'] > 0) {
-                generateFilteredTransactionCSV($client, $date_from, $date_to, $selected_cds);
-                exit;
-            } else {
-                $error_message = "Access denied. You don't have any trades with this client.";
-            }
+            generateFilteredTransactionCSV($client, $date_from, $date_to, $selected_cds);
+            exit;
         } else {
             $error_message = "Client not found or is inactive.";
         }
@@ -183,17 +165,8 @@ if (isset($_GET['export']) && $_GET['export'] == 'pdf') {
         $client = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if ($client) {
-            // Check if trader has access to this client's data
-            $stmt = $db->prepare("SELECT COUNT(*) as trade_count FROM trades WHERE client_cds_account = ? AND uploaded_by = ?");
-            $stmt->execute([$client['cds_account'], $_SESSION['user_id']]);
-            $trade_check = $stmt->fetch();
-            
-            if ($trade_check['trade_count'] > 0) {
-                generateClientTransactionPDF($client);
-                exit;
-            } else {
-                $error_message = "Access denied. You don't have any trades with this client.";
-            }
+            generateClientTransactionPDF($client);
+            exit;
         } else {
             $error_message = "Client not found or is inactive.";
         }
@@ -211,17 +184,8 @@ if (isset($_GET['export_filtered']) && $_GET['export_filtered'] == 'pdf') {
         $client = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if ($client) {
-            // Check if trader has access to this client's data
-            $stmt = $db->prepare("SELECT COUNT(*) as trade_count FROM trades WHERE client_cds_account = ? AND uploaded_by = ?");
-            $stmt->execute([$client['cds_account'], $_SESSION['user_id']]);
-            $trade_check = $stmt->fetch();
-            
-            if ($trade_check['trade_count'] > 0) {
-                generateFilteredTransactionPDF($client, $date_from, $date_to, $selected_cds);
-                exit;
-            } else {
-                $error_message = "Access denied. You don't have any trades with this client.";
-            }
+            generateFilteredTransactionPDF($client, $date_from, $date_to, $selected_cds);
+            exit;
         } else {
             $error_message = "Client not found or is inactive.";
         }
@@ -241,35 +205,25 @@ if (isset($_GET['id']) && is_numeric($_GET['id'])) {
         if (!$client) {
             $error_message = "Client not found or is inactive.";
         } else {
-            // Check if trader has access to this client's data
-            $stmt = $db->prepare("SELECT COUNT(*) as trade_count FROM trades WHERE client_cds_account = ? AND uploaded_by = ?");
-            $stmt->execute([$client['cds_account'], $_SESSION['user_id']]);
-            $trade_check = $stmt->fetch();
-            
-            if ($trade_check['trade_count'] == 0) {
-                $error_message = "Access denied. You don't have any trades with this client.";
-                $client = null;
-            } else {
-                // Get merged CDS accounts for this client
-                $stmt = $db->prepare("
-                    SELECT c.*, m.id as merge_id
-                    FROM clients c
-                    INNER JOIN merged_cds_accounts m ON (
-                        m.merged_cds_account = c.cds_account OR 
-                        m.primary_cds_account = c.cds_account
-                    )
-                    WHERE (
-                        m.primary_cds_account = ? OR 
-                        m.merged_cds_account = ?
-                    ) 
-                    AND c.id != ?
-                    AND m.status = 'active'
-                    AND c.is_active = 1
-                    ORDER BY c.client_name
-                ");
-                $stmt->execute([$client['cds_account'], $client['cds_account'], $client['id']]);
-                $merged_clients = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            }
+            // Get merged CDS accounts for this client
+            $stmt = $db->prepare("
+                SELECT c.*, m.id as merge_id
+                FROM clients c
+                INNER JOIN merged_cds_accounts m ON (
+                    m.merged_cds_account = c.cds_account OR 
+                    m.primary_cds_account = c.cds_account
+                )
+                WHERE (
+                    m.primary_cds_account = ? OR 
+                    m.merged_cds_account = ?
+                ) 
+                AND c.id != ?
+                AND m.status = 'active'
+                AND c.is_active = 1
+                ORDER BY c.client_name
+            ");
+            $stmt->execute([$client['cds_account'], $client['cds_account'], $client['id']]);
+            $merged_clients = $stmt->fetchAll(PDO::FETCH_ASSOC);
         }
     } catch (Exception $e) {
         $error_message = "Database error: " . $e->getMessage();
@@ -286,35 +240,25 @@ if (isset($_GET['id']) && is_numeric($_GET['id'])) {
         if (!$client) {
             $error_message = "Client not found or is inactive.";
         } else {
-            // Check if trader has access to this client's data
-            $stmt = $db->prepare("SELECT COUNT(*) as trade_count FROM trades WHERE client_cds_account = ? AND uploaded_by = ?");
-            $stmt->execute([$client['cds_account'], $_SESSION['user_id']]);
-            $trade_check = $stmt->fetch();
-            
-            if ($trade_check['trade_count'] == 0) {
-                $error_message = "Access denied. You don't have any trades with this client.";
-                $client = null;
-            } else {
-                // Get merged CDS accounts for this client
-                $stmt = $db->prepare("
-                    SELECT c.*, m.id as merge_id
-                    FROM clients c
-                    INNER JOIN merged_cds_accounts m ON (
-                        m.merged_cds_account = c.cds_account OR 
-                        m.primary_cds_account = c.cds_account
-                    )
-                    WHERE (
-                        m.primary_cds_account = ? OR 
-                        m.merged_cds_account = ?
-                    ) 
-                    AND c.id != ?
-                    AND m.status = 'active'
-                    AND c.is_active = 1
-                    ORDER BY c.client_name
-                ");
-                $stmt->execute([$client['cds_account'], $client['cds_account'], $client['id']]);
-                $merged_clients = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            }
+            // Get merged CDS accounts for this client
+            $stmt = $db->prepare("
+                SELECT c.*, m.id as merge_id
+                FROM clients c
+                INNER JOIN merged_cds_accounts m ON (
+                    m.merged_cds_account = c.cds_account OR 
+                    m.primary_cds_account = c.cds_account
+                )
+                WHERE (
+                    m.primary_cds_account = ? OR 
+                    m.merged_cds_account = ?
+                ) 
+                AND c.id != ?
+                AND m.status = 'active'
+                AND c.is_active = 1
+                ORDER BY c.client_name
+            ");
+            $stmt->execute([$client['cds_account'], $client['cds_account'], $client['id']]);
+            $merged_clients = $stmt->fetchAll(PDO::FETCH_ASSOC);
         }
     } catch (Exception $e) {
         $error_message = "Database error: " . $e->getMessage();
@@ -327,23 +271,100 @@ if (isset($_GET['id']) && is_numeric($_GET['id'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_client'])) {
     $client_id = (int)$_POST['client_id'];
     $client_name = trim($_POST['client_name']);
+    $national_id = trim($_POST['national_id']);
+    $date_of_birth = trim($_POST['date_of_birth']);
     $phone = trim($_POST['phone']);
     $email = trim($_POST['email']);
     $client_type = trim($_POST['client_type']);
+    $address = trim($_POST['address']);
+    $bank_account_number = trim($_POST['bank_account_number']);
+    $bank_name = trim($_POST['bank_name']);
+    $bank_branch = trim($_POST['bank_branch']);
+    $currency = trim($_POST['currency']);
+    $custodian_id = !empty($_POST['custodian_id']) ? (int)$_POST['custodian_id'] : null;
+    $default_brokerage_fee = !empty($_POST['default_brokerage_fee']) ? (float)$_POST['default_brokerage_fee'] : null;
+    $fee_type = trim($_POST['fee_type']);
+    $client_code = trim($_POST['client_code']);
+    $status = trim($_POST['status']);
     
     // Input validation
-    if (empty($client_name) || empty($phone) || empty($email) || empty($client_type)) {
-        $error_message = "All fields are required.";
-    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $error_message = "Invalid email format.";
-    } elseif (!preg_match('/^[0-9+\-\s]+$/', $phone)) {
-        $error_message = "Invalid phone number format.";
-    } elseif (strlen($client_name) > 255) {
-        $error_message = "Client name is too long.";
-    } else {
+    $errors = [];
+    
+    if (empty($client_name)) {
+        $errors[] = "Client name is required.";
+    }
+    
+    if (empty($cds_account)) {
+        $errors[] = "CDS account is required.";
+    }
+    
+    if (empty($client_type)) {
+        $errors[] = "Client type is required.";
+    }
+    
+    if (!empty($email) && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $errors[] = "Invalid email format.";
+    }
+    
+    if (!empty($phone) && !preg_match('/^[0-9+\-\s]+$/', $phone)) {
+        $errors[] = "Invalid phone number format.";
+    }
+    
+    if (!empty($date_of_birth) && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $date_of_birth)) {
+        $errors[] = "Invalid date format for date of birth (YYYY-MM-DD).";
+    }
+    
+    if (strlen($client_name) > 200) {
+        $errors[] = "Client name is too long (max 200 characters).";
+    }
+    
+    if (!empty($national_id) && strlen($national_id) > 50) {
+        $errors[] = "National ID is too long (max 50 characters).";
+    }
+    
+    if (empty($errors)) {
         try {
-            $stmt = $db->prepare("UPDATE clients SET client_name = ?, phone = ?, email = ?, client_type = ?, updated_at = NOW() WHERE id = ?");
-            $stmt->execute([$client_name, $phone, $email, $client_type, $client_id]);
+            // Prepare update query
+            $sql = "UPDATE clients SET 
+                    client_name = ?, 
+                    national_id = ?, 
+                    date_of_birth = ?, 
+                    phone = ?, 
+                    email = ?, 
+                    client_type = ?, 
+                    address = ?, 
+                    bank_account_number = ?, 
+                    bank_name = ?, 
+                    bank_branch = ?, 
+                    currency = ?, 
+                    custodian_id = ?, 
+                    default_brokerage_fee = ?, 
+                    fee_type = ?, 
+                    client_code = ?, 
+                    status = ?, 
+                    updated_at = NOW() 
+                    WHERE id = ?";
+            
+            $stmt = $db->prepare($sql);
+            $stmt->execute([
+                $client_name,
+                $national_id ?: null,
+                $date_of_birth ?: null,
+                $phone ?: null,
+                $email ?: null,
+                $client_type,
+                $address ?: null,
+                $bank_account_number ?: null,
+                $bank_name ?: null,
+                $bank_branch ?: null,
+                $currency ?: 'TZS',
+                $custodian_id,
+                $default_brokerage_fee,
+                $fee_type,
+                $client_code ?: null,
+                $status,
+                $client_id
+            ]);
             
             if ($stmt->rowCount() > 0) {
                 $success_message = "Client details updated successfully!";
@@ -358,10 +379,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_client'])) {
         } catch (Exception $e) {
             $error_message = "Error updating client: " . $e->getMessage();
         }
+    } else {
+        $error_message = implode("<br>", $errors);
     }
 }
 
-// Fetch ALL investments (trades) if client is found
+// Fetch ALL investments (trades) if client is found - REMOVED uploaded_by restriction
 $all_trades = [];
 $filtered_trades = [];
 $individual_cds_trades = [];
@@ -382,7 +405,7 @@ if ($client) {
         $where_conditions = [];
         $params = [];
         
-        // Get ALL trades for this client by this trader (including merged accounts)
+        // Get ALL trades for this client (including merged accounts)
         $cds_accounts = [$client['cds_account']];
         foreach ($merged_clients as $merged_client) {
             $cds_accounts[] = $merged_client['cds_account'];
@@ -390,7 +413,7 @@ if ($client) {
         
         $placeholders = str_repeat('?,', count($cds_accounts) - 1) . '?';
         
-        // Base query
+        // Base query - REMOVED uploaded_by restriction
         $query = "
             SELECT t.*, t.trade_side,
                    COALESCE(e.stock_name, b.security_id, etf.stock_name) AS asset_name,
@@ -407,12 +430,10 @@ if ($client) {
             LEFT JOIN etf_trades et ON t.trade_reference = et.trade_reference
             LEFT JOIN clients c ON t.client_cds_account = c.cds_account
             WHERE t.client_cds_account IN ($placeholders)
-            AND t.uploaded_by = ?
             AND t.status = 'active'
         ";
         
         $params = $cds_accounts;
-        $params[] = $_SESSION['user_id'];
         
         // Apply date filters if set
         if (!empty($date_from) && !empty($date_to)) {
@@ -452,7 +473,7 @@ if ($client) {
             }
         }
         
-        // Get individual CDS trades if selected
+        // Get individual CDS trades if selected - REMOVED uploaded_by restriction
         if ($show_individual_cds && $selected_cds) {
             $query = "
                 SELECT t.*, t.trade_side,
@@ -470,11 +491,10 @@ if ($client) {
                 LEFT JOIN etf_trades et ON t.trade_reference = et.trade_reference
                 LEFT JOIN clients c ON t.client_cds_account = c.cds_account
                 WHERE t.client_cds_account = ?
-                AND t.uploaded_by = ?
                 AND t.status = 'active'
             ";
             
-            $params = [$selected_cds, $_SESSION['user_id']];
+            $params = [$selected_cds];
             
             // Apply date filters if set
             if (!empty($date_from) && !empty($date_to)) {
@@ -583,11 +603,11 @@ if ($show_individual_cds && !empty($individual_cds_trades)) {
     $individual_balance_summary = calculateBalanceSummary($individual_cds_trades);
 }
 
-// Function to generate transaction CSV - FIXED FPUTCSV DEPRECATION
+// Function to generate transaction CSV - REMOVED uploaded_by restriction
 function generateClientTransactionCSV($client) {
     global $db, $company_name;
     
-    // Get all trades for this client by this trader
+    // Get all trades for this client - REMOVED uploaded_by restriction
     $stmt = $db->prepare("
         SELECT t.*, 
                COALESCE(e.stock_name, b.security_id, etf.stock_name) AS asset_name,
@@ -599,11 +619,10 @@ function generateClientTransactionCSV($client) {
         LEFT JOIN bonds b ON t.security_id = b.security_id AND t.asset_class = 'bond'
         LEFT JOIN equities etf ON t.security_id = etf.security_id AND t.asset_class = 'Exchange Traded Funds'
         WHERE t.client_cds_account = ? 
-        AND t.uploaded_by = ?
         AND t.status = 'active'
         ORDER BY t.trade_date, t.created_at
     ");
-    $stmt->execute([$client['cds_account'], $_SESSION['user_id']]);
+    $stmt->execute([$client['cds_account']]);
     $all_trades = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // Set headers for CSV download
@@ -617,31 +636,46 @@ function generateClientTransactionCSV($client) {
     // Add BOM for UTF-8
     fwrite($output, "\xEF\xBB\xBF");
     
-    // Add headers with FIXED fputcsv parameters
-    fputcsv($output, ['Transaction Report - ' . $company_name], ',', '"');
-    fputcsv($output, ['Client: ' . $client['client_name']], ',', '"');
-    fputcsv($output, ['CDS Account: ' . $client['cds_account']], ',', '"');
-    fputcsv($output, ['Generated: ' . date('d/m/Y H:i:s')], ',', '"');
+    // Add headers
+    fputcsv($output, ['Transaction Report - ' . $company_name]);
+    fputcsv($output, ['Client: ' . $client['client_name']]);
+    fputcsv($output, ['CDS Account: ' . $client['cds_account']]);
+    fputcsv($output, ['Generated: ' . date('d/m/Y H:i:s')]);
     fputcsv($output, []); // Empty line
     
     // Add summary section
-    fputcsv($output, ['SUMMARY'], ',', '"');
-    fputcsv($output, ['Asset Class', 'Transactions', 'Buy Quantity', 'Buy Value (TZS)', 'Sell Quantity', 'Sell Value (TZS)', 'Net Quantity', 'Net Value (TZS)'], ',', '"');
+    fputcsv($output, ['SUMMARY']);
+    fputcsv($output, ['Asset Class', 'Transactions', 'Buy Quantity', 'Buy Value (TZS)', 'Sell Quantity', 'Sell Value (TZS)', 'Net Quantity', 'Net Value (TZS)']);
     
-    // Separate trades by asset class
-    $equity_trades = array_filter($all_trades, fn($t) => strtolower($t['asset_class']) === 'equity');
-    $bond_trades = array_filter($all_trades, fn($t) => strtolower($t['asset_class']) === 'bond');
-    $etf_trades = array_filter($all_trades, fn($t) => strtolower($t['asset_class']) === 'exchange traded funds');
-    
-    // Calculate totals for each asset class
-    $asset_classes = [
-        'Equity' => $equity_trades,
-        'Bond' => $bond_trades,
-        'ETF' => $etf_trades
-    ];
-    
-    foreach ($asset_classes as $class_name => $trades) {
-        if (!empty($trades)) {
+    if (empty($all_trades)) {
+        // Show zeros for each asset class when there are no trades
+        $asset_classes = ['Equity', 'Bond', 'ETF'];
+        foreach ($asset_classes as $class_name) {
+            fputcsv($output, [
+                $class_name,
+                0,
+                '0.00',
+                '0.00',
+                '0.00',
+                '0.00',
+                '0.00',
+                '0.00'
+            ]);
+        }
+    } else {
+        // Separate trades by asset class
+        $equity_trades = array_filter($all_trades, fn($t) => strtolower($t['asset_class']) === 'equity');
+        $bond_trades = array_filter($all_trades, fn($t) => strtolower($t['asset_class']) === 'bond');
+        $etf_trades = array_filter($all_trades, fn($t) => strtolower($t['asset_class']) === 'exchange traded funds');
+        
+        // Calculate totals for each asset class
+        $asset_classes = [
+            'Equity' => $equity_trades,
+            'Bond' => $bond_trades,
+            'ETF' => $etf_trades
+        ];
+        
+        foreach ($asset_classes as $class_name => $trades) {
             $buy_quantity = array_sum(array_column(array_filter($trades, fn($t) => $t['trade_side'] === 'buy'), 'quantity'));
             $buy_value = array_sum(array_column(array_filter($trades, fn($t) => $t['trade_side'] === 'buy'), 'consideration'));
             $sell_quantity = array_sum(array_column(array_filter($trades, fn($t) => $t['trade_side'] === 'sell'), 'quantity'));
@@ -656,36 +690,40 @@ function generateClientTransactionCSV($client) {
                 number_format($sell_value, 2),
                 number_format($buy_quantity - $sell_quantity, 2),
                 number_format($buy_value - $sell_value, 2)
-            ], ',', '"');
+            ]);
         }
     }
     
     fputcsv($output, []); // Empty line
     
     // Add transactions header
-    fputcsv($output, ['Date', 'Security ID', 'Asset Name', 'Asset Class', 'Trade Side', 'Quantity', 'Price', 'Consideration (TZS)', 'Trade Reference', 'Status'], ',', '"');
+    fputcsv($output, ['Date', 'Security ID', 'Asset Name', 'Asset Class', 'Trade Side', 'Quantity', 'Price', 'Consideration (TZS)', 'Trade Reference', 'Status']);
     
-    // Add transactions data
-    foreach ($all_trades as $trade) {
-        fputcsv($output, [
-            $trade['trade_date'],
-            $trade['security_id'],
-            $trade['asset_name'] ?? 'N/A',
-            $trade['asset_class'],
-            $trade['trade_side'],
-            number_format($trade['quantity'], 2),
-            number_format($trade['price'], 4),
-            number_format($trade['consideration'], 2),
-            $trade['trade_reference'],
-            $trade['status']
-        ], ',', '"');
+    // Add transactions data (or show "No transactions found" if empty)
+    if (empty($all_trades)) {
+        fputcsv($output, ['No transactions found for this client']);
+    } else {
+        foreach ($all_trades as $trade) {
+            fputcsv($output, [
+                $trade['trade_date'],
+                $trade['security_id'],
+                $trade['asset_name'] ?? 'N/A',
+                $trade['asset_class'],
+                $trade['trade_side'],
+                number_format($trade['quantity'], 2),
+                number_format($trade['price'], 4),
+                number_format($trade['consideration'], 2),
+                $trade['trade_reference'],
+                $trade['status']
+            ]);
+        }
     }
     
     fclose($output);
     exit;
 }
 
-// Function to generate filtered transaction CSV - FIXED FPUTCSV DEPRECATION
+// Function to generate filtered transaction CSV - REMOVED uploaded_by restriction
 function generateFilteredTransactionCSV($client, $date_from, $date_to, $selected_cds = null) {
     global $db, $company_name;
     
@@ -703,11 +741,10 @@ function generateFilteredTransactionCSV($client, $date_from, $date_to, $selected
         LEFT JOIN bonds b ON t.security_id = b.security_id AND t.asset_class = 'bond'
         LEFT JOIN equities etf ON t.security_id = etf.security_id AND t.asset_class = 'Exchange Traded Funds'
         LEFT JOIN clients c ON t.client_cds_account = c.cds_account
-        WHERE t.uploaded_by = ?
-        AND t.status = 'active'
+        WHERE t.status = 'active'
     ";
     
-    $params = [$_SESSION['user_id']];
+    $params = [];
     
     if ($selected_cds) {
         $query .= " AND t.client_cds_account = ?";
@@ -774,32 +811,47 @@ function generateFilteredTransactionCSV($client, $date_from, $date_to, $selected
     // Add BOM for UTF-8
     fwrite($output, "\xEF\xBB\xBF");
     
-    // Add headers with FIXED fputcsv parameters
-    fputcsv($output, ['Filtered Transaction Report - ' . $company_name], ',', '"');
-    fputcsv($output, ['Client: ' . $client['client_name']], ',', '"');
-    fputcsv($output, ['CDS Account: ' . ($selected_cds ? $selected_cds : 'Combined Portfolio')], ',', '"');
-    fputcsv($output, ['Date Range: ' . ($date_from ? $date_from : 'Start') . ' to ' . ($date_to ? $date_to : 'End')], ',', '"');
-    fputcsv($output, ['Generated: ' . date('d/m/Y H:i:s')], ',', '"');
+    // Add headers
+    fputcsv($output, ['Filtered Transaction Report - ' . $company_name]);
+    fputcsv($output, ['Client: ' . $client['client_name']]);
+    fputcsv($output, ['CDS Account: ' . ($selected_cds ? $selected_cds : 'Combined Portfolio')]);
+    fputcsv($output, ['Date Range: ' . ($date_from ? $date_from : 'Start') . ' to ' . ($date_to ? $date_to : 'End')]);
+    fputcsv($output, ['Generated: ' . date('d/m/Y H:i:s')]);
     fputcsv($output, []); // Empty line
     
     // Add summary section
-    fputcsv($output, ['SUMMARY'], ',', '"');
-    fputcsv($output, ['Asset Class', 'Transactions', 'Buy Quantity', 'Buy Value (TZS)', 'Sell Quantity', 'Sell Value (TZS)', 'Net Quantity', 'Net Value (TZS)'], ',', '"');
+    fputcsv($output, ['SUMMARY']);
+    fputcsv($output, ['Asset Class', 'Transactions', 'Buy Quantity', 'Buy Value (TZS)', 'Sell Quantity', 'Sell Value (TZS)', 'Net Quantity', 'Net Value (TZS)']);
     
-    // Separate trades by asset class
-    $equity_trades = array_filter($filtered_trades, fn($t) => strtolower($t['asset_class']) === 'equity');
-    $bond_trades = array_filter($filtered_trades, fn($t) => strtolower($t['asset_class']) === 'bond');
-    $etf_trades = array_filter($filtered_trades, fn($t) => strtolower($t['asset_class']) === 'exchange traded funds');
-    
-    // Calculate totals for each asset class
-    $asset_classes = [
-        'Equity' => $equity_trades,
-        'Bond' => $bond_trades,
-        'ETF' => $etf_trades
-    ];
-    
-    foreach ($asset_classes as $class_name => $trades) {
-        if (!empty($trades)) {
+    if (empty($filtered_trades)) {
+        // Show zeros for each asset class when there are no trades
+        $asset_classes = ['Equity', 'Bond', 'ETF'];
+        foreach ($asset_classes as $class_name) {
+            fputcsv($output, [
+                $class_name,
+                0,
+                '0.00',
+                '0.00',
+                '0.00',
+                '0.00',
+                '0.00',
+                '0.00'
+            ]);
+        }
+    } else {
+        // Separate trades by asset class
+        $equity_trades = array_filter($filtered_trades, fn($t) => strtolower($t['asset_class']) === 'equity');
+        $bond_trades = array_filter($filtered_trades, fn($t) => strtolower($t['asset_class']) === 'bond');
+        $etf_trades = array_filter($filtered_trades, fn($t) => strtolower($t['asset_class']) === 'exchange traded funds');
+        
+        // Calculate totals for each asset class
+        $asset_classes = [
+            'Equity' => $equity_trades,
+            'Bond' => $bond_trades,
+            'ETF' => $etf_trades
+        ];
+        
+        foreach ($asset_classes as $class_name => $trades) {
             $buy_quantity = array_sum(array_column(array_filter($trades, fn($t) => $t['trade_side'] === 'buy'), 'quantity'));
             $buy_value = array_sum(array_column(array_filter($trades, fn($t) => $t['trade_side'] === 'buy'), 'consideration'));
             $sell_quantity = array_sum(array_column(array_filter($trades, fn($t) => $t['trade_side'] === 'sell'), 'quantity'));
@@ -814,7 +866,7 @@ function generateFilteredTransactionCSV($client, $date_from, $date_to, $selected
                 number_format($sell_value, 2),
                 number_format($buy_quantity - $sell_quantity, 2),
                 number_format($buy_value - $sell_value, 2)
-            ], ',', '"');
+            ]);
         }
     }
     
@@ -825,35 +877,39 @@ function generateFilteredTransactionCSV($client, $date_from, $date_to, $selected
     if (!$selected_cds) {
         array_splice($headers, 3, 0, 'CDS Account');
     }
-    fputcsv($output, $headers, ',', '"');
+    fputcsv($output, $headers);
     
-    // Add transactions data
-    foreach ($filtered_trades as $trade) {
-        $row = [
-            $trade['trade_date'],
-            $trade['security_id'],
-            $trade['asset_name'] ?? 'N/A',
-            $trade['asset_class'],
-            $trade['trade_side'],
-            number_format($trade['quantity'], 2),
-            number_format($trade['price'], 4),
-            number_format($trade['consideration'], 2),
-            $trade['trade_reference'],
-            $trade['status']
-        ];
-        
-        if (!$selected_cds) {
-            array_splice($row, 3, 0, $trade['cds_account']);
+    // Add transactions data (or show "No transactions found" if empty)
+    if (empty($filtered_trades)) {
+        fputcsv($output, ['No transactions found for the selected filters']);
+    } else {
+        foreach ($filtered_trades as $trade) {
+            $row = [
+                $trade['trade_date'],
+                $trade['security_id'],
+                $trade['asset_name'] ?? 'N/A',
+                $trade['asset_class'],
+                $trade['trade_side'],
+                number_format($trade['quantity'], 2),
+                number_format($trade['price'], 4),
+                number_format($trade['consideration'], 2),
+                $trade['trade_reference'],
+                $trade['status']
+            ];
+            
+            if (!$selected_cds) {
+                array_splice($row, 3, 0, $trade['cds_account']);
+            }
+            
+            fputcsv($output, $row);
         }
-        
-        fputcsv($output, $row, ',', '"');
     }
     
     fclose($output);
     exit;
 }
 
-// Function to generate filtered transaction PDF
+// Function to generate filtered transaction PDF - REMOVED uploaded_by restriction
 function generateFilteredTransactionPDF($client, $date_from, $date_to, $selected_cds = null) {
     global $db, $company_name;
     
@@ -871,11 +927,10 @@ function generateFilteredTransactionPDF($client, $date_from, $date_to, $selected
         LEFT JOIN bonds b ON t.security_id = b.security_id AND t.asset_class = 'bond'
         LEFT JOIN equities etf ON t.security_id = etf.security_id AND t.asset_class = 'Exchange Traded Funds'
         LEFT JOIN clients c ON t.client_cds_account = c.cds_account
-        WHERE t.uploaded_by = ?
-        AND t.status = 'active'
+        WHERE t.status = 'active'
     ";
     
-    $params = [$_SESSION['user_id']];
+    $params = [];
     
     if ($selected_cds) {
         $query .= " AND t.client_cds_account = ?";
@@ -962,7 +1017,7 @@ function generateFilteredTransactionPDF($client, $date_from, $date_to, $selected
     $total_sell_net = array_sum(array_column($sell_trades, 'net_amount'));
     
     // Calculate balance summary
-    $balance_summary = calculateBalanceSummary($filtered_trades);
+    $balance_summary = empty($filtered_trades) ? [] : calculateBalanceSummary($filtered_trades);
     $total_balance_value = array_sum(array_column($balance_summary, 'balance_value'));
     $total_realized_pnl = array_sum(array_column($balance_summary, 'realized_pnl'));
     
@@ -1017,9 +1072,9 @@ function generateFilteredTransactionPDF($client, $date_from, $date_to, $selected
     $summary_html = '<table border="1" cellpadding="4" cellspacing="0">
         <thead>
             <tr style="background-color:#f2f2f2;">
-                <th width="33%" align="center" style="font-weight:bold;">BUY TRANSACTIONS</th>
-                <th width="34%" align="center" style="font-weight:bold;">SELL TRANSACTIONS</th>
-                <th width="33%" align="center" style="font-weight:bold;">BALANCE SUMMARY</th>
+                <th width="33%" align="center"><b>BUY TRANSACTIONS</b></th>
+                <th width="34%" align="center"><b>SELL TRANSACTIONS</b></th>
+                <th width="33%" align="center"><b>BALANCE SUMMARY</b></th>
             </tr>
         </thead>
         <tbody>
@@ -1056,26 +1111,26 @@ function generateFilteredTransactionPDF($client, $date_from, $date_to, $selected
     
     // Detailed transactions table
     if (!empty($filtered_trades)) {
-        $pdf->SetFont('helvetica', 'B', 12);
+        $pdf->SetFont('helvetica', '', 12);
         $pdf->Cell(0, 8, 'DETAILED TRANSACTIONS', 0, 1);
         $pdf->SetFont('helvetica', '', 9);
         
         $transactions_html = '<table border="1" cellpadding="3" cellspacing="0">
             <thead>
                 <tr style="background-color:#f2f2f2;">
-                    <th width="10%" align="center" style="font-weight:bold;">Date</th>';
+                    <th width="10%" align="center"><b>Date</b></th>';
         
         if (!$selected_cds) {
-            $transactions_html .= '<th width="12%" align="center" style="font-weight:bold;">CDS Account</th>';
+            $transactions_html .= '<th width="12%" align="center"><b>CDS Account</b></th>';
         }
         
-        $transactions_html .= '<th width="12%" align="center" style="font-weight:bold;">Security</th>
-                    <th width="12%" align="center" style="font-weight:bold;">Asset Class</th>
-                    <th width="8%" align="center" style="font-weight:bold;">Side</th>
-                    <th width="10%" align="center" style="font-weight:bold;">Quantity</th>
-                    <th width="10%" align="center" style="font-weight:bold;">Price</th>
-                    <th width="15%" align="center" style="font-weight:bold;">Value (TZS)</th>
-                    <th width="13%" align="center" style="font-weight:bold;">Trade Ref</th>
+        $transactions_html .= '<th width="12%" align="center"><b>Security</b></th>
+                    <th width="12%" align="center"><b>Asset Class</b></th>
+                    <th width="8%" align="center"><b>Side</b></th>
+                    <th width="10%" align="center"><b>Quantity</b></th>
+                    <th width="10%" align="center"><b>Price</b></th>
+                    <th width="15%" align="center"><b>Value (TZS)</b></th>
+                    <th width="13%" align="center"><b>Trade Ref</b></th>
                 </tr>
             </thead>
             <tbody>';
@@ -1102,6 +1157,9 @@ function generateFilteredTransactionPDF($client, $date_from, $date_to, $selected
         $transactions_html .= '</tbody></table>';
         
         $pdf->writeHTML($transactions_html, true, false, true, false, '');
+    } else {
+        $pdf->SetFont('helvetica', 'B', 12);
+        $pdf->Cell(0, 10, 'No transactions found for the selected filters.', 0, 1, 'C');
     }
     
     // Balance summary table
@@ -1114,13 +1172,13 @@ function generateFilteredTransactionPDF($client, $date_from, $date_to, $selected
         $balance_html = '<table border="1" cellpadding="3" cellspacing="0">
             <thead>
                 <tr style="background-color:#f2f2f2;">
-                    <th width="20%" align="center" style="font-weight:bold;">Security</th>
-                    <th width="15%" align="center" style="font-weight:bold;">Asset Class</th>
-                    <th width="13%" align="center" style="font-weight:bold;">Buy Qty</th>
-                    <th width="13%" align="center" style="font-weight:bold;">Buy Value</th>
-                    <th width="13%" align="center" style="font-weight:bold;">Sell Qty</th>
-                    <th width="13%" align="center" style="font-weight:bold;">Sell Value</th>
-                    <th width="13%" align="center" style="font-weight:bold;">Balance</th>
+                    <th width="20%" align="center"><b>Security</b></th>
+                    <th width="15%" align="center"><b>Asset Class</b></th>
+                    <th width="13%" align="center"><b>Buy Qty</b></th>
+                    <th width="13%" align="center"><b>Buy Value</b></th>
+                    <th width="13%" align="center"><b>Sell Qty</b></th>
+                    <th width="13%" align="center"><b>Sell Value</b></th>
+                    <th width="13%" align="center"><b>Balance</b></th>
                 </tr>
             </thead>
             <tbody>';
@@ -1140,13 +1198,13 @@ function generateFilteredTransactionPDF($client, $date_from, $date_to, $selected
         
         // Add totals
         $balance_html .= '
-            <tr style="background-color:#f2f2f2;">
-                <td colspan="2" align="center" style="font-weight:bold;">TOTALS:</td>
-                <td align="right" style="font-weight:bold;">' . number_format(array_sum(array_column($balance_summary, 'buy_quantity')), 2) . '</td>
-                <td align="right" style="font-weight:bold;">TZS ' . number_format(array_sum(array_column($balance_summary, 'buy_value')), 2) . '</td>
-                <td align="right" style="font-weight:bold;">' . number_format(array_sum(array_column($balance_summary, 'sell_quantity')), 2) . '</td>
-                <td align="right" style="font-weight:bold;">TZS ' . number_format(array_sum(array_column($balance_summary, 'sell_value')), 2) . '</td>
-                <td align="right" style="font-weight:bold;">' . number_format(array_sum(array_column($balance_summary, 'balance_quantity')), 2) . '</td>
+            <tr style="background-color:#f2f2f2; font-weight:bold;">
+                <td colspan="2" align="center">TOTALS:</td>
+                <td align="right">' . number_format(array_sum(array_column($balance_summary, 'buy_quantity')), 2) . '</td>
+                <td align="right">TZS ' . number_format(array_sum(array_column($balance_summary, 'buy_value')), 2) . '</td>
+                <td align="right">' . number_format(array_sum(array_column($balance_summary, 'sell_quantity')), 2) . '</td>
+                <td align="right">TZS ' . number_format(array_sum(array_column($balance_summary, 'sell_value')), 2) . '</td>
+                <td align="right">' . number_format(array_sum(array_column($balance_summary, 'balance_quantity')), 2) . '</td>
             </tr>
         </tbody></table>';
         
@@ -1163,11 +1221,11 @@ function generateFilteredTransactionPDF($client, $date_from, $date_to, $selected
     $pdf->Output($filename, 'I');
 }
 
-// Function to generate transaction PDF (original - keep for compatibility)
+// Function to generate transaction PDF - REMOVED uploaded_by restriction
 function generateClientTransactionPDF($client) {
     global $db, $company_name;
     
-    // Get all trades for this client by this trader
+    // Get all trades for this client - REMOVED uploaded_by restriction
     $stmt = $db->prepare("
         SELECT t.*, 
                COALESCE(e.stock_name, b.security_id, etf.stock_name) AS asset_name,
@@ -1179,11 +1237,10 @@ function generateClientTransactionPDF($client) {
         LEFT JOIN bonds b ON t.security_id = b.security_id AND t.asset_class = 'bond'
         LEFT JOIN equities etf ON t.security_id = etf.security_id AND t.asset_class = 'Exchange Traded Funds'
         WHERE t.client_cds_account = ? 
-        AND t.uploaded_by = ?
         AND t.status = 'active'
         ORDER BY t.trade_date, t.created_at
     ");
-    $stmt->execute([$client['cds_account'], $_SESSION['user_id']]);
+    $stmt->execute([$client['cds_account']]);
     $all_trades = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // Separate buy and sell trades
@@ -1218,7 +1275,7 @@ function generateClientTransactionPDF($client) {
     $total_sell_net = array_sum(array_column($sell_trades, 'net_amount'));
     
     // Calculate balance summary
-    $balance_summary = calculateBalanceSummary($all_trades);
+    $balance_summary = empty($all_trades) ? [] : calculateBalanceSummary($all_trades);
     $total_balance_value = array_sum(array_column($balance_summary, 'balance_value'));
     $total_realized_pnl = array_sum(array_column($balance_summary, 'realized_pnl'));
     
@@ -1272,9 +1329,9 @@ function generateClientTransactionPDF($client) {
     $summary_html = '<table border="1" cellpadding="4" cellspacing="0">
         <thead>
             <tr style="background-color:#f2f2f2;">
-                <th width="33%" align="center" style="font-weight:bold;">BUY TRANSACTIONS</th>
-                <th width="34%" align="center" style="font-weight:bold;">SELL TRANSACTIONS</th>
-                <th width="33%" align="center" style="font-weight:bold;">BALANCE SUMMARY</th>
+                <th width="33%" align="center"><b>BUY TRANSACTIONS</b></th>
+                <th width="34%" align="center"><b>SELL TRANSACTIONS</b></th>
+                <th width="33%" align="center"><b>BALANCE SUMMARY</b></th>
             </tr>
         </thead>
         <tbody>
@@ -1309,116 +1366,106 @@ function generateClientTransactionPDF($client) {
     $pdf->writeHTML($summary_html, true, false, true, false, '');
     $pdf->Ln(10);
     
-    // Detailed transactions table (Buy on left, Sell on right)
-    $pdf->SetFont('helvetica', 'B', 12);
-    $pdf->Cell(0, 8, 'DETAILED TRANSACTIONS', 0, 1);
-    
-    // Calculate max rows for side-by-side display
-    $max_rows = max(count($buy_trades), count($sell_trades));
-    
-    // Create side-by-side tables with fixed column widths
-    $transactions_html = '<table border="0.5" cellpadding="3" cellspacing="0" style="font-size: 8pt; width: 100%; table-layout: fixed;">
-        <col width="10%">
-        <col width="15%">
-        <col width="12%">
-        <col width="18%">
-        <col width="10%">
-        <col width="15%">
-        <col width="12%">
-        <col width="18%">
-        <thead>
-            <tr style="background-color:#f2f2f2;">
-                <th colspan="4" width="55%" align="center" style="font-weight:bold; font-size: 9pt;">BUY TRANSACTIONS</th>
-                <th colspan="4" width="45%" align="center" style="font-weight:bold; font-size: 9pt;">SELL TRANSACTIONS</th>
-            </tr>
-            <tr style="background-color:#e6e6e6;">
-                <th width="10%" align="center" style="font-weight:bold; font-size: 8pt;">Date</th>
-                <th width="15%" align="center" style="font-weight:bold; font-size: 8pt;">Security</th>
-                <th width="12%" align="center" style="font-weight:bold; font-size: 8pt;">Quantity</th>
-                <th width="18%" align="center" style="font-weight:bold; font-size: 8pt;">Value</th>
-                <th width="10%" align="center" style="font-weight:bold; font-size: 8pt;">Date</th>
-                <th width="15%" align="center" style="font-weight:bold; font-size: 8pt;">Security</th>
-                <th width="12%" align="center" style="font-weight:bold; font-size: 8pt;">Quantity</th>
-                <th width="18%" align="center" style="font-weight:bold; font-size: 8pt;">Value</th>
-            </tr>
-        </thead>
-        <tbody>';
-    
-    for ($i = 0; $i < $max_rows; $i++) {
-        $transactions_html .= '<tr>';
+    // Detailed transactions table (only show if there are trades)
+    if (!empty($all_trades)) {
+        $pdf->SetFont('helvetica', 'B', 12);
+        $pdf->Cell(0, 8, 'DETAILED TRANSACTIONS', 0, 1);
         
-        // Buy side
-        if (isset($buy_trades[$i])) {
-            $trade = $buy_trades[$i];
-            $transactions_html .= '
-                <td align="center" style="font-size: 7pt;">' . date('d/m/Y', strtotime($trade['trade_date'])) . '</td>
-                <td align="center" style="font-size: 7pt;">' . $trade['security_id'] . '</td>
-                <td align="right" style="font-size: 7pt;">' . number_format($trade['quantity'], 2) . '</td>
-                <td align="right" style="font-size: 7pt; color: red;">TZS ' . number_format($trade['consideration'], 2) . '</td>';
-        } else {
-            $transactions_html .= '<td align="center" style="font-size: 7pt;">-</td><td align="center" style="font-size: 7pt;">-</td><td align="center" style="font-size: 7pt;">-</td><td align="center" style="font-size: 7pt;">-</td>';
+        // Calculate max rows for side-by-side display
+        $max_rows = max(count($buy_trades), count($sell_trades));
+        
+        // Create side-by-side tables
+        $transactions_html = '<table border="1" cellpadding="4" cellspacing="0">
+            <thead>
+                <tr style="background-color:#f2f2f2;">
+                    <th colspan="4" width="50%" align="center"><b>BUY TRANSACTIONS</b></th>
+                    <th colspan="4" width="50%" align="center"><b>SELL TRANSACTIONS</b></th>
+                </tr>
+                <tr style="background-color:#e6e6e6;">
+                    <th width="12.5%" align="center"><b>Date</b></th>
+                    <th width="12.5%" align="center"><b>Security</b></th>
+                    <th width="12.5%" align="center"><b>Quantity</b></th>
+                    <th width="12.5%" align="center"><b>Value</b></th>
+                    <th width="12.5%" align="center"><b>Date</b></th>
+                    <th width="12.5%" align="center"><b>Security</b></th>
+                    <th width="12.5%" align="center"><b>Quantity</b></th>
+                    <th width="12.5%" align="center"><b>Value</b></th>
+                </tr>
+            </thead>
+            <tbody>';
+        
+        for ($i = 0; $i < $max_rows; $i++) {
+            $transactions_html .= '<tr>';
+            
+            // Buy side
+            if (isset($buy_trades[$i])) {
+                $trade = $buy_trades[$i];
+                $transactions_html .= '
+                    <td align="center">' . date('d/m/Y', strtotime($trade['trade_date'])) . '</td>
+                    <td align="center">' . $trade['security_id'] . '</td>
+                    <td align="right">' . number_format($trade['quantity'], 2) . '</td>
+                    <td align="right">TZS ' . number_format($trade['consideration'], 2) . '</td>';
+            } else {
+                $transactions_html .= '<td align="center">-</td><td align="center">-</td><td align="center">-</td><td align="center">-</td>';
+            }
+            
+            // Sell side
+            if (isset($sell_trades[$i])) {
+                $trade = $sell_trades[$i];
+                $transactions_html .= '
+                    <td align="center">' . date('d/m/Y', strtotime($trade['trade_date'])) . '</td>
+                    <td align="center">' . $trade['security_id'] . '</td>
+                    <td align="right">' . number_format($trade['quantity'], 2) . '</td>
+                    <td align="right">TZS ' . number_format($trade['consideration'], 2) . '</td>';
+            } else {
+                $transactions_html .= '<td align="center">-</td><td align="center">-</td><td align="center">-</td><td align="center">-</td>';
+            }
+            
+            $transactions_html .= '</tr>';
         }
         
-        // Sell side
-        if (isset($sell_trades[$i])) {
-            $trade = $sell_trades[$i];
-            $transactions_html .= '
-                <td align="center" style="font-size: 7pt;">' . date('d/m/Y', strtotime($trade['trade_date'])) . '</td>
-                <td align="center" style="font-size: 7pt;">' . $trade['security_id'] . '</td>
-                <td align="right" style="font-size: 7pt;">' . number_format($trade['quantity'], 2) . '</td>
-                <td align="right" style="font-size: 7pt; color: green;">TZS ' . number_format($trade['consideration'], 2) . '</td>';
-        } else {
-            $transactions_html .= '<td align="center" style="font-size: 7pt;">-</td><td align="center" style="font-size: 7pt;">-</td><td align="center" style="font-size: 7pt;">-</td><td align="center" style="font-size: 7pt;">-</td>';
-        }
+        // Add totals row
+        $transactions_html .= '
+            <tr style="background-color:#f2f2f2; font-weight:bold;">
+                <td colspan="2" align="center">BUY TOTALS:</td>
+                <td align="right">' . number_format($total_buy_quantity, 2) . '</td>
+                <td align="right">TZS ' . number_format($total_buy_value, 2) . '</td>
+                <td colspan="2" align="center">SELL TOTALS:</td>
+                <td align="right">' . number_format($total_sell_quantity, 2) . '</td>
+                <td align="right">TZS ' . number_format($total_sell_value, 2) . '</td>
+            </tr>
+            <tr style="background-color:#e6f7ff; font-weight:bold;">
+                <td colspan="2" align="center">BALANCE:</td>
+                <td align="right">' . number_format($total_buy_quantity - $total_sell_quantity, 2) . '</td>
+                <td align="right">TZS ' . number_format($total_buy_value - $total_sell_value, 2) . '</td>
+                <td colspan="2" align="center">NET TOTAL:</td>
+                <td align="center">-</td>
+                <td align="right">TZS ' . number_format($total_buy_net + $total_sell_net, 2) . '</td>
+            </tr>
+        </tbody></table>';
         
-        $transactions_html .= '</tr>';
+        $pdf->writeHTML($transactions_html, true, false, true, false, '');
+        $pdf->Ln(10);
+    } else {
+        $pdf->SetFont('helvetica', 'B', 12);
+        $pdf->Cell(0, 10, 'No transactions found for this client.', 0, 1, 'C');
     }
     
-    // Add totals row
-    $transactions_html .= '
-        <tr style="background-color:#f2f2f2;">
-            <td colspan="2" align="center" style="font-weight:bold; font-size: 8pt;">BUY TOTALS:</td>
-            <td align="right" style="font-weight:bold; font-size: 8pt;">' . number_format($total_buy_quantity, 2) . '</td>
-            <td align="right" style="font-weight:bold; font-size: 8pt; color: red;">TZS ' . number_format($total_buy_value, 2) . '</td>
-            <td colspan="2" align="center" style="font-weight:bold; font-size: 8pt;">SELL TOTALS:</td>
-            <td align="right" style="font-weight:bold; font-size: 8pt;">' . number_format($total_sell_quantity, 2) . '</td>
-            <td align="right" style="font-weight:bold; font-size: 8pt; color: green;">TZS ' . number_format($total_sell_value, 2) . '</td>
-        </tr>
-        <tr style="background-color:#e6f7ff;">
-            <td colspan="2" align="center" style="font-weight:bold; font-size: 8pt;">BALANCE:</td>
-            <td align="right" style="font-weight:bold; font-size: 8pt;">' . number_format($total_buy_quantity - $total_sell_quantity, 2) . '</td>
-            <td align="right" style="font-weight:bold; font-size: 8pt; ' . (($total_buy_value - $total_sell_value) >= 0 ? 'color: red;' : 'color: green;') . '">TZS ' . number_format($total_buy_value - $total_sell_value, 2) . '</td>
-            <td colspan="2" align="center" style="font-weight:bold; font-size: 8pt;">NET TOTAL:</td>
-            <td align="center" style="font-weight:bold; font-size: 8pt;">-</td>
-            <td align="right" style="font-weight:bold; font-size: 8pt;">TZS ' . number_format($total_buy_net + $total_sell_net, 2) . '</td>
-        </tr>
-    </tbody></table>';
-    
-    $pdf->writeHTML($transactions_html, true, false, true, false, '');
-    $pdf->Ln(8);
-    
-    // Balance summary table
+    // Balance summary table (only show if there are trades)
     if (!empty($balance_summary)) {
         $pdf->SetFont('helvetica', 'B', 12);
         $pdf->Cell(0, 8, 'PORTFOLIO BALANCE BY SECURITY', 0, 1);
         
-        $balance_html = '<table border="0.5" cellpadding="3" cellspacing="0" style="font-size: 8pt; width: 100%; table-layout: fixed;">
-            <col width="15%">
-            <col width="15%">
-            <col width="14%">
-            <col width="14%">
-            <col width="14%">
-            <col width="14%">
-            <col width="14%">
+        $balance_html = '<table border="1" cellpadding="4" cellspacing="0">
             <thead>
                 <tr style="background-color:#f2f2f2;">
-                    <th width="15%" align="center" style="font-weight:bold; font-size: 8pt;">Security</th>
-                    <th width="15%" align="center" style="font-weight:bold; font-size: 8pt;">Asset Class</th>
-                    <th width="14%" align="center" style="font-weight:bold; font-size: 8pt;">Buy Qty</th>
-                    <th width="14%" align="center" style="font-weight:bold; font-size: 8pt;">Buy Value</th>
-                    <th width="14%" align="center" style="font-weight:bold; font-size: 8pt;">Sell Qty</th>
-                    <th width="14%" align="center" style="font-weight:bold; font-size: 8pt;">Sell Value</th>
-                    <th width="14%" align="center" style="font-weight:bold; font-size: 8pt;">Balance</th>
+                    <th width="15%" align="center"><b>Security</b></th>
+                    <th width="15%" align="center"><b>Asset Class</b></th>
+                    <th width="14%" align="center"><b>Buy Qty</b></th>
+                    <th width="14%" align="center"><b>Buy Value</b></th>
+                    <th width="14%" align="center"><b>Sell Qty</b></th>
+                    <th width="14%" align="center"><b>Sell Value</b></th>
+                    <th width="14%" align="center"><b>Balance</b></th>
                 </tr>
             </thead>
             <tbody>';
@@ -1426,31 +1473,25 @@ function generateClientTransactionPDF($client) {
         foreach ($balance_summary as $item) {
             $balance_html .= '
                 <tr>
-                    <td align="center" style="font-size: 7pt;">' . $item['security_id'] . '</td>
-                    <td align="center" style="font-size: 7pt;">' . ucfirst($item['asset_class']) . '</td>
-                    <td align="right" style="font-size: 7pt;">' . number_format($item['buy_quantity'], 2) . '</td>
-                    <td align="right" style="font-size: 7pt; color: red;">TZS ' . number_format($item['buy_value'], 2) . '</td>
-                    <td align="right" style="font-size: 7pt;">' . number_format($item['sell_quantity'], 2) . '</td>
-                    <td align="right" style="font-size: 7pt; color: green;">TZS ' . number_format($item['sell_value'], 2) . '</td>
-                    <td align="right" style="font-size: 7pt; ' . ($item['balance_quantity'] > 0 ? 'color: green;' : ($item['balance_quantity'] < 0 ? 'color: red;' : '')) . '">' . number_format($item['balance_quantity'], 2) . '</td>
+                    <td align="center">' . $item['security_id'] . '</td>
+                    <td align="center">' . ucfirst($item['asset_class']) . '</td>
+                    <td align="right">' . number_format($item['buy_quantity'], 2) . '</td>
+                    <td align="right">TZS ' . number_format($item['buy_value'], 2) . '</td>
+                    <td align="right">' . number_format($item['sell_quantity'], 2) . '</td>
+                    <td align="right">TZS ' . number_format($item['sell_value'], 2) . '</td>
+                    <td align="right">' . number_format($item['balance_quantity'], 2) . '</td>
                 </tr>';
         }
         
         // Add totals
-        $total_buy_qty = array_sum(array_column($balance_summary, 'buy_quantity'));
-        $total_buy_val = array_sum(array_column($balance_summary, 'buy_value'));
-        $total_sell_qty = array_sum(array_column($balance_summary, 'sell_quantity'));
-        $total_sell_val = array_sum(array_column($balance_summary, 'sell_value'));
-        $total_balance_qty = array_sum(array_column($balance_summary, 'balance_quantity'));
-        
         $balance_html .= '
-            <tr style="background-color:#f2f2f2;">
-                <td colspan="2" align="center" style="font-weight:bold; font-size: 8pt;">TOTALS:</td>
-                <td align="right" style="font-weight:bold; font-size: 8pt;">' . number_format($total_buy_qty, 2) . '</td>
-                <td align="right" style="font-weight:bold; font-size: 8pt; color: red;">TZS ' . number_format($total_buy_val, 2) . '</td>
-                <td align="right" style="font-weight:bold; font-size: 8pt;">' . number_format($total_sell_qty, 2) . '</td>
-                <td align="right" style="font-weight:bold; font-size: 8pt; color: green;">TZS ' . number_format($total_sell_val, 2) . '</td>
-                <td align="right" style="font-weight:bold; font-size: 8pt; ' . ($total_balance_qty > 0 ? 'color: green;' : ($total_balance_qty < 0 ? 'color: red;' : '')) . '">' . number_format($total_balance_qty, 2) . '</td>
+            <tr style="background-color:#f2f2f2; font-weight:bold;">
+                <td colspan="2" align="center">TOTALS:</td>
+                <td align="right">' . number_format(array_sum(array_column($balance_summary, 'buy_quantity')), 2) . '</td>
+                <td align="right">TZS ' . number_format(array_sum(array_column($balance_summary, 'buy_value')), 2) . '</td>
+                <td align="right">' . number_format(array_sum(array_column($balance_summary, 'sell_quantity')), 2) . '</td>
+                <td align="right">TZS ' . number_format(array_sum(array_column($balance_summary, 'sell_value')), 2) . '</td>
+                <td align="right">' . number_format(array_sum(array_column($balance_summary, 'balance_quantity')), 2) . '</td>
             </tr>
         </tbody></table>';
         
@@ -1505,7 +1546,7 @@ include '../includes/header.php';
                     <div class="me-3">
                         <div class="d-inline-flex align-items-center justify-content-center rounded-circle shadow-sm" 
                              style="width: 60px; height: 60px; background: linear-gradient(135deg, var(--primary-color) 0%, #3b82f6 100%);">
-                            <i class="bi bi-person text-white" style="font-size: 1.5rem;"></i>
+                            <i class="bi bi-person" style="font-size: 1.5rem;"></i>
                         </div>
                     </div>
                     <div>
@@ -1515,7 +1556,7 @@ include '../includes/header.php';
                 </div>
             </div>
             <div class="col-md-4 text-end">
-                <a href="client_management.php" class="btn btn-outline-secondary me-2">
+                <a href="trades.php" class="btn btn-outline-secondary me-2">
                     <i class="bi bi-arrow-left me-1"></i>
                     Back to Trades
                 </a>
@@ -1723,6 +1764,14 @@ include '../includes/header.php';
                         <p class="mb-0"><?php echo ucfirst(htmlspecialchars($client['client_type'])); ?></p>
                     </div>
                     <div class="col-md-6 mb-3">
+                        <div class="fw-semibold">National ID:</div>
+                        <p class="mb-0"><?php echo htmlspecialchars($client['national_id'] ?? 'N/A'); ?></p>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <div class="fw-semibold">Date of Birth:</div>
+                        <p class="mb-0"><?php echo !empty($client['date_of_birth']) ? date('d/m/Y', strtotime($client['date_of_birth'])) : 'N/A'; ?></p>
+                    </div>
+                    <div class="col-md-6 mb-3">
                         <div class="fw-semibold">Phone:</div>
                         <p class="mb-0"><?php echo htmlspecialchars($client['phone'] ?? 'N/A'); ?></p>
                     </div>
@@ -1731,8 +1780,48 @@ include '../includes/header.php';
                         <p class="mb-0"><?php echo htmlspecialchars($client['email'] ?? 'N/A'); ?></p>
                     </div>
                     <div class="col-md-6 mb-3">
+                        <div class="fw-semibold">Address:</div>
+                        <p class="mb-0"><?php echo htmlspecialchars($client['address'] ?? 'N/A'); ?></p>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <div class="fw-semibold">Bank Account:</div>
+                        <p class="mb-0">
+                            <?php if ($client['bank_account_number']): ?>
+                                <?php echo htmlspecialchars($client['bank_account_number']); ?>
+                                <?php if ($client['bank_name']): ?> - <?php echo htmlspecialchars($client['bank_name']); ?><?php endif; ?>
+                                <?php if ($client['bank_branch']): ?> (<?php echo htmlspecialchars($client['bank_branch']); ?>)<?php endif; ?>
+                            <?php else: ?>
+                                N/A
+                            <?php endif; ?>
+                        </p>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <div class="fw-semibold">Currency:</div>
+                        <p class="mb-0"><?php echo htmlspecialchars($client['currency'] ?? 'TZS'); ?></p>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <div class="fw-semibold">Client Code:</div>
+                        <p class="mb-0"><?php echo htmlspecialchars($client['client_code'] ?? 'N/A'); ?></p>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <div class="fw-semibold">Status:</div>
+                        <p class="mb-0">
+                            <span class="badge <?php echo $client['status'] == 'active' ? 'bg-success' : 'bg-danger'; ?>">
+                                <?php echo ucfirst(htmlspecialchars($client['status'])); ?>
+                            </span>
+                        </p>
+                    </div>
+                    <div class="col-md-6 mb-3">
                         <div class="fw-semibold">Total Investments:</div>
                         <p class="mb-0"><?php echo number_format(count($all_trades)); ?> trades</p>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <div class="fw-semibold">Fee Type:</div>
+                        <p class="mb-0"><?php echo ucfirst(htmlspecialchars($client['fee_type'])); ?></p>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <div class="fw-semibold">Default Brokerage Fee:</div>
+                        <p class="mb-0"><?php echo !empty($client['default_brokerage_fee']) ? number_format($client['default_brokerage_fee'], 2) . '%' : 'N/A'; ?></p>
                     </div>
                     <div class="col-md-6 mb-3">
                         <div class="fw-semibold">Account Created:</div>
@@ -1823,11 +1912,14 @@ include '../includes/header.php';
                             <?php if (empty($current_trades)): ?>
                                 <tr>
                                     <td colspan="<?php echo $show_individual_cds ? '8' : '9'; ?>" class="text-center py-4">
-                                        <?php if ($show_individual_cds): ?>
-                                            No investments found for this CDS account.
-                                        <?php else: ?>
-                                            No investments found for this client.
-                                        <?php endif; ?>
+                                        <div class="text-muted">
+                                            <i class="bi bi-info-circle me-2"></i>
+                                            <?php if ($show_individual_cds): ?>
+                                                No investments found for this CDS account.
+                                            <?php else: ?>
+                                                No investments found for this client.
+                                            <?php endif; ?>
+                                        </div>
                                     </td>
                                 </tr>
                             <?php else: ?>
@@ -1998,7 +2090,7 @@ include '../includes/header.php';
 <!-- Edit Client Modal -->
 <?php if ($client): ?>
 <div class="modal fade" id="editClientModal" tabindex="-1">
-    <div class="modal-dialog">
+    <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <form method="POST" action="">
                 <input type="hidden" name="client_id" value="<?php echo htmlspecialchars($client['id'] ?? ''); ?>">
@@ -2007,25 +2099,91 @@ include '../includes/header.php';
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
-                    <div class="mb-3">
-                        <label for="client_name" class="form-label">Client Name</label>
-                        <input type="text" class="form-control" id="client_name" name="client_name" value="<?php echo htmlspecialchars($client['client_name'] ?? ''); ?>" required maxlength="255">
-                    </div>
-                    <div class="mb-3">
-                        <label for="phone" class="form-label">Phone</label>
-                        <input type="text" class="form-control" id="phone" name="phone" value="<?php echo htmlspecialchars($client['phone'] ?? ''); ?>" required pattern="[0-9+\-\s]+" title="Enter a valid phone number">
-                    </div>
-                    <div class="mb-3">
-                        <label for="email" class="form-label">Email</label>
-                        <input type="email" class="form-control" id="email" name="email" value="<?php echo htmlspecialchars($client['email'] ?? ''); ?>" required>
-                    </div>
-                    <div class="mb-3">
-                        <label for="client_type" class="form-label">Client Type</label>
-                        <select class="form-select" id="client_type" name="client_type" required>
-                            <option value="corporate" <?php echo (($client['client_type'] ?? '') === 'corporate') ? 'selected' : ''; ?>>Corporate</option>
-                            <option value="individual" <?php echo (($client['client_type'] ?? '') === 'individual') ? 'selected' : ''; ?>>Individual</option>
-                            <option value="institutional" <?php echo (($client['client_type'] ?? '') === 'institutional') ? 'selected' : ''; ?>>Institutional</option>
-                        </select>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="client_name" class="form-label">Client Name *</label>
+                            <input type="text" class="form-control" id="client_name" name="client_name" value="<?php echo htmlspecialchars($client['client_name'] ?? ''); ?>" required maxlength="200">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="cds_account" class="form-label">CDS Account *</label>
+                            <input type="text" class="form-control" id="cds_account" name="cds_account" value="<?php echo htmlspecialchars($client['cds_account'] ?? ''); ?>" required maxlength="50">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="national_id" class="form-label">National ID</label>
+                            <input type="text" class="form-control" id="national_id" name="national_id" value="<?php echo htmlspecialchars($client['national_id'] ?? ''); ?>" maxlength="50">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="date_of_birth" class="form-label">Date of Birth</label>
+                            <input type="date" class="form-control" id="date_of_birth" name="date_of_birth" value="<?php echo !empty($client['date_of_birth']) ? htmlspecialchars($client['date_of_birth']) : ''; ?>">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="phone" class="form-label">Phone</label>
+                            <input type="text" class="form-control" id="phone" name="phone" value="<?php echo htmlspecialchars($client['phone'] ?? ''); ?>" pattern="[0-9+\-\s]+" title="Enter a valid phone number">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="email" class="form-label">Email</label>
+                            <input type="email" class="form-control" id="email" name="email" value="<?php echo htmlspecialchars($client['email'] ?? ''); ?>">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="client_type" class="form-label">Client Type *</label>
+                            <select class="form-select" id="client_type" name="client_type" required>
+                                <option value="individual" <?php echo (($client['client_type'] ?? '') === 'individual') ? 'selected' : ''; ?>>Individual</option>
+                                <option value="corporate" <?php echo (($client['client_type'] ?? '') === 'corporate') ? 'selected' : ''; ?>>Corporate</option>
+                                <option value="institutional" <?php echo (($client['client_type'] ?? '') === 'institutional') ? 'selected' : ''; ?>>Institutional</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="status" class="form-label">Status *</label>
+                            <select class="form-select" id="status" name="status" required>
+                                <option value="active" <?php echo (($client['status'] ?? '') === 'active') ? 'selected' : ''; ?>>Active</option>
+                                <option value="inactive" <?php echo (($client['status'] ?? '') === 'inactive') ? 'selected' : ''; ?>>Inactive</option>
+                            </select>
+                        </div>
+                        <div class="col-12 mb-3">
+                            <label for="address" class="form-label">Address</label>
+                            <textarea class="form-control" id="address" name="address" rows="2" maxlength="500"><?php echo htmlspecialchars($client['address'] ?? ''); ?></textarea>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="bank_account_number" class="form-label">Bank Account Number</label>
+                            <input type="text" class="form-control" id="bank_account_number" name="bank_account_number" value="<?php echo htmlspecialchars($client['bank_account_number'] ?? ''); ?>" maxlength="50">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="bank_name" class="form-label">Bank Name</label>
+                            <input type="text" class="form-control" id="bank_name" name="bank_name" value="<?php echo htmlspecialchars($client['bank_name'] ?? ''); ?>" maxlength="100">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="bank_branch" class="form-label">Bank Branch</label>
+                            <input type="text" class="form-control" id="bank_branch" name="bank_branch" value="<?php echo htmlspecialchars($client['bank_branch'] ?? ''); ?>" maxlength="100">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="currency" class="form-label">Currency</label>
+                            <select class="form-select" id="currency" name="currency">
+                                <option value="TZS" <?php echo (($client['currency'] ?? 'TZS') === 'TZS') ? 'selected' : ''; ?>>TZS - Tanzanian Shilling</option>
+                                <option value="USD" <?php echo (($client['currency'] ?? '') === 'USD') ? 'selected' : ''; ?>>USD - US Dollar</option>
+                                <option value="EUR" <?php echo (($client['currency'] ?? '') === 'EUR') ? 'selected' : ''; ?>>EUR - Euro</option>
+                                <option value="GBP" <?php echo (($client['currency'] ?? '') === 'GBP') ? 'selected' : ''; ?>>GBP - British Pound</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="client_code" class="form-label">Client Code</label>
+                            <input type="text" class="form-control" id="client_code" name="client_code" value="<?php echo htmlspecialchars($client['client_code'] ?? ''); ?>" maxlength="120">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="custodian_id" class="form-label">Custodian ID</label>
+                            <input type="number" class="form-control" id="custodian_id" name="custodian_id" value="<?php echo !empty($client['custodian_id']) ? htmlspecialchars($client['custodian_id']) : ''; ?>">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="default_brokerage_fee" class="form-label">Default Brokerage Fee (%)</label>
+                            <input type="number" step="0.01" class="form-control" id="default_brokerage_fee" name="default_brokerage_fee" value="<?php echo !empty($client['default_brokerage_fee']) ? htmlspecialchars($client['default_brokerage_fee']) : ''; ?>">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="fee_type" class="form-label">Fee Type</label>
+                            <select class="form-select" id="fee_type" name="fee_type">
+                                <option value="normal" <?php echo (($client['fee_type'] ?? '') === 'normal') ? 'selected' : ''; ?>>Normal</option>
+                                <option value="liberty" <?php echo (($client['fee_type'] ?? '') === 'liberty') ? 'selected' : ''; ?>>Liberty</option>
+                                <option value="this_trade" <?php echo (($client['fee_type'] ?? '') === 'this_trade') ? 'selected' : ''; ?>>This Trade</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
                 <div class="modal-footer">

@@ -164,7 +164,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 
                 if ($result['success']) {
                     $_SESSION['success_message'] = $result['message'];
-                    header('Location: dashboard.php');
+                    header('Location: dashboard');
                     exit();
                 } else {
                     $error_message = $result['message'];

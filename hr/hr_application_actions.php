@@ -180,11 +180,11 @@ if (isset($_GET['action'])) {
                 $_SESSION['error_message'] = 'Error deleting application: ' . $e->getMessage();
             }
             
-            header('Location: ' . ($_SERVER['HTTP_REFERER'] ?? 'job_applications.php'));
+            header('Location: ' . ($_SERVER['HTTP_REFERER'] ?? 'job_applications'));
             exit();
     }
 }
 
 // Default redirect
-header('Location: job_applications.php');
+header('Location: job_applications');
 exit();

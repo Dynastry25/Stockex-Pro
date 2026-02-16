@@ -664,7 +664,7 @@ include '../includes/header.php';
                     <button type="submit" class="btn btn-primary me-2">
                         <i class="bi bi-funnel me-1"></i>Apply Filter
                     </button>
-                    <a href="../hr/salary_setup.php" class="btn btn-secondary">
+                    <a href="../hr/salary_setup" class="btn btn-secondary">
                         <i class="bi bi-x-lg me-1"></i>Clear
                     </a>
                 </div>
@@ -1842,7 +1842,7 @@ function showOvertimeRateModal() {
 
 // Action functions
 function viewSalaryHistory(userId, employeeName) {
-    window.location.href = `../hr/salary_setup.php?view_history=${userId}`;
+    window.location.href = `../hr/salary_setup?view_history=${userId}`;
 }
 
 function editSalary(user) {

@@ -875,7 +875,7 @@ function viewApplications(positionId, title) {
 
 // Share job link function
 function shareJobLink(positionTitle) {
-    const url = `${window.location.origin}${window.location.pathname.replace('recruitment.php', 'job_openings.php')}`;
+    const url = `${window.location.origin}${window.location.pathname.replace('recruitment', 'job_openings')}`;
     navigator.clipboard.writeText(url).then(() => {
         // Show success message
         const alert = document.createElement('div');

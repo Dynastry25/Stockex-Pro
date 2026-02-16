@@ -51,7 +51,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['add_job_position'])) {
         $_SESSION['error_message'] = 'Error adding job position: ' . $e->getMessage();
     }
     
-    header('Location: recruitment.php');
+    header('Location: recruitment');
     exit();
 }
 

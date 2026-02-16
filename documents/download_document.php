@@ -45,6 +45,6 @@ if (isset($_GET['id'])) {
 }
 
 // If download fails, redirect back with error
-header('Location: department_docs.php?error=File not found or cannot be downloaded');
+header('Location: department_docs?error=File not found or cannot be downloaded');
 exit;
 ?>

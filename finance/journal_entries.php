@@ -528,9 +528,6 @@ body {
                     <button class="btn btn-light btn-gradient shadow-sm" onclick="exportReport('excel')">
                         <i class="bi bi-file-excel me-2"></i>Excel
                     </button>
-                    <button class="btn btn-light btn-gradient shadow-sm" onclick="exportReport('pdf')">
-                        <i class="bi bi-file-pdf me-2"></i>PDF
-                    </button>
                 </div>
             </div>
         </div>
@@ -726,6 +723,42 @@ body {
     </div>
 </div>
 
+<!-- Date Modal -->
+<div class="modal fade" id="dateModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Change Date Range</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="dateForm" method="GET">
+                    <div class="mb-3">
+                        <label class="form-label">Start Date</label>
+                        <input type="date" name="start_date" class="form-control" value="<?php echo htmlspecialchars($start_date); ?>">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">End Date</label>
+                        <input type="date" name="end_date" class="form-control" value="<?php echo htmlspecialchars($end_date); ?>">
+                    </div>
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="clearDates">
+                            <label class="form-check-label" for="clearDates">
+                                Show all transactions (clear date filter)
+                            </label>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="applyDateFilter()">Apply</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
 // Date validation
 document.querySelector('[name="end_date"]').addEventListener('change', function() {
@@ -740,24 +773,77 @@ document.querySelector('[name="end_date"]').addEventListener('change', function(
     }
 });
 
+// Additional date validation for modal
+document.addEventListener('DOMContentLoaded', function() {
+    const modalStartDate = document.querySelector('#dateModal [name="start_date"]');
+    const modalEndDate = document.querySelector('#dateModal [name="end_date"]');
+
+    if (modalStartDate && modalEndDate) {
+        modalEndDate.addEventListener('change', function() {
+            if (this.value && modalStartDate.value) {
+                const fromDate = new Date(modalStartDate.value);
+                const toDate = new Date(this.value);
+                if (toDate < fromDate) {
+                    alert('End date cannot be before start date');
+                    this.value = modalStartDate.value;
+                }
+            }
+        });
+    }
+});
+
 // Export functions
 function exportReport(format) {
-    const url = new URL(window.location);
-    url.searchParams.set('export', format);
-    window.open(url, '_blank');
+    if (format !== 'excel') {
+        alert('Only Excel export is supported');
+        return;
+    }
+
+    const filters = {
+        start_date: document.querySelector('[name="start_date"]').value,
+        end_date: document.querySelector('[name="end_date"]').value,
+        account: document.querySelector('[name="account"]').value,
+        reference_type: document.querySelector('[name="reference_type"]').value,
+        search: document.querySelector('[name="search"]').value
+    };
+
+    // Build query string
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(filters)) {
+        if (value) params.append(key, value);
+    }
+    params.append('export', 'excel');
+
+    // Open export in new tab
+    window.open('journal_entries_export.php?' + params.toString(), '_blank');
 }
 
 function showDateModal() {
-    // Simple date range modal - could be enhanced
-    const startDate = prompt('Enter start date (YYYY-MM-DD):', '<?php echo $start_date; ?>');
-    const endDate = prompt('Enter end date (YYYY-MM-DD):', '<?php echo $end_date; ?>');
+    const modal = new bootstrap.Modal(document.getElementById('dateModal'));
+    modal.show();
+}
 
-    if (startDate && endDate) {
-        const url = new URL(window.location);
+function applyDateFilter() {
+    const form = document.getElementById('dateForm');
+    const clearDates = document.getElementById('clearDates').checked;
+
+    if (clearDates) {
+        window.location.href = 'journal_entries';
+    } else {
+        const startDate = form.start_date.value;
+        const endDate = form.end_date.value;
+
+        if (!startDate || !endDate) {
+            alert('Please select both start and end dates');
+            return;
+        }
+
+        const url = new URL(window.location.href);
         url.searchParams.set('start_date', startDate);
         url.searchParams.set('end_date', endDate);
         url.searchParams.delete('page'); // Reset to page 1
-        window.location.href = url;
+
+        window.location.href = url.toString();
     }
 }
 

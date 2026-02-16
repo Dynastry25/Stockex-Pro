@@ -59,7 +59,7 @@ $documents = $stmt->fetchAll();
             </p>
         </div>
         <div class="d-flex">
-            <a href="department_docs.php" class="btn btn-secondary me-2">
+            <a href="department_docs" class="btn btn-secondary me-2">
                 <i class="bi bi-arrow-left me-2"></i>Back to Repository
             </a>
             <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#uploadDocumentModal">
@@ -146,7 +146,7 @@ $documents = $stmt->fetchAll();
 <div class="modal fade" id="uploadDocumentModal" tabindex="-1">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
-            <form method="POST" action="department_docs.php" enctype="multipart/form-data">
+            <form method="POST" action="department_docs" enctype="multipart/form-data">
                 <input type="hidden" name="folder_id" value="<?php echo $folder_id; ?>">
                 <div class="modal-header">
                     <h5 class="modal-title">Upload to: <?php echo htmlspecialchars($folder['folder_name']); ?></h5>

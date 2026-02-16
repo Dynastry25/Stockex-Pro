@@ -1908,7 +1908,7 @@ function showOvertimeRateModal() {
 
 // Action functions
 function viewSalaryHistory(userId, employeeName) {
-    window.location.href = `../ceo/pay_employees.php?view_history=${userId}`;
+    window.location.href = `../ceo/pay_employees?view_history=${userId}`;
 }
 
 function editSalary(user) {

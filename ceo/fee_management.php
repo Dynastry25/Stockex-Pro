@@ -49,7 +49,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'delete' && isset($_GET['id'])
     $message = 'Fee configuration deleted successfully!';
     $message_type = 'success';
     // Redirect to the same page to remove the deleted fee from the URL
-    header('Location: fee_management.php?message=' . urlencode($message) . '&type=' . urlencode($message_type));
+    header('Location: fee_management?message=' . urlencode($message) . '&type=' . urlencode($message_type));
     exit;
 }
 

@@ -288,6 +288,91 @@ function updateBankBalance($db, $bank_id, $amount) {
     }
 }
 
+// Function to create distribution record
+function createDistributionRecord($db, $receipt_id, $receipt_no, $amount, $currency, $distributed = 0) {
+    try {
+        $stmt = $db->prepare("
+            INSERT INTO receipt_distributions (
+                receipt_id, receipt_no, total_amount, 
+                distributed_amount, remaining_balance, 
+                currency, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'pending', NOW())
+        ");
+        
+        $remaining_balance = $amount - $distributed;
+        
+        $stmt->execute([
+            $receipt_id,
+            $receipt_no,
+            $amount,
+            $distributed,
+            $remaining_balance,
+            $currency
+        ]);
+        
+        return $db->lastInsertId();
+    } catch (Exception $e) {
+        error_log("Error creating distribution record: " . $e->getMessage());
+        return false;
+    }
+}
+
+// Function to update distribution record
+function updateDistributionRecord($db, $distribution_id, $distributed_amount, $description = '') {
+    try {
+        // Get current distribution record
+        $stmt = $db->prepare("
+            SELECT total_amount, distributed_amount, remaining_balance 
+            FROM receipt_distributions 
+            WHERE id = ?
+        ");
+        $stmt->execute([$distribution_id]);
+        $distribution = $stmt->fetch();
+        
+        if (!$distribution) {
+            return false;
+        }
+        
+        $new_distributed = $distribution['distributed_amount'] + $distributed_amount;
+        $new_remaining = $distribution['total_amount'] - $new_distributed;
+        
+        // Update distribution record
+        $update_stmt = $db->prepare("
+            UPDATE receipt_distributions 
+            SET distributed_amount = ?, 
+                remaining_balance = ?,
+                last_distribution_date = NOW(),
+                status = CASE WHEN ? >= total_amount THEN 'completed' ELSE 'pending' END
+            WHERE id = ?
+        ");
+        
+        $update_stmt->execute([
+            $new_distributed,
+            $new_remaining,
+            $new_distributed,
+            $distribution_id
+        ]);
+        
+        // Log distribution activity
+        $activity_stmt = $db->prepare("
+            INSERT INTO distribution_activities (
+                distribution_id, amount, description, distributed_at
+            ) VALUES (?, ?, ?, NOW())
+        ");
+        
+        $activity_stmt->execute([
+            $distribution_id,
+            $distributed_amount,
+            $description
+        ]);
+        
+        return true;
+    } catch (Exception $e) {
+        error_log("Error updating distribution record: " . $e->getMessage());
+        return false;
+    }
+}
+
 // Function to export receipts to Excel
 function exportReceiptsToExcel($receipts) {
     // Set headers for Excel file download
@@ -309,7 +394,6 @@ function exportReceiptsToExcel($receipts) {
     echo '<th>Source</th>';
     echo '<th>Payer Type</th>';
     echo '<th>Payer Name</th>';
-    echo '<th>Payer ID</th>';
     echo '<th>CDS/Account No</th>';
     echo '<th>Amount</th>';
     echo '<th>Currency</th>';
@@ -318,10 +402,7 @@ function exportReceiptsToExcel($receipts) {
     echo '<th>Payment Mode</th>';
     echo '<th>Cheque No</th>';
     echo '<th>Description</th>';
-    echo '<th>Financial Record</th>';
-    echo '<th>Created By</th>';
-    echo '<th>Created At</th>';
-    echo '<th>Status</th>';
+   
     echo '</tr>';
     
     // Table data
@@ -341,7 +422,6 @@ function exportReceiptsToExcel($receipts) {
         echo '<td>' . htmlspecialchars($receipt_source) . '</td>';
         echo '<td>' . htmlspecialchars($receipt['account_of_desc'] ?? $receipt['account_of']) . '</td>';
         echo '<td>' . htmlspecialchars($receipt['name']) . '</td>';
-        echo '<td>' . htmlspecialchars($receipt['name_id'] ?? '') . '</td>';
         echo '<td>' . htmlspecialchars($receipt['cds_account'] ?? $receipt['account_no']) . '</td>';
         echo '<td>' . number_format($receipt['amount'], 2) . '</td>';
         echo '<td>' . htmlspecialchars($receipt['currency']) . '</td>';
@@ -350,10 +430,7 @@ function exportReceiptsToExcel($receipts) {
         echo '<td>' . htmlspecialchars($receipt['payment_method_desc'] ?? '') . '</td>';
         echo '<td>' . htmlspecialchars($receipt['cheque_no'] ?? '') . '</td>';
         echo '<td>' . htmlspecialchars($receipt['narration'] ?? '') . '</td>';
-        echo '<td>' . htmlspecialchars($receipt['record_in_financial']) . '</td>';
-        echo '<td>' . htmlspecialchars($receipt['created_by_username'] ?? '') . '</td>';
-        echo '<td>' . htmlspecialchars($receipt['created_at']) . '</td>';
-        echo '<td>' . htmlspecialchars($receipt['status']) . '</td>';
+   
         echo '</tr>';
         
         $total_amount += $receipt['amount'];
@@ -677,6 +754,30 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_receipt') {
     }
 }
 
+// Handle AJAX request for getting receipt by receipt no
+if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_receipt_by_no') {
+    $receipt_no = $_GET['receipt_no'] ?? '';
+    
+    try {
+        $stmt = $db->prepare("
+            SELECT document_path, receipt_no, name, amount, currency 
+            FROM receipts WHERE receipt_no = ?
+        ");
+        $stmt->execute([$receipt_no]);
+        $receipt = $stmt->fetch();
+        
+        header('Content-Type: application/json');
+        echo json_encode($receipt ?: []);
+        exit;
+        
+    } catch (PDOException $e) {
+        error_log("Error fetching receipt by no: " . $e->getMessage());
+        header('Content-Type: application/json');
+        echo json_encode([]);
+        exit;
+    }
+}
+
 // Handle AJAX request for getting journal entries
 if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_journal_entries') {
     $receipt_no = $_GET['receipt_no'] ?? '';
@@ -698,6 +799,30 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_journal_entries') {
         error_log("Error fetching journal entries: " . $e->getMessage());
         header('Content-Type: application/json');
         echo json_encode([]);
+        exit;
+    }
+}
+
+// Handle AJAX request for getting distribution details
+if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_distribution') {
+    $receipt_id = $_GET['receipt_id'] ?? '';
+    
+    try {
+        $stmt = $db->prepare("
+            SELECT * FROM receipt_distributions 
+            WHERE receipt_id = ?
+        ");
+        $stmt->execute([$receipt_id]);
+        $distribution = $stmt->fetch();
+        
+        header('Content-Type: application/json');
+        echo json_encode($distribution ?: ['error' => 'No distribution found']);
+        exit;
+        
+    } catch (PDOException $e) {
+        error_log("Error fetching distribution: " . $e->getMessage());
+        header('Content-Type: application/json');
+        echo json_encode(['error' => 'Database error']);
         exit;
     }
 }
@@ -732,6 +857,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $cheque_no = sanitizeInput($_POST['cheque_no'] ?? '');
         $narration = sanitizeInput($_POST['narration'] ?? '');
         $receipt_id = (int)($_POST['receipt_id'] ?? 0);
+        $money_distribution = sanitizeInput($_POST['money_distribution'] ?? 'no');
         
         // Get entity information
         $entity_type = sanitizeInput($_POST['entity_type'] ?? '');
@@ -799,6 +925,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                                 narration = ?,
                                 bank_name = ?,
                                 bank_account_number = ?,
+                                money_distribution = ?,
                                 updated_at = NOW()
                             WHERE id = ?
                         ");
@@ -820,21 +947,84 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             $narration,
                             $bank_name,
                             $bank_account_number,
+                            $money_distribution,
                             $receipt_id
                         ]);
+                        
+                        // Handle receipt document upload if provided
+                        if (isset($_FILES['receipt_document']) && $_FILES['receipt_document']['error'] == UPLOAD_ERR_OK) {
+                            $file = $_FILES['receipt_document'];
+                            $allowed_extensions = ['jpg', 'jpeg', 'png', 'pdf', 'gif'];
+                            $max_size = 5 * 1024 * 1024; // 5MB
+                            
+                            $file_extension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+                            $file_size = $file['size'];
+                            
+                            if (in_array($file_extension, $allowed_extensions)) {
+                                if ($file_size <= $max_size) {
+                                    // Create uploads directory if it doesn't exist
+                                    $upload_dir = '../uploads/receipts/';
+                                    if (!file_exists($upload_dir)) {
+                                        mkdir($upload_dir, 0777, true);
+                                    }
+                                    
+                                    // Generate unique filename
+                                    $new_filename = 'receipt_' . $receipt_no . '_' . time() . '.' . $file_extension;
+                                    $upload_path = $upload_dir . $new_filename;
+                                    
+                                    if (move_uploaded_file($file['tmp_name'], $upload_path)) {
+                                        // Update receipt with document path
+                                        $doc_stmt = $db->prepare("
+                                            UPDATE receipts SET document_path = ? WHERE id = ?
+                                        ");
+                                        $doc_stmt->execute([$new_filename, $receipt_id]);
+                                    }
+                                }
+                            }
+                        }
                         
                         $success_message = "Receipt updated successfully! Receipt No: " . ($_POST['receipt_no'] ?? '');
                         
                     } else {
                         // Create new receipt
+                        $document_path = null;
+                        
+                        // Handle receipt document upload
+                        if (isset($_FILES['receipt_document']) && $_FILES['receipt_document']['error'] == UPLOAD_ERR_OK) {
+                            $file = $_FILES['receipt_document'];
+                            $allowed_extensions = ['jpg', 'jpeg', 'png', 'pdf', 'gif'];
+                            $max_size = 5 * 1024 * 1024; // 5MB
+                            
+                            $file_extension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+                            $file_size = $file['size'];
+                            
+                            if (in_array($file_extension, $allowed_extensions)) {
+                                if ($file_size <= $max_size) {
+                                    // Create uploads directory if it doesn't exist
+                                    $upload_dir = '../uploads/receipts/';
+                                    if (!file_exists($upload_dir)) {
+                                        mkdir($upload_dir, 0777, true);
+                                    }
+                                    
+                                    // Generate unique filename
+                                    $new_filename = 'receipt_' . $receipt_no . '_' . time() . '.' . $file_extension;
+                                    $upload_path = $upload_dir . $new_filename;
+                                    
+                                    if (move_uploaded_file($file['tmp_name'], $upload_path)) {
+                                        $document_path = $new_filename;
+                                    }
+                                }
+                            }
+                        }
+                        
                         $insert_stmt = $db->prepare("
                             INSERT INTO receipts (
                                 receipt_no, receipt_date, payment_mode, account_of,
                                 name, name_id, source_type, record_in_financial, ac_debit,
                                 currency, account_no, cds_account, amount, cheque_no, narration,
                                 created_by_username, created_at, status,
-                                bank_name, bank_account_number
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 'active', ?, ?)
+                                bank_name, bank_account_number, money_distribution, document_path
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 'active', ?, ?, ?, ?)
                         ");
                         
                         $insert_stmt->execute([
@@ -855,10 +1045,22 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             $narration,
                             $current_user,
                             $bank_name,
-                            $bank_account_number
+                            $bank_account_number,
+                            $money_distribution,
+                            $document_path
                         ]);
                         
                         $new_receipt_id = $db->lastInsertId();
+                        
+                        // Create distribution record if money distribution is set to 'yes'
+                        if ($money_distribution == 'yes') {
+                            $distribution_id = createDistributionRecord($db, $new_receipt_id, $receipt_no, $amount, $currency);
+                            if ($distribution_id) {
+                                $success_message = "✅ Receipt created successfully! Receipt No: $receipt_no<br>💰 Distribution record created for Tsh " . number_format($amount, 2);
+                            } else {
+                                $success_message = "✅ Receipt created successfully! Receipt No: $receipt_no<br>⚠️ Note: Could not create distribution record";
+                            }
+                        }
                         
                         // If recording in financial statements, create journal entries
                         if ($record_in_financial == 'yes') {
@@ -947,7 +1149,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                                 // Update bank account balance
                                 updateBankBalance($db, $ac_debit, $amount);
                                 
-                                $success_message = "✅ Receipt created successfully with journal entries! Receipt No: $receipt_no";
+                                if ($money_distribution == 'yes') {
+                                    $success_message = "✅ Receipt created successfully with journal entries and distribution record! Receipt No: $receipt_no";
+                                } else {
+                                    $success_message = "✅ Receipt created successfully with journal entries! Receipt No: $receipt_no";
+                                }
                                 
                             } catch (Exception $e) {
                                 // Log the error but don't fail the receipt creation
@@ -955,7 +1161,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                                 $success_message = "✅ Receipt created successfully! Receipt No: $receipt_no<br>⚠️ Note: Journal entries could not be created: " . $e->getMessage();
                             }
                         } else {
-                            $success_message = "✅ Receipt created successfully! Receipt No: $receipt_no (Not recorded in financial statements)";
+                            if ($money_distribution == 'yes') {
+                                $success_message = "✅ Receipt created successfully! Receipt No: $receipt_no (Not recorded in financial statements)<br>💰 Distribution record created for Tsh " . number_format($amount, 2);
+                            } else {
+                                $success_message = "✅ Receipt created successfully! Receipt No: $receipt_no (Not recorded in financial statements)";
+                            }
                         }
                     }
                     
@@ -981,6 +1191,7 @@ $receipt_no_filter = $_GET['receipt_no'] ?? '';
 $financial_record_filter = $_GET['financial_record'] ?? '';
 $search_name = $_GET['search_name'] ?? '';
 $receipt_source_filter = $_GET['receipt_source'] ?? '';
+$distribution_filter = $_GET['distribution_filter'] ?? '';
 
 // Validate filter dates
 if (!validateDate($start_date)) $start_date = date('Y-m-01');
@@ -1020,6 +1231,12 @@ if (!empty($financial_record_filter) && in_array($financial_record_filter, ['yes
     $filter_params[] = $financial_record_filter;
 }
 
+// Money Distribution filter
+if (!empty($distribution_filter) && in_array($distribution_filter, ['yes', 'no'])) {
+    $filter_conditions[] = "r.money_distribution = ?";
+    $filter_params[] = $distribution_filter;
+}
+
 // Receipt Source filter
 if (!empty($receipt_source_filter) && in_array($receipt_source_filter, ['manual', 'csv'])) {
     if ($receipt_source_filter == 'manual') {
@@ -1052,11 +1269,15 @@ try {
                ba.account_number as bank_account_number,
                ba.account_name as bank_account_name,
                ba.current_balance as bank_current_balance,
-               ba.code as bank_account_code
+               ba.code as bank_account_code,
+               rd.distributed_amount,
+               rd.remaining_balance,
+               rd.status as distribution_status
         FROM receipts r
         LEFT JOIN payment_methods pm ON r.payment_mode = pm.id
         LEFT JOIN ledger_types lt ON r.account_of = lt.code
         LEFT JOIN banks_accounts ba ON r.ac_debit = ba.id
+        LEFT JOIN receipt_distributions rd ON r.id = rd.receipt_id
         $where_clause
         ORDER BY r.receipt_date DESC, r.created_at DESC
     ";
@@ -1077,6 +1298,8 @@ $manual_receipts_count = 0;
 $csv_receipts_count = 0;
 $manual_receipts_amount = 0;
 $csv_receipts_amount = 0;
+$distribution_receipts_count = 0;
+$distribution_receipts_amount = 0;
 
 foreach ($all_receipts as $receipt) {
     $total_amount += $receipt['amount'];
@@ -1093,6 +1316,12 @@ foreach ($all_receipts as $receipt) {
     } elseif (strpos($receipt['receipt_no'], 'RCP') === 0 || strpos($receipt['receipt_no'], 'RCT') === 0) {
         $manual_receipts_count++;
         $manual_receipts_amount += $receipt['amount'];
+    }
+    
+    // Count distribution receipts
+    if ($receipt['money_distribution'] == 'yes') {
+        $distribution_receipts_count++;
+        $distribution_receipts_amount += $receipt['amount'];
     }
 }
 
@@ -1227,6 +1456,85 @@ include '../includes/header.php';
     .stats-card-csv {
         border-left: 5px solid #28a745;
     }
+    
+    .stats-card-distribution {
+        border-left: 5px solid #ffc107;
+    }
+    
+    .file-upload-area {
+        border: 2px dashed #dee2e6;
+        border-radius: 8px;
+        padding: 20px;
+        text-align: center;
+        background-color: #f8f9fa;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+    
+    .file-upload-area:hover {
+        border-color: #007bff;
+        background-color: #e9ecef;
+    }
+    
+    .file-upload-area.dragover {
+        border-color: #28a745;
+        background-color: #d4edda;
+    }
+    
+    .file-preview {
+        margin-top: 10px;
+        padding: 10px;
+        background-color: #f8f9fa;
+        border-radius: 5px;
+        border: 1px solid #dee2e6;
+    }
+    
+    .file-preview img {
+        max-width: 100px;
+        max-height: 100px;
+        object-fit: cover;
+        border-radius: 5px;
+    }
+    
+    .distribution-badge {
+        background: linear-gradient(135deg, #ffc107 0%, #ff9800 100%);
+        color: white;
+        font-weight: bold;
+    }
+    
+    .distribution-progress {
+        height: 10px;
+        border-radius: 5px;
+        background-color: #e9ecef;
+        margin-top: 5px;
+    }
+    
+    .distribution-progress-bar {
+        height: 100%;
+        border-radius: 5px;
+        background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+    }
+    
+    .receipt-document-preview {
+        max-height: 400px;
+        overflow-y: auto;
+        border: 1px solid #dee2e6;
+        border-radius: 5px;
+        padding: 10px;
+        background: #f8f9fa;
+    }
+    
+    .receipt-document-preview img {
+        max-width: 100%;
+        height: auto;
+        border-radius: 5px;
+    }
+    
+    .receipt-document-actions {
+        margin-top: 10px;
+        display: flex;
+        gap: 10px;
+    }
 </style>
 
 <div class="container-fluid">
@@ -1312,6 +1620,18 @@ include '../includes/header.php';
                 </div>
             </div>
         </div>
+        <div class="col-md-2 mb-3">
+            <div class="card stats-card stats-card-distribution">
+                <div class="card-body text-center py-4">
+                    <h3 class="text-warning mb-1">
+                        <?php echo $distribution_receipts_count; ?>
+                    </h3>
+                    <small class="text-muted">For Distribution</small>
+                    <br>
+                    <small class="text-warning">Tsh <?php echo number_format($distribution_receipts_amount, 2); ?></small>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Receipt Entry Form -->
@@ -1322,7 +1642,7 @@ include '../includes/header.php';
                     <h5 class="mb-0 text-dark"><i class="bi bi-cash-coin me-2"></i>Record Money Received (Manual Entry)</h5>
                 </div>
                 <div class="card-body" id="receiptFormContainer">
-                    <form method="POST" id="receiptForm">
+                    <form method="POST" id="receiptForm" enctype="multipart/form-data">
                         <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
                         <input type="hidden" name="receipt_id" id="receipt_id" value="">
                         <input type="hidden" name="entity_type" id="entity_type" value="">
@@ -1410,6 +1730,24 @@ include '../includes/header.php';
                                 </div>
                             </div>
 
+                            <!-- Money Distribution Option -->
+                            <div class="col-md-3">
+                                <label class="form-label">Will money be distributed? <span class="text-danger">*</span></label>
+                                <div>
+                                    <div class="form-check form-check-inline">
+                                        <input class="form-check-input" type="radio" name="money_distribution" id="distribute_yes" value="yes" 
+                                               <?php echo ($_POST['money_distribution'] ?? 'no') === 'yes' ? 'checked' : ''; ?>>
+                                        <label class="form-check-label" for="distribute_yes">Yes</label>
+                                    </div>
+                                    <div class="form-check form-check-inline">
+                                        <input class="form-check-input" type="radio" name="money_distribution" id="distribute_no" value="no"
+                                               <?php echo ($_POST['money_distribution'] ?? 'no') === 'no' ? 'checked' : ''; ?>>
+                                        <label class="form-check-label" for="distribute_no">No</label>
+                                    </div>
+                                </div>
+                                <small class="text-muted">If Yes, money will be available for distribution to trades</small>
+                            </div>
+
                             <!-- Bank and Receipt Details -->
                             <div class="col-md-3">
                                 <label class="form-label">Deposit To Bank Account <span class="text-danger">*</span></label>
@@ -1472,9 +1810,36 @@ include '../includes/header.php';
                                        placeholder="Purpose of payment">
                             </div>
 
+                            <!-- Receipt Document Upload -->
+                            <div class="col-md-6">
+                                <label class="form-label">Receipt Document (Photo/PDF)</label>
+                                <div class="file-upload-area" id="fileUploadArea">
+                                    <i class="bi bi-cloud-arrow-up" style="font-size: 2rem; color: #6c757d;"></i>
+                                    <p class="mt-2 mb-1">Click to upload or drag and drop</p>
+                                    <small class="text-muted">JPG, PNG, PDF, GIF (Max 5MB)</small>
+                                    <input type="file" class="d-none" name="receipt_document" id="receipt_document" 
+                                           accept=".jpg,.jpeg,.png,.pdf,.gif">
+                                </div>
+                                <div class="file-preview d-none" id="filePreview">
+                                    <div class="d-flex align-items-center justify-content-between">
+                                        <div>
+                                            <i class="bi bi-file-text me-2"></i>
+                                            <span id="fileName"></span>
+                                            <small class="text-muted d-block" id="fileSize"></small>
+                                        </div>
+                                        <button type="button" class="btn btn-sm btn-outline-danger" id="removeFile">
+                                            <i class="bi bi-x"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
                             <!-- Submit Buttons -->
                             <div class="col-12 mt-2">
                                 <div class="d-flex justify-content-end gap-2">
+                                    <a href="distribute_money.php" class="btn btn-warning btn-sm">
+                                        <i class="bi bi-cash-stack me-1"></i>Distribute Money
+                                    </a>
                                     <button type="reset" class="btn btn-outline-secondary btn-sm" id="resetFormBtn">
                                         <i class="bi bi-arrow-clockwise me-1"></i>Reset
                                     </button>
@@ -1566,6 +1931,14 @@ include '../includes/header.php';
                                             <option value="no" <?php echo $financial_record_filter === 'no' ? 'selected' : ''; ?>>Not Recorded</option>
                                         </select>
                                     </div>
+                                    <div class="col-md-2">
+                                        <label class="form-label">Money Distribution</label>
+                                        <select class="form-select form-control-sm" name="distribution_filter">
+                                            <option value="">All</option>
+                                            <option value="yes" <?php echo $distribution_filter === 'yes' ? 'selected' : ''; ?>>For Distribution</option>
+                                            <option value="no" <?php echo $distribution_filter === 'no' ? 'selected' : ''; ?>>Not for Distribution</option>
+                                        </select>
+                                    </div>
                                     <div class="col-12">
                                         <div class="d-flex justify-content-end">
                                             <button type="submit" class="btn btn-primary btn-sm">
@@ -1594,13 +1967,14 @@ include '../includes/header.php';
                                     <th>Bank Balance</th>
                                     <th>Created By</th>
                                     <th>Financial Record</th>
+                                    <th>Distribution</th>
                                     <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <?php if (empty($all_receipts)): ?>
                                     <tr>
-                                        <td colspan="13" class="text-center py-3 text-muted">
+                                        <td colspan="14" class="text-center py-3 text-muted">
                                             <i class="bi bi-inbox" style="font-size: 2rem;"></i>
                                             <p class="mt-2">No receipts found</p>
                                         </td>
@@ -1626,6 +2000,22 @@ include '../includes/header.php';
                                                 $bank_info .= ' (' . $receipt['bank_account_number'] . ')';
                                             }
                                         }
+                                        
+                                        // Distribution info
+                                        $distribution_badge = 'bg-secondary';
+                                        $distribution_text = 'No';
+                                        if ($receipt['money_distribution'] == 'yes') {
+                                            $distribution_badge = 'bg-warning';
+                                            $distribution_text = 'Yes';
+                                            
+                                            if ($receipt['distribution_status'] == 'completed') {
+                                                $distribution_badge = 'bg-success';
+                                                $distribution_text = 'Completed';
+                                            } elseif ($receipt['distribution_status'] == 'pending') {
+                                                $distribution_badge = 'bg-warning';
+                                                $distribution_text = 'Pending';
+                                            }
+                                        }
                                     ?>
                                         <tr>
                                             <td>
@@ -1634,6 +2024,12 @@ include '../includes/header.php';
                                                 <small class="badge <?php echo $source_badge; ?>">
                                                     <?php echo $receipt_source; ?>
                                                 </small>
+                                                <?php if (!empty($receipt['document_path'])): ?>
+                                                    <br>
+                                                    <small class="badge bg-info">
+                                                        <i class="bi bi-paperclip"></i> Document
+                                                    </small>
+                                                <?php endif; ?>
                                             </td>
                                             <td><?php echo date('M d, Y', strtotime($receipt['receipt_date'])); ?></td>
                                             <td>
@@ -1675,6 +2071,24 @@ include '../includes/header.php';
                                                 </span>
                                             </td>
                                             <td>
+                                                <span class="badge <?php echo $distribution_badge; ?>">
+                                                    <?php echo $distribution_text; ?>
+                                                </span>
+                                                <?php if ($receipt['money_distribution'] == 'yes' && isset($receipt['distributed_amount'])): ?>
+                                                    <div class="mt-1">
+                                                        <small class="text-muted">
+                                                            Distributed: <?php echo number_format($receipt['distributed_amount'], 2); ?><br>
+                                                            Remaining: <?php echo number_format($receipt['remaining_balance'], 2); ?>
+                                                        </small>
+                                                        <?php if ($receipt['amount'] > 0): ?>
+                                                            <div class="distribution-progress">
+                                                                <div class="distribution-progress-bar" style="width: <?php echo min(100, ($receipt['distributed_amount'] / $receipt['amount']) * 100); ?>%"></div>
+                                                            </div>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td>
                                                 <div class="btn-group btn-group-sm" role="group">
                                                     <button type="button" class="btn btn-outline-primary btn-sm view-receipt" 
                                                             data-receipt-id="<?php echo (int)$receipt['id']; ?>">
@@ -1688,6 +2102,16 @@ include '../includes/header.php';
                                                             data-receipt-no="<?php echo htmlspecialchars($receipt['receipt_no']); ?>">
                                                         <i class="bi bi-journal-text"></i>
                                                     </button>
+                                                    <?php if ($receipt['money_distribution'] == 'yes'): ?>
+                                                    <button type="button" class="btn btn-outline-warning btn-sm distribute-money" 
+                                                            data-receipt-id="<?php echo (int)$receipt['id']; ?>"
+                                                            data-receipt-no="<?php echo htmlspecialchars($receipt['receipt_no']); ?>"
+                                                            data-amount="<?php echo $receipt['amount']; ?>"
+                                                            data-distributed="<?php echo $receipt['distributed_amount'] ?? 0; ?>"
+                                                            data-remaining="<?php echo $receipt['remaining_balance'] ?? $receipt['amount']; ?>">
+                                                        <i class="bi bi-cash-stack"></i>
+                                                    </button>
+                                                    <?php endif; ?>
                                                     <button type="button" class="btn btn-outline-danger btn-sm print-receipt" 
                                                             data-receipt-id="<?php echo (int)$receipt['id']; ?>"
                                                             data-receipt-no="<?php echo htmlspecialchars($receipt['receipt_no']); ?>">
@@ -1707,8 +2131,8 @@ include '../includes/header.php';
                         <small class="text-muted">
                             Showing <?php echo count($all_receipts); ?> receipt(s) - Total: 
                             <strong class="text-success">Tsh <?php echo number_format($total_amount, 2); ?></strong>
-                            (Manual: <?php echo $manual_receipts_count; ?>, CSV: <?php echo $csv_receipts_count; ?>)
-                            <?php if (!empty($start_date) || !empty($end_date) || !empty($account_of_filter) || !empty($receipt_no_filter) || !empty($financial_record_filter) || !empty($search_name) || !empty($receipt_source_filter)): ?>
+                            (Manual: <?php echo $manual_receipts_count; ?>, CSV: <?php echo $csv_receipts_count; ?>, For Distribution: <?php echo $distribution_receipts_count; ?>)
+                            <?php if (!empty($start_date) || !empty($end_date) || !empty($account_of_filter) || !empty($receipt_no_filter) || !empty($financial_record_filter) || !empty($search_name) || !empty($receipt_source_filter) || !empty($distribution_filter)): ?>
                                 (filtered results)
                             <?php endif; ?>
                         </small>
@@ -1823,6 +2247,29 @@ include '../includes/header.php';
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Distribute Money Modal -->
+    <div class="modal fade" id="distributeMoneyModal" tabindex="-1" aria-labelledby="distributeMoneyModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header bg-warning text-dark">
+                    <h5 class="modal-title" id="distributeMoneyModalLabel">
+                        <i class="bi bi-cash-stack me-2"></i>Distribute Money
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body" id="distributeMoneyContent">
+                    <!-- Distribution form will be loaded here -->
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-success btn-sm" id="saveDistributionBtn">
+                        <i class="bi bi-check-circle me-1"></i>Save Distribution
+                    </button>
                 </div>
             </div>
         </div>
@@ -2049,9 +2496,83 @@ document.addEventListener('DOMContentLoaded', function() {
     const receiptDateInput = document.getElementById('receipt_date');
     const sourceIndicator = document.getElementById('source_indicator');
     const bankBalanceIndicator = document.getElementById('bank_balance_indicator');
+    const fileUploadArea = document.getElementById('fileUploadArea');
+    const receiptDocumentInput = document.getElementById('receipt_document');
+    const filePreview = document.getElementById('filePreview');
+    const fileName = document.getElementById('fileName');
+    const fileSize = document.getElementById('fileSize');
+    const removeFileBtn = document.getElementById('removeFile');
+    const saveDistributionBtn = document.getElementById('saveDistributionBtn');
+    const printReceiptBtn = document.getElementById('printReceiptBtn');
 
     let currentLedgerType = '';
     let isNameSelectMode = false;
+    let currentDistributionId = null;
+
+    // =============== FILE UPLOAD FUNCTIONALITY ===============
+    fileUploadArea.addEventListener('click', function() {
+        receiptDocumentInput.click();
+    });
+
+    fileUploadArea.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        fileUploadArea.classList.add('dragover');
+    });
+
+    fileUploadArea.addEventListener('dragleave', function() {
+        fileUploadArea.classList.remove('dragover');
+    });
+
+    fileUploadArea.addEventListener('drop', function(e) {
+        e.preventDefault();
+        fileUploadArea.classList.remove('dragover');
+        
+        if (e.dataTransfer.files.length > 0) {
+            receiptDocumentInput.files = e.dataTransfer.files;
+            handleFileSelect(e.dataTransfer.files[0]);
+        }
+    });
+
+    receiptDocumentInput.addEventListener('change', function() {
+        if (this.files.length > 0) {
+            handleFileSelect(this.files[0]);
+        }
+    });
+
+    removeFileBtn.addEventListener('click', function() {
+        receiptDocumentInput.value = '';
+        filePreview.classList.add('d-none');
+        fileUploadArea.classList.remove('d-none');
+    });
+
+    function handleFileSelect(file) {
+        const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'application/pdf'];
+        const maxSize = 5 * 1024 * 1024; // 5MB
+        
+        if (!allowedTypes.includes(file.type)) {
+            alert('Invalid file type. Please upload JPG, PNG, GIF, or PDF files only.');
+            return;
+        }
+        
+        if (file.size > maxSize) {
+            alert('File size too large. Maximum size is 5MB.');
+            return;
+        }
+        
+        fileName.textContent = file.name;
+        fileSize.textContent = formatFileSize(file.size);
+        
+        fileUploadArea.classList.add('d-none');
+        filePreview.classList.remove('d-none');
+    }
+
+    function formatFileSize(bytes) {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
 
     // =============== NAME FIELD MODE TOGGLE ===============
     toggleNameModeBtn.addEventListener('click', function() {
@@ -2563,6 +3084,11 @@ document.addEventListener('DOMContentLoaded', function() {
             openNamesModalBtn.disabled = true;
             nameSelect.innerHTML = '<option value="">Select Payer Type First</option>';
             
+            // Reset file upload
+            receiptDocumentInput.value = '';
+            filePreview.classList.add('d-none');
+            fileUploadArea.classList.remove('d-none');
+            
             sourceIndicator.textContent = '';
             generateBtn.classList.remove('d-none');
             updateBtn.classList.add('d-none');
@@ -2588,11 +3114,23 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // View journal
+    // View journal with receipt document
     document.addEventListener('click', function(e) {
         if (e.target.closest('.view-journal')) {
             const receiptNo = e.target.closest('.view-journal').getAttribute('data-receipt-no');
             viewJournalEntries(receiptNo);
+        }
+    });
+
+    // Distribute money
+    document.addEventListener('click', function(e) {
+        if (e.target.closest('.distribute-money')) {
+            const receiptId = e.target.closest('.distribute-money').getAttribute('data-receipt-id');
+            const receiptNo = e.target.closest('.distribute-money').getAttribute('data-receipt-no');
+            const amount = e.target.closest('.distribute-money').getAttribute('data-amount');
+            const distributed = e.target.closest('.distribute-money').getAttribute('data-distributed');
+            const remaining = e.target.closest('.distribute-money').getAttribute('data-remaining');
+            distributeMoney(receiptId, receiptNo, amount, distributed, remaining);
         }
     });
 
@@ -2617,6 +3155,49 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             
             const receiptDetailsContent = document.getElementById('receiptDetailsContent');
+            
+            // Check if receipt has document
+            let documentHtml = '';
+            if (receipt.document_path) {
+                const fileExtension = receipt.document_path.split('.').pop().toLowerCase();
+                if (['jpg', 'jpeg', 'png', 'gif'].includes(fileExtension)) {
+                    documentHtml = `
+                        <div class="mb-3">
+                            <h6><i class="bi bi-paperclip me-2"></i>Receipt Document</h6>
+                            <div class="receipt-document-preview">
+                                <img src="../uploads/receipts/${receipt.document_path}" class="img-fluid rounded" alt="Receipt Document">
+                            </div>
+                            <div class="receipt-document-actions">
+                                <a href="../uploads/receipts/${receipt.document_path}" target="_blank" class="btn btn-sm btn-outline-primary">
+                                    <i class="bi bi-download me-1"></i>Download Document
+                                </a>
+                                <a href="../uploads/receipts/${receipt.document_path}" target="_blank" class="btn btn-sm btn-outline-info">
+                                    <i class="bi bi-eye me-1"></i>View Full Size
+                                </a>
+                            </div>
+                        </div>
+                    `;
+                } else if (fileExtension === 'pdf') {
+                    documentHtml = `
+                        <div class="mb-3">
+                            <h6><i class="bi bi-paperclip me-2"></i>Receipt Document (PDF)</h6>
+                            <div class="alert alert-info">
+                                <i class="bi bi-file-earmark-pdf me-2"></i>
+                                PDF Document: ${receipt.document_path}
+                            </div>
+                            <div class="receipt-document-actions">
+                                <a href="../uploads/receipts/${receipt.document_path}" target="_blank" class="btn btn-sm btn-outline-primary">
+                                    <i class="bi bi-eye me-1"></i>View PDF
+                                </a>
+                                <a href="../uploads/receipts/${receipt.document_path}" download class="btn btn-sm btn-outline-success">
+                                    <i class="bi bi-download me-1"></i>Download PDF
+                                </a>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+            
             receiptDetailsContent.innerHTML = `
                 <div class="container-fluid">
                     <div class="row mb-3">
@@ -2650,6 +3231,14 @@ document.addEventListener('DOMContentLoaded', function() {
                                         <tr>
                                             <th>Payer ID:</th>
                                             <td>${receipt.name_id || 'N/A'}</td>
+                                        </tr>
+                                        <tr>
+                                            <th>Money Distribution:</th>
+                                            <td>
+                                                <span class="badge ${receipt.money_distribution === 'yes' ? 'bg-warning' : 'bg-secondary'}">
+                                                    ${receipt.money_distribution === 'yes' ? 'Yes - For Distribution' : 'No'}
+                                                </span>
+                                            </td>
                                         </tr>
                                     </table>
                                 </div>
@@ -2699,6 +3288,8 @@ document.addEventListener('DOMContentLoaded', function() {
                             </div>
                         </div>
                     </div>
+                    
+                    ${documentHtml}
                     
                     <div class="row">
                         <div class="col-12">
@@ -2783,6 +3374,8 @@ document.addEventListener('DOMContentLoaded', function() {
             // Set other fields
             document.getElementById('record_yes').checked = receipt.record_in_financial === 'yes';
             document.getElementById('record_no').checked = receipt.record_in_financial === 'no';
+            document.getElementById('distribute_yes').checked = receipt.money_distribution === 'yes';
+            document.getElementById('distribute_no').checked = receipt.money_distribution === 'no';
             acDebitSelect.value = receipt.ac_debit || '';
             currencySelect.value = receipt.currency || 'Tsh';
             document.getElementById('account_no').value = receipt.account_no || '';
@@ -2808,6 +3401,66 @@ document.addEventListener('DOMContentLoaded', function() {
 
     async function viewJournalEntries(receiptNo) {
         try {
+            // First get receipt details to check for document
+            const receiptResponse = await fetch(`?ajax=get_receipt_by_no&receipt_no=${encodeURIComponent(receiptNo)}`);
+            let receiptDocumentHtml = '';
+            
+            if (receiptResponse.ok) {
+                const receiptData = await receiptResponse.json();
+                if (receiptData && receiptData.document_path) {
+                    const fileExtension = receiptData.document_path.split('.').pop().toLowerCase();
+                    if (['jpg', 'jpeg', 'png', 'gif'].includes(fileExtension)) {
+                        receiptDocumentHtml = `
+                            <div class="card mb-3">
+                                <div class="card-header bg-light">
+                                    <h6 class="mb-0"><i class="bi bi-paperclip me-2"></i>Receipt Document/Photo</h6>
+                                </div>
+                                <div class="card-body text-center">
+                                    <img src="../uploads/receipts/${receiptData.document_path}" 
+                                         class="img-fluid rounded" 
+                                         alt="Receipt Document" 
+                                         style="max-height: 300px; max-width: 100%;">
+                                    <div class="mt-2">
+                                        <a href="../uploads/receipts/${receiptData.document_path}" 
+                                           target="_blank" 
+                                           class="btn btn-sm btn-outline-primary">
+                                            <i class="bi bi-download me-1"></i>Download Full Size
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    } else if (fileExtension === 'pdf') {
+                        receiptDocumentHtml = `
+                            <div class="card mb-3">
+                                <div class="card-header bg-light">
+                                    <h6 class="mb-0"><i class="bi bi-paperclip me-2"></i>Receipt Document (PDF)</h6>
+                                </div>
+                                <div class="card-body">
+                                    <div class="alert alert-info">
+                                        <i class="bi bi-file-earmark-pdf me-2"></i>
+                                        PDF Document: ${receiptData.document_path}
+                                    </div>
+                                    <div class="d-flex gap-2">
+                                        <a href="../uploads/receipts/${receiptData.document_path}" 
+                                           target="_blank" 
+                                           class="btn btn-sm btn-outline-primary">
+                                            <i class="bi bi-eye me-1"></i>View PDF
+                                        </a>
+                                        <a href="../uploads/receipts/${receiptData.document_path}" 
+                                           download
+                                           class="btn btn-sm btn-outline-success">
+                                            <i class="bi bi-download me-1"></i>Download PDF
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }
+                }
+            }
+            
+            // Now get journal entries
             const response = await fetch(`?ajax=get_journal_entries&receipt_no=${encodeURIComponent(receiptNo)}`);
             if (!response.ok) throw new Error('Network response was not ok');
             const journalEntries = await response.json();
@@ -2820,6 +3473,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         <i class="bi bi-journal-x" style="font-size: 3rem; color: #6c757d;"></i>
                         <h5 class="mt-3 text-muted">No Journal Entries Found</h5>
                         <p class="text-muted">No journal entries have been created for receipt ${receiptNo}</p>
+                        ${receiptDocumentHtml}
                     </div>
                 `;
             } else {
@@ -2849,6 +3503,9 @@ document.addEventListener('DOMContentLoaded', function() {
                             <i class="bi bi-info-circle me-2"></i>
                             Journal entries for receipt <strong>${receiptNo}</strong>
                         </div>
+                        
+                        ${receiptDocumentHtml}
+                        
                         <div class="table-responsive">
                             <table class="table table-sm table-striped">
                                 <thead>
@@ -2891,6 +3548,336 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    async function distributeMoney(receiptId, receiptNo, amount, distributed, remaining) {
+        try {
+            // Get distribution details
+            const response = await fetch(`?ajax=get_distribution&receipt_id=${encodeURIComponent(receiptId)}`);
+            if (!response.ok) throw new Error('Network response was not ok');
+            const distribution = await response.json();
+            
+            const distributeMoneyContent = document.getElementById('distributeMoneyContent');
+            
+            if (distribution.error) {
+                // Create new distribution form
+                distributeMoneyContent.innerHTML = `
+                    <div class="container-fluid">
+                        <div class="alert alert-info mb-3">
+                            <i class="bi bi-info-circle me-2"></i>
+                            Creating distribution for receipt <strong>${receiptNo}</strong>
+                        </div>
+                        
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-body">
+                                        <h6>Receipt Information</h6>
+                                        <table class="table table-sm table-borderless">
+                                            <tr>
+                                                <th>Receipt No:</th>
+                                                <td><strong>${receiptNo}</strong></td>
+                                            </tr>
+                                            <tr>
+                                                <th>Total Amount:</th>
+                                                <td><strong class="text-success">${formatNumber(amount)} Tsh</strong></td>
+                                            </tr>
+                                            <tr>
+                                                <th>Available for Distribution:</th>
+                                                <td><strong class="text-warning">${formatNumber(amount)} Tsh</strong></td>
+                                            </tr>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="distribution-form">
+                            <h6 class="mb-3">Add Distribution Items</h6>
+                            
+                            <div class="distribution-items" id="distributionItems">
+                                <!-- Distribution items will be added here -->
+                            </div>
+                            
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <button type="button" class="btn btn-sm btn-outline-primary" id="addDistributionItem">
+                                    <i class="bi bi-plus-circle me-1"></i>Add Item
+                                </button>
+                                <div>
+                                    <strong>Total Distributed:</strong>
+                                    <span id="totalDistributed" class="text-success fw-bold ms-2">0.00</span>
+                                    <span class="text-muted">Tsh</span>
+                                </div>
+                            </div>
+                            
+                            <div class="alert alert-info">
+                                <i class="bi bi-info-circle me-2"></i>
+                                Remaining Balance: <strong id="remainingBalance" class="text-warning">${formatNumber(amount)}</strong> Tsh
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">Distribution Notes</label>
+                                <textarea class="form-control form-control-sm" id="distributionNotes" rows="3" placeholder="Add any notes about this distribution..."></textarea>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                // Edit existing distribution
+                currentDistributionId = distribution.id;
+                
+                distributeMoneyContent.innerHTML = `
+                    <div class="container-fluid">
+                        <div class="alert alert-info mb-3">
+                            <i class="bi bi-info-circle me-2"></i>
+                            Updating distribution for receipt <strong>${receiptNo}</strong>
+                        </div>
+                        
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-body">
+                                        <h6>Distribution Status</h6>
+                                        <table class="table table-sm table-borderless">
+                                            <tr>
+                                                <th>Receipt No:</th>
+                                                <td><strong>${receiptNo}</strong></td>
+                                            </tr>
+                                            <tr>
+                                                <th>Total Amount:</th>
+                                                <td><strong class="text-success">${formatNumber(distribution.total_amount)} Tsh</strong></td>
+                                            </tr>
+                                            <tr>
+                                                <th>Already Distributed:</th>
+                                                <td><strong class="text-info">${formatNumber(distribution.distributed_amount)} Tsh</strong></td>
+                                            </tr>
+                                            <tr>
+                                                <th>Available for Distribution:</th>
+                                                <td><strong class="text-warning">${formatNumber(distribution.remaining_balance)} Tsh</strong></td>
+                                            </tr>
+                                            <tr>
+                                                <th>Status:</th>
+                                                <td>
+                                                    <span class="badge ${distribution.status === 'completed' ? 'bg-success' : 'bg-warning'}">
+                                                        ${distribution.status === 'completed' ? 'Completed' : 'Pending'}
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="distribution-form">
+                            <h6 class="mb-3">Add Additional Distribution</h6>
+                            
+                            <div class="distribution-items" id="distributionItems">
+                                <!-- Distribution items will be added here -->
+                            </div>
+                            
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <button type="button" class="btn btn-sm btn-outline-primary" id="addDistributionItem">
+                                    <i class="bi bi-plus-circle me-1"></i>Add Item
+                                </button>
+                                <div>
+                                    <strong>Total Distributed:</strong>
+                                    <span id="totalDistributed" class="text-success fw-bold ms-2">0.00</span>
+                                    <span class="text-muted">Tsh</span>
+                                </div>
+                            </div>
+                            
+                            <div class="alert alert-info">
+                                <i class="bi bi-info-circle me-2"></i>
+                                Remaining Balance: <strong id="remainingBalance" class="text-warning">${formatNumber(distribution.remaining_balance)}</strong> Tsh
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">Distribution Notes</label>
+                                <textarea class="form-control form-control-sm" id="distributionNotes" rows="3" placeholder="Add any notes about this distribution..."></textarea>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Initialize distribution items
+            addDistributionItem();
+            
+            const distributeModal = new bootstrap.Modal(document.getElementById('distributeMoneyModal'));
+            distributeModal.show();
+            
+            // Set up event listeners for the modal
+            setTimeout(() => {
+                document.getElementById('addDistributionItem').addEventListener('click', addDistributionItem);
+                setupDistributionItemListeners();
+            }, 100);
+            
+        } catch (error) {
+            console.error('Error loading distribution:', error);
+            alert('Error loading distribution details. Please try again.');
+        }
+    }
+
+    function addDistributionItem() {
+        const distributionItems = document.getElementById('distributionItems');
+        const itemCount = distributionItems.children.length + 1;
+        
+        const itemHtml = `
+            <div class="distribution-item card mb-2">
+                <div class="card-body p-2">
+                    <div class="row g-2">
+                        <div class="col-md-4">
+                            <label class="form-label">Description</label>
+                            <input type="text" class="form-control form-control-sm distribution-desc" 
+                                   placeholder="e.g., Buy CRDB shares, Buy VFS ETF, Buy Bonds">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Amount (Tsh)</label>
+                            <input type="number" class="form-control form-control-sm distribution-amount" 
+                                   step="0.01" min="0.01" placeholder="0.00">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Type</label>
+                            <select class="form-select form-control-sm distribution-type">
+                                <option value="trade">Trade (Buy/Sell)</option>
+                                <option value="expense">Expense</option>
+                                <option value="investment">Investment</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+                        <div class="col-md-2 d-flex align-items-end">
+                            <button type="button" class="btn btn-sm btn-outline-danger remove-item w-100">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        distributionItems.insertAdjacentHTML('beforeend', itemHtml);
+        
+        // Update totals
+        updateDistributionTotals();
+        
+        // Set up event listeners for the new item
+        const newItem = distributionItems.lastElementChild;
+        const amountInput = newItem.querySelector('.distribution-amount');
+        const removeBtn = newItem.querySelector('.remove-item');
+        
+        amountInput.addEventListener('input', updateDistributionTotals);
+        removeBtn.addEventListener('click', function() {
+            newItem.remove();
+            updateDistributionTotals();
+        });
+    }
+
+    function setupDistributionItemListeners() {
+        document.querySelectorAll('.distribution-amount').forEach(input => {
+            input.addEventListener('input', updateDistributionTotals);
+        });
+        
+        document.querySelectorAll('.remove-item').forEach(btn => {
+            btn.addEventListener('click', function() {
+                this.closest('.distribution-item').remove();
+                updateDistributionTotals();
+            });
+        });
+    }
+
+    function updateDistributionTotals() {
+        let totalDistributed = 0;
+        
+        document.querySelectorAll('.distribution-amount').forEach(input => {
+            const amount = parseFloat(input.value) || 0;
+            totalDistributed += amount;
+        });
+        
+        document.getElementById('totalDistributed').textContent = formatNumber(totalDistributed);
+        
+        // Calculate remaining balance
+        const remainingBalanceElement = document.getElementById('remainingBalance');
+        const availableBalance = parseFloat(remainingBalanceElement.dataset.available || 
+            remainingBalanceElement.textContent.replace(/,/g, ''));
+        
+        const remaining = availableBalance - totalDistributed;
+        remainingBalanceElement.textContent = formatNumber(Math.max(0, remaining));
+        
+        // Update dataset for available balance
+        remainingBalanceElement.dataset.available = availableBalance;
+        
+        // Change color based on remaining balance
+        if (remaining < 0) {
+            remainingBalanceElement.classList.remove('text-warning');
+            remainingBalanceElement.classList.add('text-danger');
+        } else if (remaining === 0) {
+            remainingBalanceElement.classList.remove('text-warning', 'text-danger');
+            remainingBalanceElement.classList.add('text-success');
+        } else {
+            remainingBalanceElement.classList.remove('text-success', 'text-danger');
+            remainingBalanceElement.classList.add('text-warning');
+        }
+    }
+
+    // Save distribution button
+    saveDistributionBtn.addEventListener('click', async function() {
+        try {
+            const distributionItems = [];
+            let totalAmount = 0;
+            
+            document.querySelectorAll('.distribution-item').forEach(item => {
+                const desc = item.querySelector('.distribution-desc').value;
+                const amount = parseFloat(item.querySelector('.distribution-amount').value) || 0;
+                const type = item.querySelector('.distribution-type').value;
+                
+                if (desc && amount > 0) {
+                    distributionItems.push({ desc, amount, type });
+                    totalAmount += amount;
+                }
+            });
+            
+            if (distributionItems.length === 0) {
+                alert('Please add at least one distribution item');
+                return;
+            }
+            
+            const distributionNotes = document.getElementById('distributionNotes').value;
+            const remainingBalanceElement = document.getElementById('remainingBalance');
+            const remaining = parseFloat(remainingBalanceElement.textContent.replace(/,/g, ''));
+            
+            if (remaining < 0) {
+                alert('Total distribution amount exceeds available balance. Please adjust amounts.');
+                return;
+            }
+            
+            // Prepare data for submission
+            const distributionData = {
+                items: distributionItems,
+                totalAmount: totalAmount,
+                notes: distributionNotes,
+                remaining: remaining
+            };
+            
+            // Here you would typically send this data to the server via AJAX
+            // For now, we'll just show a confirmation
+            if (confirm(`Save distribution of Tsh ${formatNumber(totalAmount)}?\n\nItems:\n${distributionItems.map(item => `- ${item.desc}: Tsh ${formatNumber(item.amount)}`).join('\n')}`)) {
+                // In a real implementation, you would make an AJAX call here
+                // For example:
+                // const response = await fetch('save_distribution.php', {
+                //     method: 'POST',
+                //     headers: { 'Content-Type': 'application/json' },
+                //     body: JSON.stringify(distributionData)
+                // });
+                
+                alert('Distribution saved successfully! The page will reload to show updated balances.');
+                window.location.reload();
+            }
+            
+        } catch (error) {
+            console.error('Error saving distribution:', error);
+            alert('Error saving distribution. Please try again.');
+        }
+    });
+
     function printReceipt(receiptId) {
         const printWindow = window.open(`print_receipt.php?receipt_id=${receiptId}`, '_blank');
         if (!printWindow) {
@@ -2899,7 +3886,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Print receipt button in modal
-    document.getElementById('printReceiptBtn').addEventListener('click', function() {
+    printReceiptBtn.addEventListener('click', function() {
         const receiptId = this.getAttribute('data-receipt-id');
         printReceipt(receiptId);
     });

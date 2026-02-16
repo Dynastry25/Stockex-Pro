@@ -183,7 +183,7 @@ include '../includes/header.php';
                 </div>
             </div>
             <div class="col-md-4 text-end">
-                <a href="trades.php" class="btn btn-outline-secondary d-flex align-items-center justify-content-end">
+                <a href="trades" class="btn btn-outline-secondary d-flex align-items-center justify-content-end">
                     <i class="bi bi-arrow-left me-2"></i>
                     <span class="d-none d-sm-inline">Back to Trades</span>
                 </a>

@@ -47,3 +47,15 @@ Stack trace:
 #1 {main}
   thrown in /home1/jrozqhmy/public_html/website_02cf635f/config/config.php on line 56
 [03-Jan-2026 16:18:15 UTC] Warning: Could not auto-create employee record for user 16: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.employees' doesn't exist
+[09-Jan-2026 13:47:03 UTC] PHP Warning:  Undefined array key "username" in /home1/jrozqhmy/public_html/website_02cf635f/auth/login.php on line 62
+[09-Jan-2026 13:47:03 UTC] PHP Fatal error:  Uncaught TypeError: sanitize_input(): Argument #1 ($data) must be of type string, null given, called in /home1/jrozqhmy/public_html/website_02cf635f/auth/login.php on line 62 and defined in /home1/jrozqhmy/public_html/website_02cf635f/config/config.php:57
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/auth/login.php(62): sanitize_input(NULL)
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/config/config.php on line 57
+[14-Jan-2026 09:08:27 UTC] PHP Warning:  Undefined array key "username" in /home1/jrozqhmy/public_html/website_02cf635f/auth/login.php on line 62
+[14-Jan-2026 09:08:27 UTC] PHP Fatal error:  Uncaught TypeError: sanitize_input(): Argument #1 ($data) must be of type string, null given, called in /home1/jrozqhmy/public_html/website_02cf635f/auth/login.php on line 62 and defined in /home1/jrozqhmy/public_html/website_02cf635f/config/config.php:57
+Stack trace:
+#0 /home1/jrozqhmy/public_html/website_02cf635f/auth/login.php(62): sanitize_input(NULL)
+#1 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/config/config.php on line 57

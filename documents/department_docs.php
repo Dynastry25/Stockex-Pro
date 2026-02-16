@@ -279,7 +279,7 @@ if (isset($_GET['error'])) {
                         <button type="submit" class="btn btn-primary">
                             <i class="bi bi-funnel me-2"></i>Apply Filters
                         </button>
-                        <a href="department_docs.php" class="btn btn-outline-secondary">
+                        <a href="department_docs" class="btn btn-outline-secondary">
                             <i class="bi bi-arrow-clockwise me-2"></i>Reset
                         </a>
                     </div>
@@ -335,11 +335,11 @@ if (isset($_GET['error'])) {
                                 <td>
                                     <div class="btn-group btn-group-sm">
                                         <?php if ($doc['file_type'] == 'pdf'): ?>
-                                            <a href="view_document.php?id=<?php echo $doc['id']; ?>" class="btn btn-primary" target="_blank" title="View PDF">
-                                                <i class="bi bi-eye"></i> View
+                                            <a href="view_document?id=<?php echo $doc['id']; ?>" class="btn btn-primary" target="_blank" title="View PDF">
+                                                <i class="bi bi-eye"></i>
                                             </a>
                                         <?php endif; ?>
-                                        <a href="download_document.php?id=<?php echo $doc['id']; ?>" class="btn btn-success" title="Download">
+                                        <a href="download_document?id=<?php echo $doc['id']; ?>" class="btn btn-success" title="Download">
                                             <i class="bi bi-download"></i> Download
                                         </a>
                                     </div>

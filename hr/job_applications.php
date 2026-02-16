@@ -111,7 +111,7 @@ if (isset($_SESSION['error_message'])) {
         </div>
         <div>
             <?php if (!$position): ?>
-                <a href="recruitment.php" class="btn btn-secondary">
+                <a href="recruitment" class="btn btn-secondary">
                     <i class="bi bi-arrow-left me-2"></i>Back to Recruitment
                 </a>
             <?php endif; ?>
@@ -273,7 +273,7 @@ if (isset($_SESSION['error_message'])) {
 <div class="modal fade" id="addApplicationModal" tabindex="-1">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
-            <form method="POST" action="hr_application_actions.php" enctype="multipart/form-data">
+            <form method="POST" action="hr_application_actions" enctype="multipart/form-data">
                 <div class="modal-header">
                     <h5 class="modal-title">Add Job Application</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -396,7 +396,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const applicantName = this.getAttribute('data-name');
             
             if (confirm(`Are you sure you want to delete the application for ${applicantName}?`)) {
-                window.location.href = `hr_application_actions.php?action=delete&id=${applicationId}`;
+                window.location.href = `hr_application_actions?action=delete&id=${applicationId}`;
             }
         });
     });

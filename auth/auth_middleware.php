@@ -190,6 +190,45 @@ function check_session_permission($required_role) {
 }
 
 /**
+ * Check if current user has a specific role
+ * Returns true if user has the role or higher in hierarchy
+ */
+function has_role($required_role) {
+    $user_role = get_current_user_role();
+    
+    if (!$user_role) {
+        return false;
+    }
+    
+    // Normalize role names (convert to lowercase for consistency)
+    $required_role = strtolower($required_role);
+    $user_role_lower = strtolower($user_role);
+    
+    // Role hierarchy (from highest to lowest)
+    $role_hierarchy = [
+        'system_admin' => 5,
+        'ceo' => 4,
+        'hr_manager' => 3,
+        'hr_officer' => 3,
+        'finance_officer' => 2,
+        'trader' => 1,
+        'admin' => 5  // Alias for system_admin
+    ];
+    
+    // Map roles to normalized names
+    $normalized_required = $role_hierarchy[$required_role] ?? null;
+    $normalized_user = $role_hierarchy[$user_role_lower] ?? null;
+    
+    if ($normalized_required === null || $normalized_user === null) {
+        // If role not in hierarchy, check exact match
+        return $user_role_lower === $required_role;
+    }
+    
+    // User can access if their role is equal or higher in hierarchy
+    return $normalized_user >= $normalized_required;
+}
+
+/**
  * Redirect to specified URL
  * This is different from config.php's redirect() which adds BASE_URL
  */

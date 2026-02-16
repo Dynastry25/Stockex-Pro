@@ -761,7 +761,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($createdCount > 0) {
                     $success_message = "Successfully fetched and created {$createdCount} new fee assignments.";
                     // Auto-redirect to pending status
-                    header("Location: assign_regulatory_fees.php?status=pending");
+                    header("Location: assign_regulatory_fees?status=pending");
                     exit();
                 } else {
                     $success_message = "No new fee assignments created. All trades may already have fee assignments.";

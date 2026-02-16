@@ -54,7 +54,7 @@ include '../includes/header.php';
                 
                 <div class="card-body">
                     <!-- Form for share transaction reports (go to generate_share_report.php) -->
-                    <form id="shareReportForm" method="POST" action="generate_share_report.php" style="display: none;">
+                    <form id="shareReportForm" method="POST" action="generate_share_report" style="display: none;">
                         <input type="hidden" name="client" id="share_client">
                         <input type="hidden" name="agent" id="share_agent">
                         <input type="hidden" name="broker" id="share_broker">
@@ -75,7 +75,7 @@ include '../includes/header.php';
                     </form>
 
                     <!-- Form for bonds reports (go to generate_bonds_report.php) -->
-                    <form id="bondsReportForm" method="POST" action="generate_bonds_report.php" style="display: none;">
+                    <form id="bondsReportForm" method="POST" action="generate_bonds_report" style="display: none;">
                         <input type="hidden" name="client" id="bonds_client">
                         <input type="hidden" name="agent" id="bonds_agent">
                         <input type="hidden" name="broker" id="bonds_broker">
@@ -96,7 +96,7 @@ include '../includes/header.php';
                     </form>
 
                     <!-- Form for statutory deductions reports -->
-                    <form id="statutoryDeductionsForm" method="POST" action="Statutory_Deductions_Reports.php" style="display: none;">
+                    <form id="statutoryDeductionsForm" method="POST" action="Statutory_Deductions_Reports" style="display: none;">
                         <input type="hidden" name="client" id="statutory_client">
                         <input type="hidden" name="agent" id="statutory_agent">
                         <input type="hidden" name="broker" id="statutory_broker">
@@ -117,7 +117,7 @@ include '../includes/header.php';
                     </form>
 
                     <!-- Form for other reports that go to generate_report.php -->
-                    <form id="generateReportForm" method="POST" action="generate_report.php" style="display: none;">
+                    <form id="generateReportForm" method="POST" action="generate_report" style="display: none;">
                         <input type="hidden" name="client" id="generate_client">
                         <input type="hidden" name="agent" id="generate_agent">
                         <input type="hidden" name="broker" id="generate_broker">
@@ -138,7 +138,7 @@ include '../includes/header.php';
                     </form>
 
                     <!-- Form for contract notes that go to contract_note.php -->
-                    <form id="contractNoteForm" method="POST" action="contract_note.php" style="display: none;">
+                    <form id="contractNoteForm" method="POST" action="contract_note" style="display: none;">
                         <input type="hidden" name="client" id="contract_client">
                         <input type="hidden" name="agent" id="contract_agent">
                         <input type="hidden" name="broker" id="contract_broker">
@@ -159,7 +159,7 @@ include '../includes/header.php';
                     </form>
 
                     <!-- Form for commission reports that go to commissions.php -->
-                    <form id="commissionForm" method="POST" action="commissions.php" style="display: none;">
+                    <form id="commissionForm" method="POST" action="commissions" style="display: none;">
                         <input type="hidden" name="client" id="commission_client">
                         <input type="hidden" name="agent" id="commission_agent">
                         <input type="hidden" name="broker" id="commission_broker">

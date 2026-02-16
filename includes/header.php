@@ -19,7 +19,7 @@
         <?php 
         $current_user = get_logged_in_user(); 
         if (!$current_user || !is_array($current_user)) {
-            header("Location: " . BASE_URL . "auth/login.php");
+            header("Location: " . BASE_URL . "auth/login");
             exit();
         }
         ?>
@@ -47,25 +47,25 @@
                         $dashboard_link = '';
                         switch($current_user['role']) {
                             case 'system_admin':
-                                $dashboard_link = 'admin/dashboard.php';
+                                $dashboard_link = 'admin/dashboard';
                                 break;
                             case 'trader':
-                                $dashboard_link = 'trader/dashboard.php';
+                                $dashboard_link = 'trader/dashboard';
                                 break;
                             case 'finance_officer':
-                                $dashboard_link = 'finance/dashboard.php';
+                                $dashboard_link = 'finance/dashboard';
                                 break;
                             case 'hr':
                             case 'human_resource':
                             case 'hr_manager':
                             case 'hr_officer':
-                                $dashboard_link = 'hr/dashboard.php';
+                                $dashboard_link = 'hr/dashboard';
                                 break;
                             case 'ceo':
-                                $dashboard_link = 'ceo/dashboard.php'; // or create ceo/dashboard.php
+                                $dashboard_link = 'ceo/dashboard'; // or create ceo/dashboard
                                 break;
                             default:
-                                $dashboard_link = $current_user['role'] . '/dashboard.php';
+                                $dashboard_link = $current_user['role'] . '/dashboard';
                         }
                         ?>
                         <a class="nav-link" href="<?php echo BASE_URL . $dashboard_link; ?>">
@@ -78,7 +78,7 @@
                
                     
                        <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>leave_request.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>leave_request">
                             <i class="bi bi-calendar-check"></i>
                             <span>Request Leave</span>
                         </a>
@@ -86,7 +86,7 @@
                     
                     <!-- Your Performance Targets - Available for employees -->
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>my_targets.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>my_targets">
                             <i class="bi bi-bullseye"></i>
                             <span>My Performance Targets</span>
                         </a>
@@ -96,38 +96,38 @@
                     <?php if ($current_user['role'] == 'system_admin' || $current_user['role'] == 'ceo'): ?>
                     <!-- Admin/CEO Features -->
                         <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/likizo.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/likizo">
                             <i class="bi bi-calendar-check"></i>
                             <span>Employees Leaves</span>
                         </a>
                     </li>
                            <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/pay_employees.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/pay_employees">
                             <i class="bi bi-calendar-check"></i>
                             <span>Pay employees</span>
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/users.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/users">
                             <i class="bi bi-people"></i>
                             <span>User Management</span>
                         </a>
                     </li>
 
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/client_management.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/client_management">
                             <i class="bi bi-person-lines-fill"></i>
                             <span>Client Management</span>
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/master_data.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/master_data">
                             <i class="bi bi-database"></i>
                             <span>Master Data</span>
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/fee_management.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/fee_management">
                             <i class="bi bi-currency-dollar"></i>
                             <span>Fee Management</span>
                         </a>
@@ -140,27 +140,46 @@
                         <span class="nav-section-title">Trading</span>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/trades.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/trades">
                             <i class="bi bi-list-ul"></i>
                             <span>All Trades</span>
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/upload_interface.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/upload_interface">
                             <i class="bi bi-upload"></i>
                             <span>Upload Trades</span>
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/upload_bonds.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/upload_history">
                             <i class="bi bi-receipt-cutoff"></i>
-                            <span>Upload Bonds</span>
+                            <span>Upload SOR Historical Transaction</span>
+                        </a>
+                    </li>
+                    
+                        <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/client_management">
+                            <i class="bi bi-person-lines-fill"></i>
+                            <span>Client Management</span>
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/manage_lookups.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/send_contract_notes">
+                            <i class="bi bi-graph-up"></i>
+                            <span>Email Clients C notes</span>
+                        </a>
+                    </li>     
+                    <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/manage_lookups">
                             <i class="bi bi-graph-up"></i>
                             <span>Bond Settings</span>
+                        </a>
+                    </li>
+                      <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/check_missing_csd">
+                            <i class="bi bi-receipt-cutoff"></i>
+                            <span>Missing trades in CSD</span>
                         </a>
                     </li>
                    
@@ -172,55 +191,62 @@
                         <span class="nav-section-title">Finance</span>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/receipt.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/receipt">
                             <i class="bi bi-cash-stack"></i>
                             <span>Receipt</span>
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/payment.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/payment">
                             <i class="bi bi-cash-stack"></i>
                             <span>Payment</span>
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/upload_mtp.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/upload_mtp">
                             <i class="bi bi-cash-stack"></i>
                             <span>MTP Upload</span>
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/assign_regulatory_fees.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/assign_regulatory_fees">
                             <i class="bi bi-cash-stack"></i>
                             <span>Assigning Commission</span>
                         </a>
                     </li>
+                    
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/chart_of_accounts.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/chart_of_accounts">
                             <i class="bi bi-cash-stack"></i>
                             <span>Chart Of Accounts</span>
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/banks.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/banks">
                             <i class="bi bi-cash-stack"></i>
                             <span>Bank Accounts</span>
                         </a>
                     </li>
+                       <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/debtors">
+                            <i class="bi bi-cash-stack"></i>
+                            <span>Inflow and Outflows</span>
+                        </a>
+                    </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/manage_lookups.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/manage_lookups">
                             <i class="bi bi-cash-stack"></i>
                             <span>Master Settings</span>
                         </a>
                     </li> 
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/reports_dashboard.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/reports_dashboard">
                             <i class="bi bi-cash-stack"></i>
                             <span>Financial Reports</span>
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/reconciliation.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/reconciliation">
                             <i class="bi bi-check2-square"></i>
                             <span>Reconciliation</span>
                         </a>
@@ -233,49 +259,49 @@
                         <span class="nav-section-title">Human Resources</span>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>hr/employees.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>hr/employees">
                             <i class="bi bi-people-fill"></i>
                             <span>Employee Management</span>
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>hr/leave_management.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>hr/leave_management">
                             <i class="bi bi-calendar-check"></i>
                             <span>Leave Management</span>
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>hr/payroll.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>hr/payroll">
                             <i class="bi bi-cash-coin"></i>
                             <span>Payroll Setup</span>
                         </a>
                     </li>
                           <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>hr/pay_salary.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>hr/pay_salary">
                             <i class="bi bi-folder-fill"></i>
                             <span>Pay Salaries</span>
                         </a>
                     </li>
                       <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>hr/hr_payment_request.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>hr/hr_payment_request">
                             <i class="bi bi-folder-fill"></i>
                             <span>HR Other payments</span>
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>hr/recruitment.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>hr/recruitment">
                             <i class="bi bi-person-badge"></i>
                             <span>Recruitment</span>
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>hr/targets.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>hr/targets">
                             <i class="bi bi-bullseye"></i>
                             <span>Performance Targets</span>
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>hr/reports.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>hr/reports">
                             <i class="bi bi-graph-up"></i>
                             <span>HR Reports</span>
                         </a>
@@ -288,13 +314,13 @@
                         <span class="nav-section-title">CEO Approvals</span>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/approvals_dashboard.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/approvals_dashboard">
                             <i class="bi bi-check-circle"></i>
                             <span>Approval Dashboard</span>
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/reports_dashboard.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/reports_dashboard">
                             <i class="bi bi-graph-up"></i>
                             <span>Finance Reports</span>
                         </a>
@@ -306,7 +332,7 @@
                         <span class="nav-section-title">Document Center</span>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>documents/department_docs.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>documents/department_docs">
                             <i class="bi bi-folder-fill"></i>
                             <span>Document Repository</span>
                         </a>
@@ -319,7 +345,7 @@
                         <span class="nav-section-title">Reports</span>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>reports/advanced_reports.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>reports/advanced_reports">
                             <i class="bi bi-file-earmark-bar-graph"></i>
                             <span>Advanced Reports</span>
                         </a>
@@ -331,13 +357,13 @@
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>reports/receipts.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>reports/receipts">
                             <i class="bi bi-receipt"></i>
                             <span>Receipts</span>
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>reports/invoices.php">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>reports/invoices">
                             <i class="bi bi-file-earmark-invoice"></i>
                             <span>Invoices</span>
                         </a>
@@ -390,14 +416,14 @@
                                     </div>
                                 </li>
                                 <li><hr class="dropdown-divider"></li>
-                                <li><a class="dropdown-item" href="<?php echo BASE_URL; ?>profile.php">
+                                <li><a class="dropdown-item" href="<?php echo BASE_URL; ?>profile">
                                     <i class="bi bi-person"></i> My Profile
                                 </a></li>
-                                <li><a class="dropdown-item" href="<?php echo BASE_URL; ?>documents/department_docs.php">
+                                <li><a class="dropdown-item" href="<?php echo BASE_URL; ?>documents/department_docs">
                                     <i class="bi bi-folder"></i> Document Center
                                 </a></li>
                                 <li><hr class="dropdown-divider"></li>
-                                <li><a class="dropdown-item" href="<?php echo BASE_URL; ?>auth/logout.php">
+                                <li><a class="dropdown-item" href="<?php echo BASE_URL; ?>auth/logout">
                                     <i class="bi bi-box-arrow-right"></i> Sign Out
                                 </a></li>
                             </ul>

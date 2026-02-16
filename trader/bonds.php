@@ -548,7 +548,7 @@ if (isset($_GET['action']) && isset($_GET['id'])) {
                     ];
                     
                     // Redirect back to show modal
-                    header('Location: trades.php?show_contract_modal=1');
+                    header('Location: trades?show_contract_modal=1');
                     exit;
                 } else {
                     // Single trade - generate contract note directly
@@ -1334,7 +1334,7 @@ include '../includes/header.php';
                             <h5 class="modal-title mb-0" id="contractNoteModalLabel">Generate Contract Note</h5>
                             <small class="opacity-75">Multiple trades detected for <?php echo htmlspecialchars($client_data['client_name']); ?></small>
                         </div>
-                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close" onclick="window.location.href='trades.php';"></button>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close" onclick="window.location.href='trades';"></button>
                     </div>
                 </div>
                 <div class="modal-body p-4">
@@ -1846,7 +1846,7 @@ include '../includes/header.php';
     <div>
         <!-- Clickable client name -->
         <?php if ($trade['client_id']): ?>
-            <a href="client_profile.php?id=<?php echo $trade['client_id']; ?>" 
+            <a href="client_profile?id=<?php echo $trade['client_id']; ?>" 
                class="fw-medium text-decoration-none text-primary hover-underline" 
                title="View Client Profile">
                 <?php echo htmlspecialchars($trade['proper_client_name'] ?? $trade['client_name']); ?>
@@ -1914,7 +1914,7 @@ include '../includes/header.php';
                                                title="Generate Contract Note">
                                                 <i class="bi bi-file-earmark-text"></i>
                                             </a>
-                                            <a href="view_trade.php?id=<?php echo $trade['id']; ?>" 
+                                            <a href="view_trade?id=<?php echo $trade['id']; ?>" 
                                                class="btn btn-outline-secondary btn-sm" 
                                                title="View Details">
                                                 <i class="bi bi-eye"></i>
@@ -2131,7 +2131,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (contractModal) {
         contractModal.addEventListener('click', function(e) {
             if (e.target === this) {
-                window.location.href = 'trades.php';
+                window.location.href = 'trades';
             }
         });
     }

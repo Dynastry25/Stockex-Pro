@@ -42,7 +42,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'delete' && isset($_GET['id'])
     $message = 'Fee configuration deleted successfully!';
     $message_type = 'success';
     // Redirect to the same page to remove the deleted fee from the URL
-    header('Location: fee_management.php?message=' . urlencode($message) . '&type=' . urlencode($message_type));
+    header('Location: fee_management?message=' . urlencode($message) . '&type=' . urlencode($message_type));
     exit;
 }
 
@@ -76,7 +76,7 @@ include '../includes/header.php';
 <div class="container-fluid py-4">
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h1 class="h3 mb-0">Fee Management</h1>
-        <a href="DASHBOARD.php" class="btn btn-outline-secondary">
+        <a href="DASHBOARD" class="btn btn-outline-secondary">
             <i class="bi bi-arrow-left me-2"></i> Back to Dashboard
         </a>
     </div>
@@ -95,7 +95,7 @@ include '../includes/header.php';
                     <h5 class="card-title mb-0"><?php echo $fee_data ? 'Edit Fee' : 'Add New Fee'; ?></h5>
                 </div>
                 <div class="card-body">
-                    <form action="fee_management.php" method="POST">
+                    <form action="fee_management" method="POST">
                         <?php if ($fee_data): ?>
                             <input type="hidden" name="id" value="<?php echo htmlspecialchars($fee_data['id']); ?>">
                         <?php endif; ?>
@@ -189,10 +189,10 @@ include '../includes/header.php';
                                             <td class="border-0 text-muted">Tsh <?php echo number_format($fee['fixed_amount'], 2); ?></td>
                                             <td class="border-0"><?php echo ucwords(str_replace('_', ' ', $fee['calculation_base'])); ?></td>
                                             <td class="border-0">
-                                                <a href="fee_management.php?id=<?php echo $fee['id']; ?>" class="btn btn-sm btn-outline-primary me-2">
-                                                    <i class="bi bi-pencil-square"></i> Edit
+                                                <a href="fee_management?id=<?php echo $fee['id']; ?>" class="btn btn-sm btn-outline-primary me-2">
+                                                    <i class="bi bi-pencil"></i> Edit
                                                 </a>
-                                                <a href="fee_management.php?action=delete&id=<?php echo $fee['id']; ?>" class="btn btn-sm btn-outline-danger" onclick="return confirm('Are you sure you want to delete this fee?');">
+                                                <a href="fee_management?action=delete&id=<?php echo $fee['id']; ?>" class="btn btn-sm btn-outline-danger" onclick="return confirm('Are you sure you want to delete this fee?');">
                                                     <i class="bi bi-trash"></i> Delete
                                                 </a>
                                             </td>

@@ -92,7 +92,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             ]);
                             
                             $_SESSION['success_message'] = 'Leave request submitted successfully. HR will review your request.';
-                            header('Location: leave_request.php');
+                            header('Location: leave_request');
                             exit();
                         } else {
                             $error_message = 'Error submitting leave request. Please try again.';
@@ -457,7 +457,7 @@ include 'includes/header.php';
                                             </td>
                                             <td>
                                                 <?php if ($leave['status'] == 'pending' && !$leave['requires_ceo_approval']): ?>
-                                                    <form method="POST" action="leave_request.php" class="d-inline">
+                                                    <form method="POST" action="leave_request" class="d-inline">
                                                         <input type="hidden" name="leave_id" value="<?php echo $leave['id']; ?>">
                                                         <button type="submit" name="cancel_leave" class="btn btn-sm btn-outline-danger" 
                                                                 onclick="return confirm('Are you sure you want to cancel this leave request?');">

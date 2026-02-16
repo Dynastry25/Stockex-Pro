@@ -130,7 +130,7 @@ include '../includes/header.php';
                             <td><strong>$<?php echo format_currency($invoice['net_amount']); ?></strong></td>
                             <td><?php echo format_date($invoice['invoice_date']); ?></td>
                             <td>
-                                <a href="print_invoice.php?id=<?php echo $invoice['id']; ?>" 
+                                <a href="print_invoice?id=<?php echo $invoice['id']; ?>" 
                                    class="btn btn-sm btn-outline-primary" target="_blank">
                                     <i class="bi bi-printer"></i> Print
                                 </a>

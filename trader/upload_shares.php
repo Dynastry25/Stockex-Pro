@@ -46,6 +46,7 @@ $custodian_trades_recorded = 0;
 $company_investments_recorded = 0;
 $etf_trades_recorded = 0;
 $regulatory_assignments_created = 0;
+$csd_references_used = 0;
 
 // Get company details
 function getCompanyDetails($db) {
@@ -55,7 +56,7 @@ function getCompanyDetails($db) {
         $result = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if (!$result) {
-            return ['company_code' => 'B13/C', 'company_name' => 'Victory Financial Services'];
+            return ['company_code' => 'B13/C', 'company_name' => 'Neovam Technologies LTD'];
         }
         
         return [
@@ -63,7 +64,7 @@ function getCompanyDetails($db) {
             'company_name' => $result['company_name']
         ];
     } catch (Exception $e) {
-        return ['company_code' => 'B13/C', 'company_name' => 'Victory Financial Services'];
+        return ['company_code' => 'B13/C', 'company_name' => 'Neovam Technologies LTD'];
     }
 }
 
@@ -88,34 +89,7 @@ function safe_int_format($value) {
     return number_format((int)$numeric_value);
 }
 
-// NEW: Generate unique short trade reference (6-7 characters)
-function generateShortTradeReference($db) {
-    $max_attempts = 10;
-    $attempt = 0;
-    
-    while ($attempt < $max_attempts) {
-        // Generate timestamp-based reference (6-7 chars)
-        $timestamp = time();
-        $short_hash = substr(hash('crc32', $timestamp . mt_rand()), 0, 6);
-        $trade_ref = 'T' . $short_hash; // T + 6 chars = 7 chars total
-        
-        // Check if reference already exists
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM trades WHERE trade_reference = ?");
-        $stmt->execute([$trade_ref]);
-        $exists = $stmt->fetch()['count'] > 0;
-        
-        if (!$exists) {
-            return $trade_ref;
-        }
-        
-        $attempt++;
-    }
-    
-    // Fallback to longer reference if all attempts fail
-    return generate_reference_number('TRD');
-}
-
-// NEW: Function to check and insert client if not exists
+// NEW: Check and insert client if not exists
 function checkAndInsertClient($db, $cds_account, $client_name, $created_by = 'system') {
     try {
         // First check if client exists by CDS account
@@ -156,40 +130,180 @@ function checkAndInsertClient($db, $cds_account, $client_name, $created_by = 'sy
     }
 }
 
-// NEW: Check for duplicate trade
-function isDuplicateTrade($db, $client_cds, $security_id, $trade_date, $quantity, $price, $trade_side) {
+// NEW: Check if trade exists in csd_historical_trades and get CSD reference
+function getCSDReferenceForTrade($db, $client_cds, $security_id, $trade_date, $quantity, $price, $trade_side, $client_name = '') {
     try {
+        // Clean input values
+        $client_cds = trim($client_cds);
+        $security_id = trim($security_id);
+        $client_name = trim($client_name);
+        
+        // First try exact match with all parameters (excluding trade_side as it might be different in CSD)
         $stmt = $db->prepare("
-            SELECT COUNT(*) as count 
-            FROM trades 
-            WHERE client_cds_account = ? 
-            AND security_id = ? 
-            AND trade_date = ? 
-            AND quantity = ? 
-            AND price = ? 
-            AND trade_side = ?
+            SELECT csd_reference, sor_account, client_name, quantity, price, trade_date
+            FROM csd_historical_trades 
+            WHERE sor_account = ? 
+            AND instrument = ? 
+            AND trade_date = ?
+            AND quantity = ?
+            LIMIT 1
         ");
         
         $stmt->execute([
             $client_cds,
             $security_id,
             $trade_date,
-            $quantity,
-            $price,
-            $trade_side
+            $quantity
         ]);
         
-        $count = $stmt->fetch()['count'];
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
         
-        if ($count > 0) {
-            error_log("Duplicate trade detected: {$client_cds} - {$security_id} - {$trade_date} - Qty: {$quantity} - Price: {$price} - Side: {$trade_side}");
+        if ($result && !empty($result['csd_reference'])) {
+            error_log("Found exact CSD match for trade: {$client_cds} - {$security_id} - {$trade_date} - Qty: {$quantity}");
+            return $result['csd_reference'];
+        }
+        
+        // If no exact match, try matching by client name and other parameters
+        if (!empty($client_name)) {
+            $stmt = $db->prepare("
+                SELECT csd_reference 
+                FROM csd_historical_trades 
+                WHERE client_name LIKE ? 
+                AND instrument = ? 
+                AND trade_date = ?
+                AND quantity = ?
+                LIMIT 1
+            ");
+            
+            $stmt->execute([
+                "%" . $client_name . "%",
+                $security_id,
+                $trade_date,
+                $quantity
+            ]);
+            
+            $result = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($result && !empty($result['csd_reference'])) {
+                error_log("Found CSD match by client name: {$client_name} - {$security_id} - {$trade_date} - Qty: {$quantity}");
+                return $result['csd_reference'];
+            }
+        }
+        
+        // Try matching by just client CDS and security (most lenient match)
+        $stmt = $db->prepare("
+            SELECT csd_reference 
+            FROM csd_historical_trades 
+            WHERE sor_account = ?
+            AND instrument = ? 
+            AND trade_date = ?
+            LIMIT 1
+        ");
+        
+        $stmt->execute([
+            $client_cds,
+            $security_id,
+            $trade_date
+        ]);
+        
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($result && !empty($result['csd_reference'])) {
+            error_log("Found CSD match by client CDS and security: {$client_cds} - {$security_id} - {$trade_date}");
+            return $result['csd_reference'];
+        }
+        
+        return null;
+        
+    } catch (Exception $e) {
+        error_log("Error checking CSD historical trades: " . $e->getMessage());
+        return null;
+    }
+}
+
+// MODIFIED: Generate trade reference - ONLY generate new if NOT in CSD historical trades
+function getTradeReference($db, $client_cds, $security_id, $trade_date, $quantity, $price, $trade_side, $client_name = '') {
+    // First check if trade exists in CSD historical trades
+    $csd_reference = getCSDReferenceForTrade($db, $client_cds, $security_id, $trade_date, $quantity, $price, $trade_side, $client_name);
+    
+    if ($csd_reference) {
+        error_log("Using CSD reference as trade reference: {$csd_reference}");
+        return $csd_reference; // Always use CSD reference if found
+    }
+    
+    // Only generate new reference if no CSD reference found
+    return generateShortTradeReference($db);
+}
+
+// Generate unique short trade reference (6-7 characters) - ONLY when needed
+function generateShortTradeReference($db) {
+    $max_attempts = 10;
+    $attempt = 0;
+    
+    while ($attempt < $max_attempts) {
+        // Generate timestamp-based reference (6-7 chars)
+        $timestamp = time();
+        $short_hash = substr(hash('crc32', $timestamp . mt_rand()), 0, 6);
+        $trade_ref = 'T' . $short_hash; // T + 6 chars = 7 chars total
+        
+        // Check if reference already exists in trades table
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM trades WHERE trade_reference = ?");
+        $stmt->execute([$trade_ref]);
+        $exists_in_trades = $stmt->fetch()['count'] > 0;
+        
+        // Also check if it exists in CSD historical trades (shouldn't happen but just in case)
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM csd_historical_trades WHERE csd_reference = ?");
+        $stmt->execute([$trade_ref]);
+        $exists_in_csd = $stmt->fetch()['count'] > 0;
+        
+        if (!$exists_in_trades && !$exists_in_csd) {
+            error_log("Generated new trade reference: {$trade_ref}");
+            return $trade_ref;
+        }
+        
+        $attempt++;
+    }
+    
+    // Fallback to longer reference if all attempts fail
+    $fallback_ref = 'TRD' . date('YmdHis') . mt_rand(100, 999);
+    error_log("Generated fallback trade reference: {$fallback_ref}");
+    return $fallback_ref;
+}
+
+// MODIFIED: Check if trade already exists in any table with the SAME reference
+function isDuplicateTrade($db, $trade_reference) {
+    try {
+        // Check trades table
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM trades WHERE trade_reference = ?");
+        $stmt->execute([$trade_reference]);
+        $count_trades = $stmt->fetch()['count'];
+        
+        // Check etf_trades table
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM etf_trades WHERE trade_reference = ?");
+        $stmt->execute([$trade_reference]);
+        $count_etf = $stmt->fetch()['count'];
+        
+        // Check custodians_trades table
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM custodians_trades WHERE trade_reference = ?");
+        $stmt->execute([$trade_reference]);
+        $count_custodians = $stmt->fetch()['count'];
+        
+        // Check regulatory_fee_assignments table
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM regulatory_fee_assignments WHERE trade_reference = ?");
+        $stmt->execute([$trade_reference]);
+        $count_regulatory = $stmt->fetch()['count'];
+        
+        $total_count = $count_trades + $count_etf + $count_custodians + $count_regulatory;
+        
+        if ($total_count > 0) {
+            error_log("Duplicate trade reference detected: {$trade_reference} (trades: {$count_trades}, etf: {$count_etf}, custodians: {$count_custodians}, regulatory: {$count_regulatory})");
             return true;
         }
         
         return false;
         
     } catch (Exception $e) {
-        error_log("Error checking duplicate trade: " . $e->getMessage());
+        error_log("Error checking duplicate trade reference: " . $e->getMessage());
         return false; // Don't block on error
     }
 }
@@ -534,6 +648,16 @@ function createEquityAccountingEntries($db, $trade_reference, $consideration, $f
 // Insert regulatory fees into assignments table for accountant review - INCLUDING VRF
 function recordRegulatoryFeeAssignment($db, $trade_reference, $fees, $client_name, $trade_date, $security_id, $security_name, $consideration, $trade_side, $created_by) {
     try {
+        // First check if regulatory fee assignment already exists for this trade reference
+        $check_stmt = $db->prepare("SELECT COUNT(*) as count FROM regulatory_fee_assignments WHERE trade_reference = ?");
+        $check_stmt->execute([$trade_reference]);
+        $exists = $check_stmt->fetch()['count'] > 0;
+        
+        if ($exists) {
+            error_log("Regulatory fee assignment already exists for trade reference: {$trade_reference}");
+            return true; // Already exists, skip
+        }
+        
         $stmt = $db->prepare("
             INSERT INTO regulatory_fee_assignments 
             (trade_reference, client_name, security_id, security_name, trade_date, 
@@ -582,6 +706,16 @@ function recordRegulatoryFeeAssignment($db, $trade_reference, $fees, $client_nam
 // Record company's own equity investment transactions using hierarchical accounts
 function recordCompanyEquityInvestment($db, $trade_reference, $consideration, $trade_side, $trade_date) {
     try {
+        // First check if company investment already exists for this trade reference
+        $check_stmt = $db->prepare("SELECT COUNT(*) as count FROM general_ledger WHERE reference_no = ? AND reference_type = 'company_investment'");
+        $check_stmt->execute([$trade_reference]);
+        $exists = $check_stmt->fetch()['count'] > 0;
+        
+        if ($exists) {
+            error_log("Company investment already exists for trade reference: {$trade_reference}");
+            return true; // Already exists, skip
+        }
+        
         // Get hierarchical accounts using new COA structure
         $investment_account = getAccountIdByCode($db, 'equity_investments'); // 1253 - Equity Investments
         $cash_equity_account = getAccountIdByCode($db, 'cash_bank');         // 1112 - Cash at Bank
@@ -649,6 +783,16 @@ function calculateCustodianFees($fees) {
 // Record custodian trade
 function recordCustodianTrade($db, $trade_data) {
     try {
+        // First check if custodian trade already exists for this trade reference
+        $check_stmt = $db->prepare("SELECT COUNT(*) as count FROM custodians_trades WHERE trade_reference = ?");
+        $check_stmt->execute([$trade_data['trade_reference']]);
+        $exists = $check_stmt->fetch()['count'] > 0;
+        
+        if ($exists) {
+            error_log("Custodian trade already exists for trade reference: {$trade_data['trade_reference']}");
+            return true; // Already exists, skip
+        }
+        
         $stmt = $db->prepare("
             INSERT INTO custodians_trades 
             (trade_reference, custodian_code, custodian_name, asset_class, security_id, security_name,
@@ -688,6 +832,16 @@ function recordCustodianTrade($db, $trade_data) {
 // Record ETF trade in etf_trades table
 function recordETFTrade($db, $trade_data) {
     try {
+        // First check if ETF trade already exists for this trade reference
+        $check_stmt = $db->prepare("SELECT COUNT(*) as count FROM etf_trades WHERE trade_reference = ?");
+        $check_stmt->execute([$trade_data['trade_reference']]);
+        $exists = $check_stmt->fetch()['count'] > 0;
+        
+        if ($exists) {
+            error_log("ETF trade already exists for trade reference: {$trade_data['trade_reference']}");
+            return true; // Already exists, skip
+        }
+        
         $stmt = $db->prepare("
             INSERT INTO etf_trades 
             (trade_reference, etf_id, etf_name, isin, client_cds_account, client_name, 
@@ -979,7 +1133,7 @@ function mapCSVRowToDatabase($row) {
     ];
 }
 
-// MODIFIED: Updated ETF validation function with client check
+// MODIFIED: Updated ETF validation function with CSD reference check
 function validateEquityData($row, $line_num, $db, $company_code) {
     $errors = [];
     
@@ -1088,15 +1242,21 @@ function validateEquityData($row, $line_num, $db, $company_code) {
         }
     }
     
-    // Check for duplicate trade
-    if (!empty($mapped_data['client_cds']) && !empty($security_id) && !empty($mapped_data['trade_date'])) {
-        $quantity = !empty($mapped_data['quantity']) ? (int)$mapped_data['quantity'] : 0;
-        $price = !empty($mapped_data['price']) ? (float)$mapped_data['price'] : 0;
-        $trade_side = strtolower(trim($mapped_data['trade_side']));
-        
-        if (isDuplicateTrade($db, $mapped_data['client_cds'], $security_id, $mapped_data['trade_date'], $quantity, $price, $trade_side)) {
-            $errors[] = "Duplicate trade detected. This trade already exists in the database.";
-        }
+    // Get trade reference to check for duplicates
+    $trade_reference = getTradeReference(
+        $db, 
+        $mapped_data['client_cds'], 
+        $security_id, 
+        $mapped_data['trade_date'], 
+        $mapped_data['quantity'], 
+        $mapped_data['price'], 
+        $mapped_data['trade_side'], 
+        $mapped_data['client_name']
+    );
+    
+    // Check if trade already exists with this reference in any table
+    if (isDuplicateTrade($db, $trade_reference)) {
+        $errors[] = "Duplicate trade detected. Trade reference '{$trade_reference}' already exists in the database.";
     }
     
     return $errors;
@@ -1120,6 +1280,7 @@ function filterEquityRows($rows) {
         } else {
             error_log("  -> REJECTED (not Equity or ETF)");
         }
+    
     }
     
     error_log("Total rows: " . count($rows) . ", Equity/ETF rows: " . count($equity_rows));
@@ -1137,10 +1298,23 @@ function processDataInChunks($equity_rows) {
         $asset_class = strtolower(trim($mapped_data['asset_class'] ?? ''));
         $is_etf = ($asset_class === 'exchange traded funds');
         
+        // Get trade reference for preview
+        $trade_reference = getTradeReference(
+            $GLOBALS['db'], 
+            $mapped_data['client_cds'], 
+            $mapped_data['security_id'], 
+            $mapped_data['trade_date'], 
+            $mapped_data['quantity'], 
+            $mapped_data['price'], 
+            $mapped_data['trade_side'], 
+            $mapped_data['client_name']
+        );
+        
         $preview_data[] = [
             'line_number' => $line_number++,
             'data' => $row,
             'mapped_data' => $mapped_data,
+            'trade_reference' => $trade_reference,
             'has_errors' => false, // Will be set during validation
             'errors' => [],
             'is_company_trade' => $is_company_trade,
@@ -1222,9 +1396,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $company_investments_recorded = 0;
                                 $etf_trades_recorded = 0;
                                 $regulatory_assignments_created = 0;
+                                $csd_references_used = 0;
                                 
                                 foreach ($preview_data as $preview_row) {
                                     $mapped_data = $preview_row['mapped_data'];
+                                    $trade_reference = $preview_row['trade_reference'];
+                                    
+                                    // Check if this is a CSD reference
+                                    $is_csd_reference = (getCSDReferenceForTrade(
+                                        $db,
+                                        $mapped_data['client_cds'],
+                                        $mapped_data['security_id'],
+                                        $mapped_data['trade_date'],
+                                        $mapped_data['quantity'],
+                                        $mapped_data['price'],
+                                        $mapped_data['trade_side'],
+                                        $mapped_data['client_name']
+                                    ) !== null);
+                                    
+                                    if ($is_csd_reference) {
+                                        $csd_references_used++;
+                                        error_log("Processing trade with CSD reference: {$trade_reference}");
+                                    } else {
+                                        error_log("Processing new trade with generated reference: {$trade_reference}");
+                                    }
                                     
                                     $security_id = $mapped_data['security_id'];
                                     $trade_date = $mapped_data['trade_date'];
@@ -1248,58 +1443,63 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         }
                                     }
                                     
-                                    // NEW: Generate unique short trade reference
-                                    $trade_reference = generateShortTradeReference($db);
-                                    error_log("Generated trade reference: {$trade_reference}");
-                                    
                                     // FIXED: Use exact enum values from your database schema
                                     $asset_class = $is_etf ? 'Exchange Traded Funds' : 'equity';
                                     
-                                    // Insert trade record
-                                    $trade_insert_stmt = $db->prepare("
-                                        INSERT INTO trades (
-                                            trade_reference, asset_class, security_id, security_name,
-                                            client_cds_account, client_name, 
-                                            counterparty_name, counterparty_cds_account,
-                                            trade_side, quantity, price, consideration,
-                                            trade_date, settlement_date, currency, sca_code, status, uploaded_by,
-                                            capacity, broker_name, counterparty_broker, brokerage_fee_type, final_brokerage_fee
-                                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                    ");
+                                    // Check if trade already exists in trades table
+                                    $check_trade_stmt = $db->prepare("SELECT COUNT(*) as count FROM trades WHERE trade_reference = ?");
+                                    $check_trade_stmt->execute([$trade_reference]);
+                                    $trade_exists = $check_trade_stmt->fetch()['count'] > 0;
+                                    
+                                    if (!$trade_exists) {
+                                        // Insert trade record only if it doesn't exist
+                                        $trade_insert_stmt = $db->prepare("
+                                            INSERT INTO trades (
+                                                trade_reference, asset_class, security_id, security_name,
+                                                client_cds_account, client_name, 
+                                                counterparty_name, counterparty_cds_account,
+                                                trade_side, quantity, price, consideration,
+                                                trade_date, settlement_date, currency, sca_code, status, uploaded_by,
+                                                capacity, broker_name, counterparty_broker, brokerage_fee_type, final_brokerage_fee
+                                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                        ");
 
-                                    $counterparty_name = $mapped_data['counterparty_name'] ?? 'Unknown';
-                                    $counterparty_cds = $mapped_data['counterparty_cds'] ?? '';
-                                    $broker_name = $mapped_data['broker_name'] ?? '';
-                                    $counterparty_broker = $mapped_data['counterparty_broker'] ?? '';
-                                    $capacity = $mapped_data['capacity'] ?? 'principal';
-                                    
-                                    $trade_insert_stmt->execute([
-                                        $trade_reference, 
-                                        $asset_class, 
-                                        substr($security_id, 0, 50),
-                                        substr($mapped_data['stock_name'], 0, 100),
-                                        substr($client_cds, 0, 50),
-                                        substr($client_name, 0, 100),
-                                        substr($counterparty_name, 0, 100),
-                                        substr($counterparty_cds, 0, 50),
-                                        $trade_side, 
-                                        $quantity, 
-                                        $price, 
-                                        $consideration,
-                                        $trade_date, 
-                                        $settlement_date, 
-                                        'TZS', 
-                                        substr($sca_code, 0, 20),
-                                        'active', 
-                                        $current_user['id'],
-                                        $capacity,
-                                        substr($broker_name, 0, 100),
-                                        substr($counterparty_broker, 0, 100),
-                                        'normal',
-                                        0.00
-                                    ]);
-                                    
-                                    error_log("Successfully inserted trade: {$trade_reference} - Asset Class: {$asset_class}");
+                                        $counterparty_name = $mapped_data['counterparty_name'] ?? 'Unknown';
+                                        $counterparty_cds = $mapped_data['counterparty_cds'] ?? '';
+                                        $broker_name = $mapped_data['broker_name'] ?? '';
+                                        $counterparty_broker = $mapped_data['counterparty_broker'] ?? '';
+                                        $capacity = $mapped_data['capacity'] ?? 'principal';
+                                        
+                                        $trade_insert_stmt->execute([
+                                            $trade_reference, 
+                                            $asset_class, 
+                                            substr($security_id, 0, 50),
+                                            substr($mapped_data['stock_name'], 0, 100),
+                                            substr($client_cds, 0, 50),
+                                            substr($client_name, 0, 100),
+                                            substr($counterparty_name, 0, 100),
+                                            substr($counterparty_cds, 0, 50),
+                                            $trade_side, 
+                                            $quantity, 
+                                            $price, 
+                                            $consideration,
+                                            $trade_date, 
+                                            $settlement_date, 
+                                            'TZS', 
+                                            substr($sca_code, 0, 20),
+                                            'active', 
+                                            $current_user['id'],
+                                            $capacity,
+                                            substr($broker_name, 0, 100),
+                                            substr($counterparty_broker, 0, 100),
+                                            'normal',
+                                            0.00
+                                        ]);
+                                        
+                                        error_log("Successfully inserted trade: {$trade_reference} - Asset Class: {$asset_class}");
+                                    } else {
+                                        error_log("Trade already exists with reference: {$trade_reference} - skipping insert");
+                                    }
                                     
                                     // Record ETF trade in etf_trades table if it's an ETF
                                     if ($is_etf) {
@@ -1324,7 +1524,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                             $etf_trades_recorded++;
                                             error_log("Successfully recorded ETF trade: {$trade_reference}");
                                         } else {
-                                            error_log("Failed to record ETF trade: {$trade_reference}");
+                                            error_log("Failed to record ETF trade or already exists: {$trade_reference}");
                                         }
                                     }
                                     
@@ -1333,6 +1533,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         if (recordCompanyEquityInvestment($db, $trade_reference, $consideration, $trade_side, $trade_date)) {
                                             $company_investments_recorded++;
                                             error_log("Company investment recorded: {$trade_reference}");
+                                        } else {
+                                            error_log("Company investment already exists or failed: {$trade_reference}");
                                         }
                                     }
                                     
@@ -1358,6 +1560,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                             if ($assignment_result) {
                                                 $regulatory_assignments_created++;
                                                 error_log("Regulatory fee assignment recorded: {$trade_reference} (Includes VRF)");
+                                            } else {
+                                                error_log("Regulatory fee assignment already exists or failed: {$trade_reference}");
                                             }
                                         }
                                         
@@ -1365,6 +1569,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         if (createEquityAccountingEntries($db, $trade_reference, $consideration, $fees, $trade_side, $client_name, $company_name, $trade_date, $is_custodian_trade)) {
                                             $financial_entries_created++;
                                             error_log("Accounting entries created for trade: {$trade_reference}");
+                                        } else {
+                                            error_log("Accounting entries already exist or failed for trade: {$trade_reference}");
                                         }
                                         
                                         // Record custodian trade if applicable
@@ -1399,6 +1605,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                                 if (recordCustodianTrade($db, $custodian_trade_data)) {
                                                     $custodian_trades_recorded++;
                                                     error_log("Custodian trade recorded: {$trade_reference}");
+                                                } else {
+                                                    error_log("Custodian trade already exists or failed: {$trade_reference}");
                                                 }
                                             }
                                         }
@@ -1418,6 +1626,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         $success_message .= " ({$etf_trades_recorded} ETF trades)";
                                     }
                                     
+                                    if ($csd_references_used > 0) {
+                                        $success_message .= ". <strong>{$csd_references_used} trades used existing CSD references</strong> from historical data.";
+                                    }
+                                    
+                                    $new_trades = $processed - $csd_references_used;
+                                    if ($new_trades > 0) {
+                                        $success_message .= ". <strong>{$new_trades} new trades</strong> were created with generated references.";
+                                    }
+                                    
                                     if ($financial_entries_created > 0) {
                                         $success_message .= ". Created financial entries for {$financial_entries_created} trades";
                                         if ($company_investments_recorded > 0) {
@@ -1435,7 +1652,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         $success_message .= ". <strong>{$regulatory_assignments_created} regulatory fee assignments created</strong> for accountant review (includes VRF fees).";
                                     }
                                     
-                                    $success_message .= "<br><small><strong>Trade References Generated:</strong> " . count($preview_data) . " unique references (6-7 chars each)</small>";
+                                    $success_message .= "<br><small><strong>Trade References Used:</strong> {$csd_references_used} CSD references, {$new_trades} new references</small>";
                                     $preview_data = [];
                                 }
                                 
@@ -1489,7 +1706,7 @@ include '../includes/header.php';
                 <strong>Code:</strong> <?php echo htmlspecialchars($company_code); ?>
             </small></p>
             <p class="text-info small">
-                <i class="bi bi-info-circle"></i> <strong>NEW FEATURES:</strong> Auto-creates clients, prevents duplicate trades, generates short trade references (6-7 chars)
+                <i class="bi bi-info-circle"></i> <strong>NEW FEATURES:</strong> Auto-creates clients, prevents duplicate trades, uses CSD references when available
             </p>
         </div>
     </div>
@@ -1538,7 +1755,7 @@ include '../includes/header.php';
                     <button type="submit" class="btn btn-primary" id="uploadButton">
                         <i class="bi bi-upload me-1"></i>Upload Shares & ETFs
                     </button>
-                    <a href="enter_shares.php" class="btn btn-secondary">Back to Shares</a>
+                    <a href="enter_shares" class="btn btn-secondary">Back to Shares</a>
                 </form>
             </div>
         </div>
@@ -1581,7 +1798,7 @@ include '../includes/header.php';
                                 <th>Quantity</th>
                                 <th>Price</th>
                                 <th>Consideration</th>
-                                <th>Financial Entry</th>
+                                <th>Trade Reference</th>
                                 <th>Status</th>
                             </tr>
                         </thead>
@@ -1589,6 +1806,7 @@ include '../includes/header.php';
                             <?php foreach ($preview_data as $preview_row): 
                                 $mapped_data = $preview_row['mapped_data'];
                                 $consideration = !empty($mapped_data['consideration']) ? (float)$mapped_data['consideration'] : ((float)$mapped_data['quantity'] * (float)$mapped_data['price']);
+                                $is_csd_ref = (strpos($preview_row['trade_reference'], 'T') !== 0); // CSD refs don't start with T
                             ?>
                             <tr class="<?php echo $preview_row['has_errors'] ? 'table-danger' : 'table-success'; ?>">
                                 <td class="fw-bold"><?php echo $preview_row['line_number']; ?></td>
@@ -1621,11 +1839,14 @@ include '../includes/header.php';
                                 <td>Tsh<?php echo safe_number_format($mapped_data['price']); ?></td>
                                 <td>Tsh<?php echo safe_int_format($consideration); ?></td>
                                 <td>
-                                    <?php if ($consideration > 0 && !$preview_row['has_errors']): ?>
-                                        <span class="badge bg-success">Yes</span>
-                                    <?php else: ?>
-                                        <span class="badge bg-secondary">No</span>
-                                    <?php endif; ?>
+                                    <code class="small">
+                                        <?php echo htmlspecialchars($preview_row['trade_reference']); ?>
+                                        <?php if ($is_csd_ref): ?>
+                                            <span class="badge bg-success ms-1">CSD</span>
+                                        <?php else: ?>
+                                            <span class="badge bg-secondary ms-1">New</span>
+                                        <?php endif; ?>
+                                    </code>
                                 </td>
                                 <td>
                                     <?php if ($preview_row['has_errors']): ?>
@@ -1670,12 +1891,13 @@ include '../includes/header.php';
                     <li><strong>VRF Fee</strong>: 0.0025% on consideration (assigned later - NOW INCLUDED)</li>
                 </ul>
                 <hr>
-                <small class="text-success"><strong>NEW AUTO-FEATURES:</strong></small>
+                <small class="text-success"><strong>CSD REFERENCE INTEGRATION:</strong></small>
                 <ul class="small">
-                    <li><strong>Client Auto-Creation:</strong> Creates new clients in database if CDS account doesn't exist</li>
-                    <li><strong>Duplicate Prevention:</strong> Checks for identical trades before inserting</li>
-                    <li><strong>Short References:</strong> Generates 6-7 character trade references (e.g., T1A2B3C)</li>
-                    <li><strong>Date Conversion:</strong> Automatically converts MM/DD/YYYY to YYYY-MM-DD</li>
+                    <li><strong>Automatic CSD Matching:</strong> When a trade matches one in <code>csd_historical_trades</code>, the CSD reference is used as the <code>trade_reference</code></li>
+                    <li><strong>Single Reference System:</strong> The same reference is used across ALL tables (trades, etf_trades, custodians_trades, regulatory_fee_assignments, general_ledger)</li>
+                    <li><strong>Duplicate Prevention:</strong> Prevents inserting the same trade multiple times</li>
+                    <li><strong>Fallback Generation:</strong> If no CSD match found, generates new short references (T + 6 chars)</li>
+                    <li><strong>Visual Indicators:</strong> Shows which trades use CSD references vs new references</li>
                 </ul>
                 <div class="mt-2">
                     <small class="text-warning"><strong>Note:</strong> All regulatory fees (CMSA, CSDR, DSE, VRF) are recorded in <code>regulatory_fee_assignments</code> table for accountant review. The accountant will assign them as either Expense or Liability using the NEW hierarchical accounts.</small>

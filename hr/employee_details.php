@@ -50,10 +50,10 @@ include '../includes/header.php';
             <i class="bi bi-person-circle me-2"></i>Employee Details
         </h1>
         <div>
-            <a href="dashboard.php" class="btn btn-secondary">
-                <i class="bi bi-arrow-left me-2"></i>Back to Dashboard
+            <a href="dashboard" class="btn btn-secondary">
+                <i class="bi bi-arrow-left"></i> Back to Dashboard
             </a>
-            <a href="employees.php" class="btn btn-primary">
+            <a href="employees" class="btn btn-primary">
                 <i class="bi bi-people me-2"></i>All Employees
             </a>
         </div>
@@ -341,10 +341,10 @@ include '../includes/header.php';
                         <button class="btn btn-outline-primary" onclick="printEmployeeDetails()">
                             <i class="bi bi-printer me-2"></i>Print Details
                         </button>
-                        <a href="leave_request.php?employee_id=<?php echo $employee['id']; ?>" class="btn btn-outline-info">
-                            <i class="bi bi-calendar-x me-2"></i>Request Leave
+                        <a href="leave_request?employee_id=<?php echo $employee['id']; ?>" class="btn btn-outline-info">
+                            <i class="bi bi-calendar-plus"></i> Request Leave
                         </a>
-                        <a href="payroll.php?employee_id=<?php echo $employee['id']; ?>" class="btn btn-outline-success">
+                        <a href="payroll?employee_id=<?php echo $employee['id']; ?>" class="btn btn-outline-success">
                             <i class="bi bi-cash me-2"></i>View Payroll
                         </a>
                     </div>

@@ -395,3 +395,84 @@ Stack trace:
 [06-Jan-2026 14:00:35 UTC] Error fetching approved leaves: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'lr.ceo_decided_by' in 'on clause'
 [06-Jan-2026 14:00:35 UTC] Error fetching approved recruitment: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'jp.position_name' in 'field list'
 [06-Jan-2026 14:00:35 UTC] Error fetching approved targets: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'pt.ceo_decided_by' in 'on clause'
+[08-Jan-2026 13:41:27 UTC] Error fetching pending recruitment: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'jp.position_name' in 'field list'
+[08-Jan-2026 13:41:27 UTC] Error fetching approved leaves: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'lr.ceo_decided_by' in 'on clause'
+[08-Jan-2026 13:41:27 UTC] Error fetching approved recruitment: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'jp.position_name' in 'field list'
+[08-Jan-2026 13:41:27 UTC] Error fetching approved targets: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'pt.ceo_decided_by' in 'on clause'
+[09-Jan-2026 17:23:57 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 778
+[09-Jan-2026 17:23:57 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 779
+[09-Jan-2026 17:23:57 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 780
+[09-Jan-2026 17:23:57 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 781
+[09-Jan-2026 17:23:57 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 782
+[09-Jan-2026 17:23:57 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 783
+[09-Jan-2026 17:23:57 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 786
+[09-Jan-2026 17:23:57 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 787
+[09-Jan-2026 17:23:57 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 808
+[09-Jan-2026 17:23:57 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 821
+[09-Jan-2026 17:23:57 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 828
+[09-Jan-2026 17:23:57 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 849
+[11-Jan-2026 19:40:44 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 815
+[11-Jan-2026 19:40:44 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 816
+[11-Jan-2026 19:40:44 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 817
+[11-Jan-2026 19:40:44 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 818
+[11-Jan-2026 19:40:44 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 819
+[11-Jan-2026 19:40:44 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 820
+[11-Jan-2026 19:40:44 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 823
+[11-Jan-2026 19:40:44 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 824
+[11-Jan-2026 19:40:44 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 860
+[11-Jan-2026 19:40:44 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 860
+[11-Jan-2026 19:40:44 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 860
+[11-Jan-2026 19:40:44 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 873
+[11-Jan-2026 19:40:44 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 880
+[11-Jan-2026 19:40:44 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 904
+[11-Jan-2026 19:40:44 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 904
+[11-Jan-2026 19:40:44 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 904
+[11-Jan-2026 19:40:44 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 904
+[11-Jan-2026 20:09:51 UTC] PHP Deprecated:  ucfirst(): Passing null to parameter #1 ($string) of type string is deprecated in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_management.php on line 422
+[11-Jan-2026 20:26:20 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 640
+[11-Jan-2026 20:26:20 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 641
+[11-Jan-2026 20:26:20 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 642
+[11-Jan-2026 20:26:20 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 643
+[11-Jan-2026 20:26:20 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 644
+[11-Jan-2026 20:26:20 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 647
+[11-Jan-2026 20:26:20 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 648
+[11-Jan-2026 20:26:20 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 654
+[11-Jan-2026 20:26:20 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 654
+[11-Jan-2026 20:26:20 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 654
+[11-Jan-2026 20:26:20 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 697
+[11-Jan-2026 20:26:20 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 700
+[11-Jan-2026 20:26:20 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 704
+[12-Jan-2026 05:09:09 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 640
+[12-Jan-2026 05:09:09 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 641
+[12-Jan-2026 05:09:09 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 642
+[12-Jan-2026 05:09:09 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 643
+[12-Jan-2026 05:09:09 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 644
+[12-Jan-2026 05:09:09 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 647
+[12-Jan-2026 05:09:09 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 648
+[12-Jan-2026 05:09:09 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 684
+[12-Jan-2026 05:09:09 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 684
+[12-Jan-2026 05:09:09 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 684
+[12-Jan-2026 05:09:09 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 697
+[12-Jan-2026 05:09:09 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 700
+[12-Jan-2026 05:09:09 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 707
+[12-Jan-2026 05:32:32 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 640
+[12-Jan-2026 05:32:32 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 641
+[12-Jan-2026 05:32:32 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 642
+[12-Jan-2026 05:32:32 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 643
+[12-Jan-2026 05:32:32 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 644
+[12-Jan-2026 05:32:32 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 647
+[12-Jan-2026 05:32:32 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 648
+[12-Jan-2026 05:32:32 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 684
+[12-Jan-2026 05:32:32 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 684
+[12-Jan-2026 05:32:32 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 684
+[12-Jan-2026 05:32:32 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 697
+[12-Jan-2026 05:32:32 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 700
+[12-Jan-2026 05:32:32 UTC] PHP Deprecated:  fputcsv(): the $escape parameter must be provided as its default value will change in /home1/jrozqhmy/public_html/website_02cf635f/ceo/client_profile.php on line 707
+[16-Jan-2026 08:09:40 UTC] Error fetching pending recruitment: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'jp.position_name' in 'field list'
+[16-Jan-2026 08:09:40 UTC] Error fetching approved leaves: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'lr.ceo_decided_by' in 'on clause'
+[16-Jan-2026 08:09:40 UTC] Error fetching approved recruitment: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'jp.position_name' in 'field list'
+[16-Jan-2026 08:09:40 UTC] Error fetching approved targets: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'pt.ceo_decided_by' in 'on clause'
+[09-Feb-2026 11:01:53 UTC] Error fetching pending recruitment: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'jp.position_name' in 'field list'
+[09-Feb-2026 11:01:53 UTC] Error fetching approved leaves: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'lr.ceo_decided_by' in 'on clause'
+[09-Feb-2026 11:01:53 UTC] Error fetching approved recruitment: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'jp.position_name' in 'field list'
+[09-Feb-2026 11:01:53 UTC] Error fetching approved targets: SQLSTATE[42S22]: Column not found: 1054 Unknown column 'pt.ceo_decided_by' in 'on clause'

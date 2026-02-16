@@ -146,3 +146,19 @@
 [06-Jan-2026 20:27:24 UTC] PHP Notice:  session_start(): Ignoring session_start() because a session is already active (started from /home1/jrozqhmy/public_html/website_02cf635f/config/config.php on line 13) in /home1/jrozqhmy/public_html/website_02cf635f/admin/bond_calculator.php on line 24
 [06-Jan-2026 20:27:36 UTC] PHP Notice:  session_start(): Ignoring session_start() because a session is already active (started from /home1/jrozqhmy/public_html/website_02cf635f/config/config.php on line 13) in /home1/jrozqhmy/public_html/website_02cf635f/admin/bond_calculator.php on line 24
 [06-Jan-2026 20:29:59 UTC] PHP Notice:  session_start(): Ignoring session_start() because a session is already active (started from /home1/jrozqhmy/public_html/website_02cf635f/config/config.php on line 13) in /home1/jrozqhmy/public_html/website_02cf635f/admin/bond_calculator.php on line 24
+[26-Jan-2026 14:30:23 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function has_role() in /home1/jrozqhmy/public_html/website_02cf635f/admin/client_management.php:6
+Stack trace:
+#0 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/admin/client_management.php on line 6
+[26-Jan-2026 14:30:36 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function has_role() in /home1/jrozqhmy/public_html/website_02cf635f/admin/client_management.php:6
+Stack trace:
+#0 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/admin/client_management.php on line 6
+[05-Feb-2026 15:18:38 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function has_role() in /home1/jrozqhmy/public_html/website_02cf635f/admin/client_management.php:6
+Stack trace:
+#0 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/admin/client_management.php on line 6
+[13-Feb-2026 09:22:33 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function has_role() in /home1/jrozqhmy/public_html/website_02cf635f/admin/client_management.php:6
+Stack trace:
+#0 {main}
+  thrown in /home1/jrozqhmy/public_html/website_02cf635f/admin/client_management.php on line 6

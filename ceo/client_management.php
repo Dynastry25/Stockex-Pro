@@ -17,61 +17,70 @@ $db = getDBConnection();
 $success_message = '';
 $error_message = '';
 
-// Handle merge accounts action (This part is already efficient and does not need changes)
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['merge_accounts'])) {
+// Handle export to Excel
+if (isset($_GET['export']) && $_GET['export'] == 'excel') {
+    exportClientsToExcel($db);
+    exit;
+}
+
+// Handle filtered export to Excel
+if (isset($_GET['export_filtered']) && $_GET['export_filtered'] == 'excel') {
+    exportFilteredClientsToExcel($db);
+    exit;
+}
+
+// Handle CDS merging (from client profile)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['merge_cds'])) {
     $primary_client_id = (int)$_POST['primary_client_id'];
-    $merge_client_ids = $_POST['merge_client_ids'] ?? [];
+    $merge_client_id = (int)$_POST['merge_client_id'];
     
-    if ($primary_client_id && !empty($merge_client_ids)) {
-        $db->beginTransaction();
-        
+    if ($primary_client_id && $merge_client_id && $primary_client_id != $merge_client_id) {
         try {
-            // Get primary client details
-            $stmt = $db->prepare("SELECT * FROM clients WHERE id = ?");
+            // Get client details
+            $stmt = $db->prepare("SELECT * FROM clients WHERE id = ? AND is_active = 1");
             $stmt->execute([$primary_client_id]);
             $primary_client = $stmt->fetch();
             
-            if (!$primary_client) {
-                throw new Exception("Primary client not found");
-            }
+            $stmt->execute([$merge_client_id]);
+            $merge_client = $stmt->fetch();
             
-            foreach ($merge_client_ids as $merge_id) {
-                $merge_id = (int)$merge_id;
-                if ($merge_id === $primary_client_id) continue;
+            if ($primary_client && $merge_client) {
+                // Check if merge already exists
+                $stmt = $db->prepare("SELECT id FROM merged_cds_accounts WHERE (primary_cds_account = ? AND merged_cds_account = ?) OR (primary_cds_account = ? AND merged_cds_account = ?)");
+                $stmt->execute([$primary_client['cds_account'], $merge_client['cds_account'], $merge_client['cds_account'], $primary_client['cds_account']]);
+                $existing_merge = $stmt->fetch();
                 
-                // Get merge client details
-                $stmt = $db->prepare("SELECT * FROM clients WHERE id = ?");
-                $stmt->execute([$merge_id]);
-                $merge_client = $stmt->fetch();
-                
-                if ($merge_client) {
-                    $stmt = $db->prepare("UPDATE trades SET client_cds_account = ?, client_name = ? WHERE client_cds_account = ?");
-                    $stmt->execute([$primary_client['cds_account'], $primary_client['client_name'], $merge_client['cds_account']]);
+                if (!$existing_merge) {
+                    // Create merged_cds_accounts table if it doesn't exist
+                    $create_table_sql = "CREATE TABLE IF NOT EXISTS merged_cds_accounts (
+                        id INT PRIMARY KEY AUTO_INCREMENT,
+                        primary_cds_account VARCHAR(50) NOT NULL,
+                        merged_cds_account VARCHAR(50) NOT NULL,
+                        merged_by INT NOT NULL,
+                        merged_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        status ENUM('active', 'inactive') DEFAULT 'active',
+                        FOREIGN KEY (merged_by) REFERENCES users(id) ON DELETE CASCADE,
+                        INDEX idx_primary (primary_cds_account),
+                        INDEX idx_merged (merged_cds_account)
+                    )";
+                    $db->exec($create_table_sql);
                     
-                    $stmt = $db->prepare("UPDATE trades SET counterparty_cds_account = ?, counterparty_name = ? WHERE counterparty_cds_account = ?");
-                    $stmt->execute([$primary_client['cds_account'], $primary_client['client_name'], $merge_client['cds_account']]);
+                    // Insert merge record
+                    $stmt = $db->prepare("INSERT INTO merged_cds_accounts (primary_cds_account, merged_cds_account, merged_by) VALUES (?, ?, ?)");
+                    $stmt->execute([$primary_client['cds_account'], $merge_client['cds_account'], $_SESSION['user_id']]);
                     
-                    $stmt = $db->prepare("UPDATE trade_receipts SET client_cds_account = ?, client_name = ? WHERE client_cds_account = ?");
-                    $stmt->execute([$primary_client['cds_account'], $primary_client['client_name'], $merge_client['cds_account']]);
-                    
-                    $stmt = $db->prepare("UPDATE trade_invoices SET client_cds_account = ?, client_name = ? WHERE client_cds_account = ?");
-                    $stmt->execute([$primary_client['cds_account'], $primary_client['client_name'], $merge_client['cds_account']]);
-                    
-                    $stmt = $db->prepare("INSERT INTO client_merge_log (primary_client_id, merged_client_id, merged_cds_account, merged_by, created_at) VALUES (?, ?, ?, ?, NOW())");
-                    $stmt->execute([$primary_client_id, $merge_id, $merge_client['cds_account'], $_SESSION['user_id']]);
-                    
-                    $stmt = $db->prepare("UPDATE clients SET is_active = 0, merged_into = ?, updated_at = NOW() WHERE id = ?");
-                    $stmt->execute([$primary_client_id, $merge_id]);
+                    $success_message = "CDS accounts merged successfully!";
+                } else {
+                    $error_message = "These CDS accounts are already merged.";
                 }
+            } else {
+                $error_message = "One or both clients not found.";
             }
-            
-            $db->commit();
-            $success_message = "Successfully merged " . count($merge_client_ids) . " client accounts into primary account.";
-            
         } catch (Exception $e) {
-            $db->rollBack();
-            $error_message = "Error merging accounts: " . $e->getMessage();
+            $error_message = "Error merging CDS accounts: " . $e->getMessage();
         }
+    } else {
+        $error_message = "Please select two different clients to merge.";
     }
 }
 
@@ -80,8 +89,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_client'])) {
     $client_name = trim($_POST['client_name']);
     $cds_account = trim($_POST['cds_account']);
     $client_type = $_POST['client_type'];
+    $national_id = trim($_POST['national_id']);
+    $date_of_birth = trim($_POST['date_of_birth']);
     $phone = trim($_POST['phone']);
     $email = trim($_POST['email']);
+    $address = trim($_POST['address']);
+    $bank_account_number = trim($_POST['bank_account_number']);
+    $bank_name = trim($_POST['bank_name']);
+    $bank_branch = trim($_POST['bank_branch']);
+    $currency = trim($_POST['currency']) ?: 'TZS';
+    $client_code = trim($_POST['client_code']);
+    $fee_type = trim($_POST['fee_type']) ?: 'normal';
+    $default_brokerage_fee = !empty($_POST['default_brokerage_fee']) ? (float)$_POST['default_brokerage_fee'] : null;
 
     // Basic validation
     if (empty($client_name) || empty($cds_account) || empty($client_type)) {
@@ -94,8 +113,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_client'])) {
             if ($stmt->fetchColumn() > 0) {
                 $error_message = "A client with this CDS account already exists.";
             } else {
-                $stmt = $db->prepare("INSERT INTO clients (client_name, cds_account, client_type, phone, email, created_by) VALUES (?, ?, ?, ?, ?, ?)");
-                $stmt->execute([$client_name, $cds_account, $client_type, $phone, $email, $_SESSION['user_id']]);
+                $stmt = $db->prepare("INSERT INTO clients 
+                    (client_name, cds_account, client_type, national_id, date_of_birth, phone, email, 
+                     address, bank_account_number, bank_name, bank_branch, currency, client_code, 
+                     fee_type, default_brokerage_fee, status, created_by) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)");
+                
+                $stmt->execute([
+                    $client_name, $cds_account, $client_type, $national_id ?: null, 
+                    $date_of_birth ?: null, $phone ?: null, $email ?: null, $address ?: null,
+                    $bank_account_number ?: null, $bank_name ?: null, $bank_branch ?: null,
+                    $currency, $client_code ?: null, $fee_type, $default_brokerage_fee, $_SESSION['user_id']
+                ]);
+                
                 $success_message = "New client '$client_name' added successfully!";
             }
         } catch (Exception $e) {
@@ -104,18 +134,132 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_client'])) {
     }
 }
 
+// Handle edit client action
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_client'])) {
+    $client_id = (int)$_POST['client_id'];
+    $client_name = trim($_POST['client_name']);
+    $cds_account = trim($_POST['cds_account']);
+    $client_type = $_POST['client_type'];
+    $national_id = trim($_POST['national_id']);
+    $date_of_birth = trim($_POST['date_of_birth']);
+    $phone = trim($_POST['phone']);
+    $email = trim($_POST['email']);
+    $address = trim($_POST['address']);
+    $bank_account_number = trim($_POST['bank_account_number']);
+    $bank_name = trim($_POST['bank_name']);
+    $bank_branch = trim($_POST['bank_branch']);
+    $currency = trim($_POST['currency']) ?: 'TZS';
+    $client_code = trim($_POST['client_code']);
+    $fee_type = trim($_POST['fee_type']) ?: 'normal';
+    $default_brokerage_fee = !empty($_POST['default_brokerage_fee']) ? (float)$_POST['default_brokerage_fee'] : null;
+    $status = $_POST['status'];
+
+    // Basic validation
+    if (empty($client_name) || empty($cds_account) || empty($client_type) || empty($status)) {
+        $error_message = "Required fields are missing.";
+    } else {
+        try {
+            // Check if CDS account already exists for another client
+            $stmt = $db->prepare("SELECT COUNT(*) FROM clients WHERE cds_account = ? AND id != ? AND is_active = 1");
+            $stmt->execute([$cds_account, $client_id]);
+            if ($stmt->fetchColumn() > 0) {
+                $error_message = "A client with this CDS account already exists.";
+            } else {
+                $stmt = $db->prepare("UPDATE clients SET 
+                    client_name = ?, 
+                    cds_account = ?, 
+                    national_id = ?, 
+                    date_of_birth = ?, 
+                    phone = ?, 
+                    email = ?, 
+                    client_type = ?, 
+                    address = ?, 
+                    bank_account_number = ?, 
+                    bank_name = ?, 
+                    bank_branch = ?, 
+                    default_brokerage_fee = ?, 
+                    fee_type = ?, 
+                    client_code = ?, 
+                    status = ?, 
+                    updated_at = NOW() 
+                    WHERE id = ?");
+                
+                $stmt->execute([
+                    $client_name, 
+                    $cds_account, 
+                    $national_id ?: null, 
+                    $date_of_birth ?: null, 
+                    $phone ?: null, 
+                    $email ?: null, 
+                    $client_type, 
+                    $address ?: null,
+                    $bank_account_number ?: null, 
+                    $bank_name ?: null, 
+                    $bank_branch ?: null,
+                    $default_brokerage_fee, 
+                    $fee_type, 
+                    $client_code ?: null, 
+                    $status, 
+                    $client_id
+                ]);
+                
+                $success_message = "Client '$client_name' updated successfully!";
+            }
+        } catch (Exception $e) {
+            $error_message = "Error updating client: " . $e->getMessage();
+        }
+    }
+}
+
+// Handle delete client action (soft delete)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_client'])) {
+    $client_id = (int)$_POST['client_id'];
+    
+    try {
+        // Check if client has any active trades
+        $stmt = $db->prepare("SELECT COUNT(*) FROM trades WHERE client_cds_account = (SELECT cds_account FROM clients WHERE id = ?) AND status = 'active'");
+        $stmt->execute([$client_id]);
+        $trade_count = $stmt->fetchColumn();
+        
+        if ($trade_count > 0) {
+            $error_message = "Cannot delete client with active trades. Please deactivate the client instead.";
+        } else {
+            $stmt = $db->prepare("UPDATE clients SET is_active = 0, status = 'inactive', updated_at = NOW() WHERE id = ?");
+            $stmt->execute([$client_id]);
+            
+            if ($stmt->rowCount() > 0) {
+                $success_message = "Client deleted successfully!";
+            } else {
+                $error_message = "Client not found.";
+            }
+        }
+    } catch (Exception $e) {
+        $error_message = "Error deleting client: " . $e->getMessage();
+    }
+}
+
 // --- Pagination and Filter Logic ---
 $records_per_page = 20;
 $current_page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 $start_from = ($current_page - 1) * $records_per_page;
 $search_query = isset($_GET['search']) ? trim($_GET['search']) : '';
+$status_filter = isset($_GET['status']) ? $_GET['status'] : 'active';
 
 // Prepare the WHERE clause for filtering
 $where_clause = 'WHERE c.is_active = 1';
 $params = [];
+if ($status_filter === 'inactive') {
+    $where_clause = 'WHERE c.is_active = 0';
+} elseif ($status_filter === 'all') {
+    $where_clause = 'WHERE 1=1';
+}
+
 if (!empty($search_query)) {
-    $where_clause .= ' AND (c.client_name LIKE ? OR c.cds_account LIKE ?)';
+    $where_clause .= (strpos($where_clause, 'WHERE') === false ? ' WHERE ' : ' AND ') . 
+                     '(c.client_name LIKE ? OR c.cds_account LIKE ? OR c.national_id LIKE ? OR c.client_code LIKE ?)';
     $like_search = '%' . $search_query . '%';
+    $params[] = $like_search;
+    $params[] = $like_search;
     $params[] = $like_search;
     $params[] = $like_search;
 }
@@ -127,19 +271,17 @@ $total_stmt->execute($params);
 $total_records = $total_stmt->fetchColumn();
 $total_pages = ceil($total_records / $records_per_page);
 
-// --- START OF MAJOR OPTIMIZATION ---
-// This new query is much faster because it uses a single JOIN and GROUP BY
-// to get all the trade counts, instead of running subqueries for every single row.
-// The new indexes you added will make this query even faster.
+// Get all clients with trade counts
 $all_clients = [];
 $sql = "
     SELECT
         c.*,
         COUNT(t.id) as trade_count,
         SUM(CASE WHEN t.asset_class = 'bond' THEN 1 ELSE 0 END) as bond_count,
-        SUM(CASE WHEN t.asset_class = 'equity' THEN 1 ELSE 0 END) as equity_count
+        SUM(CASE WHEN t.asset_class = 'equity' THEN 1 ELSE 0 END) as equity_count,
+        SUM(CASE WHEN t.asset_class = 'Exchange Traded Funds' THEN 1 ELSE 0 END) as etf_count
     FROM clients c
-    LEFT JOIN trades t ON c.cds_account = t.client_cds_account
+    LEFT JOIN trades t ON c.cds_account = t.client_cds_account AND t.status = 'active'
     $where_clause
     GROUP BY c.id
     ORDER BY c.client_name
@@ -148,11 +290,190 @@ $sql = "
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $all_clients = $stmt->fetchAll();
-// --- END OF MAJOR OPTIMIZATION ---
 
-// The code for detecting duplicate clients has been removed from the page load.
-// This was the source of the slowness, as it was a computationally expensive query
-// that's not suited for a real-time web page.
+// Function to export all clients to Excel
+function exportClientsToExcel($db) {
+    $sql = "
+        SELECT
+            c.*,
+            COUNT(t.id) as trade_count,
+            SUM(CASE WHEN t.asset_class = 'bond' THEN 1 ELSE 0 END) as bond_count,
+            SUM(CASE WHEN t.asset_class = 'equity' THEN 1 ELSE 0 END) as equity_count,
+            SUM(CASE WHEN t.asset_class = 'Exchange Traded Funds' THEN 1 ELSE 0 END) as etf_count
+        FROM clients c
+        LEFT JOIN trades t ON c.cds_account = t.client_cds_account AND t.status = 'active'
+        WHERE c.is_active = 1
+        GROUP BY c.id
+        ORDER BY c.client_name";
+    
+    $stmt = $db->prepare($sql);
+    $stmt->execute();
+    $clients = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Set headers for Excel download
+    header('Content-Type: application/vnd.ms-excel');
+    header('Content-Disposition: attachment; filename="clients_export_' . date('Ymd_His') . '.xls"');
+    header('Cache-Control: max-age=0');
+    
+    // Start output
+    echo "<table border='1'>";
+    echo "<tr>";
+    echo "<th>Client Name</th>";
+    echo "<th>CDS Account</th>";
+    echo "<th>Client Type</th>";
+    echo "<th>National ID</th>";
+    echo "<th>Date of Birth</th>";
+    echo "<th>Phone</th>";
+    echo "<th>Email</th>";
+    echo "<th>Address</th>";
+    echo "<th>Bank Account</th>";
+    echo "<th>Bank Name</th>";
+    echo "<th>Bank Branch</th>";
+    echo "<th>Client Code</th>";
+    echo "<th>Status</th>";
+    echo "<th>Total Trades</th>";
+    echo "<th>Bond Trades</th>";
+    echo "<th>Equity Trades</th>";
+    echo "<th>ETF Trades</th>";
+    echo "<th>Created At</th>";
+    echo "</tr>";
+    
+    foreach ($clients as $client) {
+        echo "<tr>";
+        echo "<td>" . htmlspecialchars($client['client_name']) . "</td>";
+        echo "<td>" . htmlspecialchars($client['cds_account']) . "</td>";
+        echo "<td>" . ($client['client_type'] ? ucfirst($client['client_type']) : 'N/A') . "</td>";
+        echo "<td>" . htmlspecialchars($client['national_id'] ?? '') . "</td>";
+        echo "<td>" . (!empty($client['date_of_birth']) ? date('d/m/Y', strtotime($client['date_of_birth'])) : '') . "</td>";
+        echo "<td>" . htmlspecialchars($client['phone'] ?? '') . "</td>";
+        echo "<td>" . htmlspecialchars($client['email'] ?? '') . "</td>";
+        echo "<td>" . htmlspecialchars($client['address'] ?? '') . "</td>";
+        echo "<td>" . htmlspecialchars($client['bank_account_number'] ?? '') . "</td>";
+        echo "<td>" . htmlspecialchars($client['bank_name'] ?? '') . "</td>";
+        echo "<td>" . htmlspecialchars($client['bank_branch'] ?? '') . "</td>";
+        echo "<td>" . htmlspecialchars($client['client_code'] ?? '') . "</td>";
+        echo "<td>" . ($client['status'] ? ucfirst($client['status']) : 'N/A') . "</td>";
+        echo "<td>" . $client['trade_count'] . "</td>";
+        echo "<td>" . $client['bond_count'] . "</td>";
+        echo "<td>" . $client['equity_count'] . "</td>";
+        echo "<td>" . $client['etf_count'] . "</td>";
+        echo "<td>" . date('d/m/Y H:i', strtotime($client['created_at'])) . "</td>";
+        echo "</tr>";
+    }
+    
+    echo "</table>";
+    exit;
+}
+
+// Function to export filtered clients to Excel
+function exportFilteredClientsToExcel($db) {
+    global $search_query, $status_filter;
+    
+    // Prepare the WHERE clause for filtering
+    $where_clause = 'WHERE c.is_active = 1';
+    $params = [];
+    if ($status_filter === 'inactive') {
+        $where_clause = 'WHERE c.is_active = 0';
+    } elseif ($status_filter === 'all') {
+        $where_clause = 'WHERE 1=1';
+    }
+
+    if (!empty($search_query)) {
+        $where_clause .= (strpos($where_clause, 'WHERE') === false ? ' WHERE ' : ' AND ') . 
+                         '(c.client_name LIKE ? OR c.cds_account LIKE ? OR c.national_id LIKE ? OR c.client_code LIKE ?)';
+        $like_search = '%' . $search_query . '%';
+        $params[] = $like_search;
+        $params[] = $like_search;
+        $params[] = $like_search;
+        $params[] = $like_search;
+    }
+    
+    $sql = "
+        SELECT
+            c.*,
+            COUNT(t.id) as trade_count,
+            SUM(CASE WHEN t.asset_class = 'bond' THEN 1 ELSE 0 END) as bond_count,
+            SUM(CASE WHEN t.asset_class = 'equity' THEN 1 ELSE 0 END) as equity_count,
+            SUM(CASE WHEN t.asset_class = 'Exchange Traded Funds' THEN 1 ELSE 0 END) as etf_count
+        FROM clients c
+        LEFT JOIN trades t ON c.cds_account = t.client_cds_account AND t.status = 'active'
+        $where_clause
+        GROUP BY c.id
+        ORDER BY c.client_name";
+    
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $clients = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Set headers for Excel download
+    header('Content-Type: application/vnd.ms-excel');
+    $filename = 'filtered_clients_' . date('Ymd_His') . '.xls';
+    header('Content-Disposition: attachment; filename="' . $filename . '"');
+    header('Cache-Control: max-age=0');
+    
+    // Start output
+    echo "<table border='1'>";
+    echo "<tr>";
+    echo "<th colspan='18' style='text-align:center;background-color:#f2f2f2;font-size:16px;'>FILTERED CLIENTS EXPORT</th>";
+    echo "</tr>";
+    echo "<tr>";
+    echo "<td colspan='18'>";
+    echo "<strong>Filters Applied:</strong><br>";
+    echo "Status: " . ($status_filter ? ucfirst($status_filter) : 'All') . "<br>";
+    if (!empty($search_query)) {
+        echo "Search: " . htmlspecialchars($search_query) . "<br>";
+    }
+    echo "Total Clients: " . count($clients) . "<br>";
+    echo "Generated: " . date('d/m/Y H:i:s');
+    echo "</td>";
+    echo "</tr>";
+    echo "<tr>";
+    echo "<th>Client Name</th>";
+    echo "<th>CDS Account</th>";
+    echo "<th>Client Type</th>";
+    echo "<th>National ID</th>";
+    echo "<th>Date of Birth</th>";
+    echo "<th>Phone</th>";
+    echo "<th>Email</th>";
+    echo "<th>Address</th>";
+    echo "<th>Bank Account</th>";
+    echo "<th>Bank Name</th>";
+    echo "<th>Bank Branch</th>";
+    echo "<th>Client Code</th>";
+    echo "<th>Status</th>";
+    echo "<th>Total Trades</th>";
+    echo "<th>Bond Trades</th>";
+    echo "<th>Equity Trades</th>";
+    echo "<th>ETF Trades</th>";
+    echo "<th>Created At</th>";
+    echo "</tr>";
+    
+    foreach ($clients as $client) {
+        echo "<tr>";
+        echo "<td>" . htmlspecialchars($client['client_name']) . "</td>";
+        echo "<td>" . htmlspecialchars($client['cds_account']) . "</td>";
+        echo "<td>" . ($client['client_type'] ? ucfirst($client['client_type']) : 'N/A') . "</td>";
+        echo "<td>" . htmlspecialchars($client['national_id'] ?? '') . "</td>";
+        echo "<td>" . (!empty($client['date_of_birth']) ? date('d/m/Y', strtotime($client['date_of_birth'])) : '') . "</td>";
+        echo "<td>" . htmlspecialchars($client['phone'] ?? '') . "</td>";
+        echo "<td>" . htmlspecialchars($client['email'] ?? '') . "</td>";
+        echo "<td>" . htmlspecialchars($client['address'] ?? '') . "</td>";
+        echo "<td>" . htmlspecialchars($client['bank_account_number'] ?? '') . "</td>";
+        echo "<td>" . htmlspecialchars($client['bank_name'] ?? '') . "</td>";
+        echo "<td>" . htmlspecialchars($client['bank_branch'] ?? '') . "</td>";
+        echo "<td>" . htmlspecialchars($client['client_code'] ?? '') . "</td>";
+        echo "<td>" . ($client['status'] ? ucfirst($client['status']) : 'N/A') . "</td>";
+        echo "<td>" . $client['trade_count'] . "</td>";
+        echo "<td>" . $client['bond_count'] . "</td>";
+        echo "<td>" . $client['equity_count'] . "</td>";
+        echo "<td>" . $client['etf_count'] . "</td>";
+        echo "<td>" . date('d/m/Y H:i', strtotime($client['created_at'])) . "</td>";
+        echo "</tr>";
+    }
+    
+    echo "</table>";
+    exit;
+}
 
 include '../includes/header.php';
 ?>
@@ -180,6 +501,10 @@ include '../includes/header.php';
                         <i class="bi bi-person-plus me-2"></i>
                         Add Client
                     </button>
+                    <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#exportModal">
+                        <i class="bi bi-download me-1"></i>
+                        Export
+                    </button>
                 </div>
             </div>
         </div>
@@ -192,6 +517,7 @@ include '../includes/header.php';
             <div class="d-flex align-items-center">
                 <i class="bi bi-check-circle-fill me-2 text-success"></i>
                 <span><?php echo htmlspecialchars($success_message); ?></span>
+                <button type="button" class="btn-close ms-auto" data-bs-dismiss="alert"></button>
             </div>
         </div>
     <?php endif; ?>
@@ -201,9 +527,33 @@ include '../includes/header.php';
             <div class="d-flex align-items-center">
                 <i class="bi bi-exclamation-triangle-fill me-2 text-danger"></i>
                 <span><?php echo htmlspecialchars($error_message); ?></span>
+                <button type="button" class="btn-close ms-auto" data-bs-dismiss="alert"></button>
             </div>
         </div>
     <?php endif; ?>
+
+    <!-- Filter Section -->
+    <div class="card dashboard-card mb-4">
+        <div class="card-body">
+            <form method="GET" action="" class="row g-3">
+                <div class="col-md-8">
+                    <div class="input-group">
+                        <input type="text" name="search" class="form-control" placeholder="Search by name, CDS account, National ID, or Client Code..." value="<?php echo htmlspecialchars($search_query); ?>">
+                        <button class="btn btn-primary" type="submit">
+                            <i class="bi bi-search"></i> Search
+                        </button>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <select name="status" class="form-select" onchange="this.form.submit()">
+                        <option value="active" <?php echo $status_filter === 'active' ? 'selected' : ''; ?>>Active Clients</option>
+                        <option value="inactive" <?php echo $status_filter === 'inactive' ? 'selected' : ''; ?>>Inactive Clients</option>
+                        <option value="all" <?php echo $status_filter === 'all' ? 'selected' : ''; ?>>All Clients</option>
+                    </select>
+                </div>
+            </form>
+        </div>
+    </div>
 
     <!-- All Clients Table -->
     <div class="card dashboard-card">
@@ -219,24 +569,13 @@ include '../includes/header.php';
             </div>
         </div>
         <div class="card-body p-0">
-            <!-- Search/Filter form -->
-            <div class="p-3 border-bottom">
-                <form method="GET" action="" class="d-flex">
-                    <div class="input-group">
-                        <input type="text" name="search" class="form-control" placeholder="Search by name or CDS account..." value="<?php echo htmlspecialchars($search_query); ?>">
-                        <button class="btn btn-outline-secondary" type="submit">
-                            <i class="bi bi-search"></i>
-                        </button>
-                    </div>
-                </form>
-            </div>
-            
             <div class="table-responsive">
                 <table class="table table-hover mb-0" id="clientsTable">
                     <thead style="background: linear-gradient(135deg, var(--background-secondary) 0%, var(--background-muted) 100%);">
                         <tr>
                             <th class="border-0 fw-semibold text-dark py-3">Client Name</th>
                             <th class="border-0 fw-semibold text-dark py-3">CDS Account</th>
+                            <th class="border-0 fw-semibold text-dark py-3">Client Details</th>
                             <th class="border-0 fw-semibold text-dark py-3">Contact Info</th>
                             <th class="border-0 fw-semibold text-dark py-3">Trade Activity</th>
                             <th class="border-0 fw-semibold text-dark py-3">Portfolio</th>
@@ -246,32 +585,55 @@ include '../includes/header.php';
                     <tbody>
                         <?php if (empty($all_clients)): ?>
                             <tr>
-                                <td colspan="6" class="text-center py-4">No clients found.</td>
+                                <td colspan="7" class="text-center py-4">No clients found.</td>
                             </tr>
                         <?php else: ?>
                             <?php foreach ($all_clients as $client): ?>
                             <tr>
                                 <td class="border-0 py-3">
                                     <div class="fw-semibold"><?php echo htmlspecialchars($client['client_name']); ?></div>
-                                    <small class="text-muted"><?php echo ucfirst($client['client_type']); ?> Client</small>
+                                    <small class="text-muted"><?php echo $client['client_type'] ? ucfirst($client['client_type']) : 'N/A'; ?> Client</small>
                                 </td>
                                 <td class="border-0 py-3">
                                     <span class="badge bg-primary px-3 py-2"><?php echo htmlspecialchars($client['cds_account']); ?></span>
                                 </td>
                                 <td class="border-0 py-3">
+                                    <small class="d-block">
+                                        <strong>ID:</strong> <?php echo htmlspecialchars($client['national_id'] ?? 'N/A'); ?>
+                                    </small>
+                                    <small class="d-block">
+                                        <strong>DOB:</strong> <?php echo !empty($client['date_of_birth']) ? date('d/m/Y', strtotime($client['date_of_birth'])) : 'N/A'; ?>
+                                    </small>
+                                    <small class="d-block">
+                                        <strong>Code:</strong> <?php echo htmlspecialchars($client['client_code'] ?? 'N/A'); ?>
+                                    </small>
+                                </td>
+                                <td class="border-0 py-3">
                                     <div><?php echo htmlspecialchars($client['phone'] ?? 'N/A'); ?></div>
                                     <small class="text-muted"><?php echo htmlspecialchars($client['email'] ?? 'N/A'); ?></small>
+                                    <div class="mt-1">
+                                        <small class="text-muted">
+                                            <?php if ($client['bank_account_number']): ?>
+                                                Bank: <?php echo htmlspecialchars($client['bank_account_number']); ?>
+                                            <?php else: ?>
+                                                No bank account
+                                            <?php endif; ?>
+                                        </small>
+                                    </div>
                                 </td>
                                 <td class="border-0 py-3">
                                     <span class="badge bg-success px-3 py-2"><?php echo $client['trade_count']; ?> trades</span>
                                 </td>
                                 <td class="border-0 py-3">
-                                    <div class="d-flex gap-1">
+                                    <div class="d-flex flex-wrap gap-1">
                                         <?php if ($client['bond_count'] > 0): ?>
                                             <span class="badge bg-info"><?php echo $client['bond_count']; ?> bonds</span>
                                         <?php endif; ?>
                                         <?php if ($client['equity_count'] > 0): ?>
-                                            <span class="badge bg-warning"><?php echo $client['equity_count']; ?> equities</span>
+                                            <span class="badge bg-warning text-dark"><?php echo $client['equity_count']; ?> equities</span>
+                                        <?php endif; ?>
+                                        <?php if ($client['etf_count'] > 0): ?>
+                                            <span class="badge" style="background-color: #6f42c1; color: white;"><?php echo $client['etf_count']; ?> ETFs</span>
                                         <?php endif; ?>
                                     </div>
                                 </td>
@@ -280,9 +642,17 @@ include '../includes/header.php';
                                         <a href="client_profile.php?id=<?php echo htmlspecialchars($client['id']); ?>" class="btn btn-outline-secondary btn-sm" title="View Profile">
                                             <i class="bi bi-eye"></i>
                                         </a>
-                                        <button class="btn btn-outline-primary btn-sm" title="Edit Client">
+                                        <button class="btn btn-outline-primary btn-sm" title="Edit Client" onclick="showEditModal(<?php echo htmlspecialchars(json_encode($client)); ?>)">
                                             <i class="bi bi-pencil"></i>
                                         </button>
+                                        <button class="btn btn-outline-warning btn-sm" title="Merge Accounts" onclick="showMergeModal(<?php echo $client['id']; ?>, '<?php echo htmlspecialchars(addslashes($client['client_name'])); ?>', '<?php echo htmlspecialchars($client['cds_account']); ?>')">
+                                            <i class="bi bi-link-45deg"></i>
+                                        </button>
+                                        <?php if (in_array($user['role'], ['system_admin', 'ceo'])): ?>
+                                        <button class="btn btn-outline-danger btn-sm" title="Delete Client" onclick="confirmDelete(<?php echo $client['id']; ?>, '<?php echo htmlspecialchars(addslashes($client['client_name'])); ?>')">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                        <?php endif; ?>
                                     </div>
                                 </td>
                             </tr>
@@ -299,7 +669,7 @@ include '../includes/header.php';
                     <ul class="pagination justify-content-center mb-0">
                         <?php if ($current_page > 1): ?>
                             <li class="page-item">
-                                <a class="page-link" href="?page=<?php echo $current_page - 1; ?><?php echo !empty($search_query) ? '&search=' . urlencode($search_query) : ''; ?>" aria-label="Previous">
+                                <a class="page-link" href="?page=<?php echo $current_page - 1; ?><?php echo !empty($search_query) ? '&search=' . urlencode($search_query) : ''; ?><?php echo $status_filter !== 'active' ? '&status=' . urlencode($status_filter) : ''; ?>" aria-label="Previous">
                                     <span aria-hidden="true">&laquo;</span>
                                 </a>
                             </li>
@@ -307,7 +677,7 @@ include '../includes/header.php';
                         
                         <?php for ($i = 1; $i <= $total_pages; $i++): ?>
                             <li class="page-item <?php echo ($i == $current_page) ? 'active' : ''; ?>">
-                                <a class="page-link" href="?page=<?php echo $i; ?><?php echo !empty($search_query) ? '&search=' . urlencode($search_query) : ''; ?>">
+                                <a class="page-link" href="?page=<?php echo $i; ?><?php echo !empty($search_query) ? '&search=' . urlencode($search_query) : ''; ?><?php echo $status_filter !== 'active' ? '&status=' . urlencode($status_filter) : ''; ?>">
                                     <?php echo $i; ?>
                                 </a>
                             </li>
@@ -315,7 +685,7 @@ include '../includes/header.php';
                         
                         <?php if ($current_page < $total_pages): ?>
                             <li class="page-item">
-                                <a class="page-link" href="?page=<?php echo $current_page + 1; ?><?php echo !empty($search_query) ? '&search=' . urlencode($search_query) : ''; ?>" aria-label="Next">
+                                <a class="page-link" href="?page=<?php echo $current_page + 1; ?><?php echo !empty($search_query) ? '&search=' . urlencode($search_query) : ''; ?><?php echo $status_filter !== 'active' ? '&status=' . urlencode($status_filter) : ''; ?>" aria-label="Next">
                                     <span aria-hidden="true">&raquo;</span>
                                 </a>
                             </li>
@@ -330,7 +700,7 @@ include '../includes/header.php';
 
 <!-- Add Client Modal -->
 <div class="modal fade" id="addClientModal" tabindex="-1" aria-labelledby="addClientModalLabel" aria-hidden="true">
-    <div class="modal-dialog">
+    <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <form method="POST" action="">
                 <div class="modal-header">
@@ -338,127 +708,433 @@ include '../includes/header.php';
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
-                    <div class="mb-3">
-                        <label for="client_name" class="form-label">Client Name <span class="text-danger">*</span></label>
-                        <input type="text" class="form-control" id="client_name" name="client_name" required>
-                    </div>
-                    <div class="mb-3">
-                        <label for="cds_account" class="form-label">CDS Account <span class="text-danger">*</span></label>
-                        <input type="text" class="form-control" id="cds_account" name="cds_account" required>
-                    </div>
-                    <div class="mb-3">
-                        <label for="client_type" class="form-label">Client Type <span class="text-danger">*</span></label>
-                        <select class="form-select" id="client_type" name="client_type" required>
-                            <option value="" selected disabled>Select client type</option>
-                            <option value="individual">Individual</option>
-                            <option value="corporate">Corporate</option>
-                        </select>
-                    </div>
-                    <div class="mb-3">
-                        <label for="phone" class="form-label">Phone</label>
-                        <input type="tel" class="form-control" id="phone" name="phone">
-                    </div>
-                    <div class="mb-3">
-                        <label for="email" class="form-label">Email</label>
-                        <input type="email" class="form-control" id="email" name="email">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label for="client_name" class="form-label">Client Name *</label>
+                            <input type="text" class="form-control" id="client_name" name="client_name" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="cds_account" class="form-label">CDS Account *</label>
+                            <input type="text" class="form-control" id="cds_account" name="cds_account" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="client_type" class="form-label">Client Type *</label>
+                            <select class="form-select" id="client_type" name="client_type" required>
+                                <option value="individual">Individual</option>
+                                <option value="institution">Institution</option>
+                                <option value="corporate">Corporate</option>
+                                <option value="joint">Joint Account</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="national_id" class="form-label">National ID/Passport</label>
+                            <input type="text" class="form-control" id="national_id" name="national_id">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="date_of_birth" class="form-label">Date of Birth</label>
+                            <input type="date" class="form-control" id="date_of_birth" name="date_of_birth">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="phone" class="form-label">Phone Number</label>
+                            <input type="tel" class="form-control" id="phone" name="phone">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="email" class="form-label">Email Address</label>
+                            <input type="email" class="form-control" id="email" name="email">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="client_code" class="form-label">Client Code</label>
+                            <input type="text" class="form-control" id="client_code" name="client_code">
+                        </div>
+                        <div class="col-md-12">
+                            <label for="address" class="form-label">Address</label>
+                            <textarea class="form-control" id="address" name="address" rows="2"></textarea>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="bank_account_number" class="form-label">Bank Account Number</label>
+                            <input type="text" class="form-control" id="bank_account_number" name="bank_account_number">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="bank_name" class="form-label">Bank Name</label>
+                            <input type="text" class="form-control" id="bank_name" name="bank_name">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="bank_branch" class="form-label">Bank Branch</label>
+                            <input type="text" class="form-control" id="bank_branch" name="bank_branch">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="currency" class="form-label">Currency</label>
+                            <select class="form-select" id="currency" name="currency">
+                                <option value="TZS">TZS - Tanzanian Shilling</option>
+                                <option value="USD">USD - US Dollar</option>
+                                <option value="EUR">EUR - Euro</option>
+                                <option value="GBP">GBP - British Pound</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="fee_type" class="form-label">Fee Type</label>
+                            <select class="form-select" id="fee_type" name="fee_type">
+                                <option value="normal">Normal</option>
+                                <option value="preferential">Preferential</option>
+                                <option value="waived">Waived</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="default_brokerage_fee" class="form-label">Default Brokerage Fee (%)</label>
+                            <input type="number" class="form-control" id="default_brokerage_fee" name="default_brokerage_fee" step="0.01" min="0">
+                        </div>
                     </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" name="add_client" class="btn btn-primary">
-                        <i class="bi bi-plus-circle me-1"></i>
-                        Add Client
-                    </button>
+                    <button type="submit" name="add_client" class="btn btn-primary">Add Client</button>
                 </div>
             </form>
         </div>
     </div>
 </div>
 
-<!-- Merge Accounts Modal -->
-<div class="modal fade" id="mergeAccountsModal" tabindex="-1">
+<!-- Edit Client Modal -->
+<div class="modal fade" id="editClientModal" tabindex="-1" aria-labelledby="editClientModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <form method="POST" action="">
+                <input type="hidden" id="edit_client_id" name="client_id">
                 <div class="modal-header">
-                    <h5 class="modal-title">Merge Client Accounts</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    <h5 class="modal-title" id="editClientModalLabel">Edit Client</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label for="edit_client_name" class="form-label">Client Name *</label>
+                            <input type="text" class="form-control" id="edit_client_name" name="client_name" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="edit_cds_account" class="form-label">CDS Account *</label>
+                            <input type="text" class="form-control" id="edit_cds_account" name="cds_account" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="edit_client_type" class="form-label">Client Type *</label>
+                            <select class="form-select" id="edit_client_type" name="client_type" required>
+                                <option value="individual">Individual</option>
+                                <option value="institution">Institution</option>
+                                <option value="corporate">Corporate</option>
+                                <option value="joint">Joint Account</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="edit_national_id" class="form-label">National ID/Passport</label>
+                            <input type="text" class="form-control" id="edit_national_id" name="national_id">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="edit_date_of_birth" class="form-label">Date of Birth</label>
+                            <input type="date" class="form-control" id="edit_date_of_birth" name="date_of_birth">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="edit_phone" class="form-label">Phone Number</label>
+                            <input type="tel" class="form-control" id="edit_phone" name="phone">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="edit_email" class="form-label">Email Address</label>
+                            <input type="email" class="form-control" id="edit_email" name="email">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="edit_client_code" class="form-label">Client Code</label>
+                            <input type="text" class="form-control" id="edit_client_code" name="client_code">
+                        </div>
+                        <div class="col-md-12">
+                            <label for="edit_address" class="form-label">Address</label>
+                            <textarea class="form-control" id="edit_address" name="address" rows="2"></textarea>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="edit_bank_account_number" class="form-label">Bank Account Number</label>
+                            <input type="text" class="form-control" id="edit_bank_account_number" name="bank_account_number">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="edit_bank_name" class="form-label">Bank Name</label>
+                            <input type="text" class="form-control" id="edit_bank_name" name="bank_name">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="edit_bank_branch" class="form-label">Bank Branch</label>
+                            <input type="text" class="form-control" id="edit_bank_branch" name="bank_branch">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="edit_currency" class="form-label">Currency</label>
+                            <select class="form-select" id="edit_currency" name="currency">
+                                <option value="TZS">TZS - Tanzanian Shilling</option>
+                                <option value="USD">USD - US Dollar</option>
+                                <option value="EUR">EUR - Euro</option>
+                                <option value="GBP">GBP - British Pound</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="edit_fee_type" class="form-label">Fee Type</label>
+                            <select class="form-select" id="edit_fee_type" name="fee_type">
+                                <option value="normal">Normal</option>
+                                <option value="preferential">Preferential</option>
+                                <option value="waived">Waived</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="edit_default_brokerage_fee" class="form-label">Default Brokerage Fee (%)</label>
+                            <input type="number" class="form-control" id="edit_default_brokerage_fee" name="default_brokerage_fee" step="0.01" min="0">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="edit_status" class="form-label">Status *</label>
+                            <select class="form-select" id="edit_status" name="status" required>
+                                <option value="active">Active</option>
+                                <option value="inactive">Inactive</option>
+                                <option value="suspended">Suspended</option>
+                                <option value="pending">Pending</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" name="edit_client" class="btn btn-primary">Update Client</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Merge CDS Modal -->
+<div class="modal fade" id="mergeCdsModal" tabindex="-1" aria-labelledby="mergeCdsModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="">
+                <input type="hidden" id="primary_client_id" name="primary_client_id">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="mergeCdsModalLabel">Merge CDS Accounts</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
                     <div class="alert alert-warning">
                         <i class="bi bi-exclamation-triangle me-2"></i>
-                        <strong>Warning:</strong> This action will merge all selected accounts into the primary account. 
-                        All trades, receipts, and invoices will be transferred. This action cannot be undone.
+                        This will merge two CDS accounts. All trades from the merged account will be associated with the primary account.
                     </div>
                     
                     <div class="mb-3">
-                        <label class="form-label fw-semibold">Primary Account (Keep this account)</label>
-                        <div id="primaryAccountInfo" class="p-3 bg-light rounded">
-                            <!-- Primary account info will be populated by JavaScript -->
+                        <label class="form-label">Primary Account (Keep this account)</label>
+                        <div class="card bg-light">
+                            <div class="card-body py-2">
+                                <div class="fw-semibold" id="primary_client_name"></div>
+                                <small class="text-muted" id="primary_cds_account"></small>
+                            </div>
                         </div>
-                        <input type="hidden" id="primary_client_id" name="primary_client_id">
                     </div>
                     
                     <div class="mb-3">
-                        <label class="form-label fw-semibold">Accounts to Merge (These will be deactivated)</label>
-                        <div id="mergeAccountsList">
-                            <!-- Merge accounts will be populated by JavaScript -->
-                        </div>
+                        <label for="merge_client_id" class="form-label">Select Account to Merge</label>
+                        <select class="form-select" id="merge_client_id" name="merge_client_id" required>
+                            <option value="">Select client to merge...</option>
+                            <?php foreach ($all_clients as $client): ?>
+                                <option value="<?php echo $client['id']; ?>">
+                                    <?php echo htmlspecialchars($client['client_name']); ?> (<?php echo htmlspecialchars($client['cds_account']); ?>)
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                        <small class="text-muted">This account will be merged into the primary account.</small>
                     </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" name="merge_accounts" class="btn btn-danger">
-                        <i class="bi bi-arrow-down-up me-1"></i>
-                        Merge Accounts
-                    </button>
+                    <button type="submit" name="merge_cds" class="btn btn-warning">Merge Accounts</button>
                 </div>
             </form>
         </div>
     </div>
 </div>
 
-<script>
-function showMergeModal(primaryId, primaryName, primaryCds) {
-    document.getElementById('primary_client_id').value = primaryId;
-    document.getElementById('primaryAccountInfo').innerHTML = `
-        <div class="d-flex align-items-center">
-            <i class="bi bi-person-check text-success me-2"></i>
-            <div>
-                <div class="fw-semibold">${primaryName}</div>
-                <small class="text-muted">CDS: ${primaryCds}</small>
+<!-- Export Modal -->
+<div class="modal fade" id="exportModal" tabindex="-1" aria-labelledby="exportModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="exportModalLabel">Export Clients</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle me-2"></i>
+                    Export client data to Excel format for reporting and analysis.
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Export Options</label>
+                    <div class="d-flex flex-column gap-2">
+                        <a href="?export=excel" class="btn btn-outline-primary text-start">
+                            <i class="bi bi-download me-2"></i>
+                            Export All Active Clients
+                        </a>
+                        <a href="?export_filtered=excel<?php echo !empty($search_query) ? '&search=' . urlencode($search_query) : ''; ?><?php echo $status_filter !== 'active' ? '&status=' . urlencode($status_filter) : ''; ?>" 
+                           class="btn btn-outline-success text-start">
+                            <i class="bi bi-filter me-2"></i>
+                            Export Filtered Results
+                            <small class="d-block text-muted">(<?php echo $total_records; ?> clients)</small>
+                        </a>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
             </div>
         </div>
-    `;
-    
-    // Get similar clients for merging
-    fetch(`get_similar_clients.php?client_id=${primaryId}`)
-        .then(response => response.json())
-        .then(data => {
-            let html = '';
-            data.forEach(client => {
-                html += `
-                    <div class="form-check p-3 border rounded mb-2">
-                        <input class="form-check-input" type="checkbox" name="merge_client_ids[]" value="${client.id}" id="merge_${client.id}">
-                        <label class="form-check-label w-100" for="merge_${client.id}">
-                            <div class="d-flex justify-content-between">
-                                <div>
-                                    <div class="fw-semibold">${client.client_name}</div>
-                                    <small class="text-muted">CDS: ${client.cds_account}</small>
-                                </div>
-                                <div class="text-end">
-                                    <span class="badge bg-info">${client.trade_count} trades</span>
-                                </div>
-                            </div>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal fade" id="deleteModal" tabindex="-1" aria-labelledby="deleteModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="">
+                <input type="hidden" id="delete_client_id" name="client_id">
+                <div class="modal-header">
+                    <h5 class="modal-title text-danger" id="deleteModalLabel">
+                        <i class="bi bi-exclamation-triangle me-2"></i>Confirm Deletion
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Are you sure you want to delete client: <strong id="delete_client_name"></strong>?</p>
+                    <div class="alert alert-danger">
+                        <i class="bi bi-exclamation-octagon me-2"></i>
+                        <strong>Warning:</strong> This action cannot be undone. The client will be marked as inactive and hidden from the system.
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="confirm_delete" required>
+                        <label class="form-check-label" for="confirm_delete">
+                            I understand this action cannot be undone
                         </label>
                     </div>
-                `;
-            });
-            document.getElementById('mergeAccountsList').innerHTML = html;
-        });
-    
-    new bootstrap.Modal(document.getElementById('mergeAccountsModal')).show();
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" name="delete_client" class="btn btn-danger">Delete Client</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<style>
+.badge.bg-purple, .badge[style*="background-color: #6f42c1"] {
+    background-color: #6f42c1 !important;
+    color: white !important;
 }
+
+.badge.bg-purple:hover, .badge[style*="background-color: #6f42c1"]:hover {
+    background-color: #5a32a3 !important;
+}
+</style>
+
+<script>
+function showEditModal(client) {
+    // Populate the edit modal with client data
+    document.getElementById('edit_client_id').value = client.id;
+    document.getElementById('edit_client_name').value = client.client_name;
+    document.getElementById('edit_cds_account').value = client.cds_account;
+    document.getElementById('edit_client_type').value = client.client_type;
+    document.getElementById('edit_national_id').value = client.national_id || '';
+    document.getElementById('edit_date_of_birth').value = client.date_of_birth ? client.date_of_birth.split(' ')[0] : '';
+    document.getElementById('edit_phone').value = client.phone || '';
+    document.getElementById('edit_email').value = client.email || '';
+    document.getElementById('edit_address').value = client.address || '';
+    document.getElementById('edit_bank_account_number').value = client.bank_account_number || '';
+    document.getElementById('edit_bank_name').value = client.bank_name || '';
+    document.getElementById('edit_bank_branch').value = client.bank_branch || '';
+    document.getElementById('edit_currency').value = client.currency || 'TZS';
+    document.getElementById('edit_client_code').value = client.client_code || '';
+    document.getElementById('edit_fee_type').value = client.fee_type || 'normal';
+    document.getElementById('edit_default_brokerage_fee').value = client.default_brokerage_fee || '';
+    document.getElementById('edit_status').value = client.status || 'active';
+    
+    // Show the modal
+    var editModal = new bootstrap.Modal(document.getElementById('editClientModal'));
+    editModal.show();
+}
+
+function showMergeModal(clientId, clientName, cdsAccount) {
+    // Set primary client info
+    document.getElementById('primary_client_id').value = clientId;
+    document.getElementById('primary_client_name').textContent = clientName;
+    document.getElementById('primary_cds_account').textContent = cdsAccount;
+    
+    // Reset and refresh merge client dropdown (remove current client from options)
+    var mergeSelect = document.getElementById('merge_client_id');
+    mergeSelect.innerHTML = '<option value="">Select client to merge...</option>';
+    
+    // Add all clients except the current one
+    <?php foreach ($all_clients as $client): ?>
+        if (<?php echo $client['id']; ?> != clientId) {
+            var option = document.createElement('option');
+            option.value = <?php echo $client['id']; ?>;
+            option.textContent = '<?php echo addslashes($client["client_name"]); ?> (<?php echo addslashes($client["cds_account"]); ?>)';
+            mergeSelect.appendChild(option);
+        }
+    <?php endforeach; ?>
+    
+    // Show the modal
+    var mergeModal = new bootstrap.Modal(document.getElementById('mergeCdsModal'));
+    mergeModal.show();
+}
+
+function confirmDelete(clientId, clientName) {
+    document.getElementById('delete_client_id').value = clientId;
+    document.getElementById('delete_client_name').textContent = clientName;
+    document.getElementById('confirm_delete').checked = false;
+    
+    var deleteModal = new bootstrap.Modal(document.getElementById('deleteModal'));
+    deleteModal.show();
+}
+
+// Search functionality with debounce
+let searchTimeout;
+document.querySelector('input[name="search"]').addEventListener('input', function(e) {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => {
+        // Submit the form after 500ms of inactivity
+        e.target.form.submit();
+    }, 500);
+});
+
+// Auto-format phone number
+document.getElementById('phone')?.addEventListener('input', function(e) {
+    let value = e.target.value.replace(/\D/g, '');
+    if (value.length <= 3) {
+        e.target.value = value;
+    } else if (value.length <= 6) {
+        e.target.value = value.slice(0, 3) + '-' + value.slice(3);
+    } else {
+        e.target.value = value.slice(0, 3) + '-' + value.slice(3, 6) + '-' + value.slice(6, 10);
+    }
+});
+
+// Auto-format national ID
+document.getElementById('national_id')?.addEventListener('input', function(e) {
+    let value = e.target.value.replace(/\D/g, '');
+    if (value.length <= 2) {
+        e.target.value = value;
+    } else if (value.length <= 7) {
+        e.target.value = value.slice(0, 2) + '-' + value.slice(2);
+    } else {
+        e.target.value = value.slice(0, 2) + '-' + value.slice(2, 7) + '-' + value.slice(7, 9);
+    }
+});
+
+// Show success/error messages for modals
+<?php if ($success_message || $error_message): ?>
+    // Close any open modals
+    var modals = document.querySelectorAll('.modal.show');
+    modals.forEach(function(modal) {
+        var modalInstance = bootstrap.Modal.getInstance(modal);
+        if (modalInstance) {
+            modalInstance.hide();
+        }
+    });
+<?php endif; ?>
 </script>
 
 <?php include '../includes/footer.php'; ?>

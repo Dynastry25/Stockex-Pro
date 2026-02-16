@@ -91,7 +91,7 @@ include '../includes/header.php';
 
             <!-- Back to Dashboard -->
             <div class="text-center mt-4">
-                <a href="dashboard.php" class="btn btn-outline-secondary">
+                <a href="dashboard" class="btn btn-outline-secondary">
                     <i class="bi bi-arrow-left me-2"></i>
                     Back to Dashboard
                 </a>

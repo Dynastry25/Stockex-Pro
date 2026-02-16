@@ -224,10 +224,8 @@ try {
     $page = 1;
 }
 
-// Add sorting and pagination
-$query .= " ORDER BY gl.transaction_date ASC, gl.id ASC LIMIT ? OFFSET ?";
-$params[] = $per_page;
-$params[] = $offset;
+// Add sorting and pagination (use direct integer values for LIMIT/OFFSET to avoid binding issues)
+$query .= " ORDER BY gl.transaction_date ASC, gl.id ASC LIMIT " . (int)$per_page . " OFFSET " . (int)$offset;
 
 // Execute main query
 try {
@@ -885,7 +883,7 @@ body {
                 </div>
                 
                 <div class="card-body">
-                    <form method="GET" id="filterForm" action="financial_data.php">
+                    <form method="GET" id="filterForm" action="financial_data">
                         <input type="hidden" name="csrf_token" value="<?php echo $csrf_token; ?>">
                         
                         <div class="row g-3 mb-3">
@@ -1143,6 +1141,13 @@ body {
                                 <ul class="pagination justify-content-center mb-0">
                                     <li class="page-item <?php echo $page <= 1 ? 'disabled' : ''; ?>">
                                         <a class="page-link" href="?<?php 
+                                            echo http_build_query(array_merge($_GET, ['page' => 1]));
+                                        ?>" aria-label="First">
+                                            <i class="bi bi-chevron-double-left"></i>
+                                        </a>
+                                    </li>
+                                    <li class="page-item <?php echo $page <= 1 ? 'disabled' : ''; ?>">
+                                        <a class="page-link" href="?<?php 
                                             echo http_build_query(array_merge($_GET, ['page' => $page - 1]));
                                         ?>">
                                             <i class="bi bi-chevron-left"></i> Previous
@@ -1166,6 +1171,13 @@ body {
                                             echo http_build_query(array_merge($_GET, ['page' => $page + 1]));
                                         ?>">
                                             Next <i class="bi bi-chevron-right"></i>
+                                        </a>
+                                    </li>
+                                    <li class="page-item <?php echo $page >= $total_pages ? 'disabled' : ''; ?>">
+                                        <a class="page-link" href="?<?php 
+                                            echo http_build_query(array_merge($_GET, ['page' => $total_pages]));
+                                        ?>" aria-label="Last">
+                                            <i class="bi bi-chevron-double-right"></i>
                                         </a>
                                     </li>
                                 </ul>
@@ -1231,7 +1243,7 @@ function applyDateFilter() {
     const clearDates = document.getElementById('clearDates').checked;
     
     if (clearDates) {
-        window.location.href = 'financial_data.php';
+        window.location.href = 'financial_data';
     } else {
         const startDate = form.start_date.value;
         const endDate = form.end_date.value;

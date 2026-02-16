@@ -44,7 +44,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
         }
         
-        header("Location: cash_flow_configuration.php");
+        header("Location: cash_flow_configuration");
         exit();
     }
 }
@@ -105,7 +105,7 @@ include '../includes/header.php';
                         <button type="button" class="btn btn-light btn-sm" data-bs-toggle="modal" data-bs-target="#addItemModal">
                             <i class="bi bi-plus-circle me-1"></i>Add Item
                         </button>
-                        <a href="master_data.php" class="btn btn-light btn-sm">
+                        <a href="master_data" class="btn btn-light btn-sm">
                             <i class="bi bi-arrow-left me-1"></i>Back to Master Data
                         </a>
                     </div>
@@ -342,7 +342,7 @@ include '../includes/header.php';
                 <h5 class="modal-title">Add New Cash Flow Item</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form method="POST" action="add_cash_flow_item.php">
+            <form method="POST" action="add_cash_flow_item">
                 <div class="modal-body">
                     <div class="row g-3">
                         <div class="col-md-6">

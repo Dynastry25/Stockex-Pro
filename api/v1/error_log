@@ -1,0 +1,20 @@
+[10-Feb-2026 01:46:11 America/Boise] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/api/v1/test_api.php:33) in /home1/jrozqhmy/public_html/website_02cf635f/api/config.php on line 8
+[10-Feb-2026 01:46:11 America/Boise] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/api/v1/test_api.php:33) in /home1/jrozqhmy/public_html/website_02cf635f/api/config.php on line 9
+[10-Feb-2026 01:46:11 America/Boise] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/api/v1/test_api.php:33) in /home1/jrozqhmy/public_html/website_02cf635f/api/config.php on line 10
+[10-Feb-2026 01:46:11 America/Boise] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/api/v1/test_api.php:33) in /home1/jrozqhmy/public_html/website_02cf635f/api/config.php on line 11
+[10-Feb-2026 01:46:11 America/Boise] PHP Warning:  Cannot modify header information - headers already sent by (output started at /home1/jrozqhmy/public_html/website_02cf635f/api/v1/test_api.php:33) in /home1/jrozqhmy/public_html/website_02cf635f/api/config.php on line 12
+[10-Feb-2026 08:46:11 UTC] PHP Warning:  PHP Startup: Unable to load dynamic library 'imagick.so' (tried: /opt/cpanel/ea-php84/root/usr/lib64/php/modules/imagick.so (/opt/cpanel/ea-php84/root/usr/lib64/php/modules/imagick.so: undefined symbol: php_strtolower), /opt/cpanel/ea-php84/root/usr/lib64/php/modules/imagick.so.so (/opt/cpanel/ea-php84/root/usr/lib64/php/modules/imagick.so.so: cannot open shared object file: No such file or directory)) in Unknown on line 0
+[10-Feb-2026 01:46:11 America/Boise] PHP Warning:  PHP Startup: session.gc_divisor must be greater than 0 in Unknown on line 0
+[10-Feb-2026 08:46:11 UTC] PHP Warning:  PHP Startup: Unable to load dynamic library 'imagick.so' (tried: /opt/cpanel/ea-php84/root/usr/lib64/php/modules/imagick.so (/opt/cpanel/ea-php84/root/usr/lib64/php/modules/imagick.so: undefined symbol: php_strtolower), /opt/cpanel/ea-php84/root/usr/lib64/php/modules/imagick.so.so (/opt/cpanel/ea-php84/root/usr/lib64/php/modules/imagick.so.so: cannot open shared object file: No such file or directory)) in Unknown on line 0
+[10-Feb-2026 01:46:11 America/Boise] PHP Warning:  PHP Startup: session.gc_divisor must be greater than 0 in Unknown on line 0
+[10-Feb-2026 23:56:17 America/Boise] === TEST STOCK API STARTED ===
+[10-Feb-2026 23:56:17 America/Boise] TEST 1: Database Connection
+[10-Feb-2026 23:56:17 America/Boise] TEST 2: DSE API Connectivity
+[10-Feb-2026 23:56:17 America/Boise] Fetching from: https://dse.co.tz/api/get/market/prices/for/range/duration?security_code=CRDB&days=1&class=EQUITY
+[10-Feb-2026 23:56:18 America/Boise] DSE API Response valid: yes
+[10-Feb-2026 23:56:18 America/Boise] Data records: 0
+[10-Feb-2026 23:56:18 America/Boise] TEST 3: Test Insert Statement
+[10-Feb-2026 23:56:18 America/Boise] Insert test passed
+[10-Feb-2026 23:56:18 America/Boise] TEST 4: Check Existing Stock Prices
+[10-Feb-2026 23:56:18 America/Boise] Existing stock price records: 1
+[10-Feb-2026 23:56:18 America/Boise] === TEST STOCK API COMPLETED ===

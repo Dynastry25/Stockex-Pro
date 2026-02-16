@@ -84,7 +84,7 @@ try {
     <div class="alert alert-warning alert-dismissible fade show" role="alert">
         <i class="bi bi-exclamation-triangle me-2"></i>
         <strong>HR Database Setup Required:</strong> Some HR tables are missing. 
-        <a href="setup_database.php" class="alert-link">Click here to set up the database</a>.
+        <a href="setup_database" class="alert-link">Click here to set up the database</a>.
         <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
     </div>
     <?php endif; ?>
@@ -250,8 +250,8 @@ try {
                 <div class="card-header py-3 d-flex justify-content-between align-items-center">
                     <h6 class="m-0 font-weight-bold text-primary">Employee Management</h6>
                     <div class="btn-group">
-                        <a href="employees.php" class="btn btn-sm btn-outline-primary" <?php echo $show_setup_warning ? 'disabled' : ''; ?>>View All</a>
-                        <a href="reports.php" class="btn btn-sm btn-outline-info" <?php echo $show_setup_warning ? 'disabled' : ''; ?>>Reports</a>
+                        <a href="employees" class="btn btn-sm btn-outline-primary" <?php echo $show_setup_warning ? 'disabled' : ''; ?>>View All</a>
+                        <a href="reports" class="btn btn-sm btn-outline-info" <?php echo $show_setup_warning ? 'disabled' : ''; ?>>Reports</a>
                     </div>
                 </div>
                 <div class="card-body">

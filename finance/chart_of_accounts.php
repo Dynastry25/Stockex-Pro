@@ -289,7 +289,7 @@ if ($_POST) {
         }
     }
     
-    header("Location: chart_of_accounts.php");
+    header("Location: chart_of_accounts");
     exit;
 }
 

@@ -64,7 +64,7 @@ include '../includes/header.php';
     <div class="col-12">
         <div class="d-flex justify-content-between align-items-center mb-4">
             <h2><i class="bi bi-bank"></i> Enter Bond Trades</h2>
-            <a href="trades.php" class="btn btn-outline-secondary">
+            <a href="trades" class="btn btn-outline-secondary">
                 <i class="bi bi-arrow-left"></i> Back to Trades
             </a>
         </div>

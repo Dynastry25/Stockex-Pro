@@ -246,7 +246,7 @@ include '../includes/header.php';
 <div class="modal fade" id="submitApprovalModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <form method="POST" action="salary_setup.php">
+            <form method="POST" action="salary_setup">
                 <input type="hidden" name="preview_id" value="<?php echo $preview_id; ?>">
                 <div class="modal-header">
                     <h5 class="modal-title">

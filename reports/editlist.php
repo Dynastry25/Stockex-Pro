@@ -1498,7 +1498,7 @@ function displayFilterForm() {
                             <h4 class="mb-0"><i class="fas fa-filter me-2"></i>Edit List Reports Filter</h4>
                         </div>
                         <div class="card-body">
-                            <form method="post" action="editlist.php" id="filterForm">
+                            <form method="post" action="editlist" id="filterForm">
                                 <div class="row mb-4">
                                     <div class="col-md-12">
                                         <h5 class="border-bottom pb-2 mb-3">Select Report Type</h5>

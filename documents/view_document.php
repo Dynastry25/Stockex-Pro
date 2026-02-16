@@ -49,10 +49,10 @@ if (isset($_GET['id'])) {
                             Folder: <?php echo htmlspecialchars($document['folder_name']); ?> | 
                             Department: <?php echo htmlspecialchars($document['department']); ?>
                         </p>
-                        <a href="download_document.php?id=<?php echo $document['id']; ?>" class="btn btn-success btn-sm">
+                        <a href="download_document?id=<?php echo $document['id']; ?>" class="btn btn-success btn-sm">
                             <i class="bi bi-download"></i> Download
                         </a>
-                        <a href="department_docs.php" class="btn btn-secondary btn-sm">
+                        <a href="department_docs" class="btn btn-secondary btn-sm">
                             <i class="bi bi-arrow-left"></i> Back to Documents
                         </a>
                     </div>
@@ -62,7 +62,7 @@ if (isset($_GET['id'])) {
                         title="PDF Document: <?php echo htmlspecialchars($document['document_name']); ?>"
                     >
                         <p>Your browser does not support PDF viewing. 
-                           <a href="download_document.php?id=<?php echo $document['id']; ?>">Download the PDF instead.</a>
+                           <a href="download_document?id=<?php echo $document['id']; ?>">Download the PDF instead.</a>
                         </p>
                     </iframe>
                 </div>
@@ -75,6 +75,6 @@ if (isset($_GET['id'])) {
 }
 
 // If view fails, redirect back with error
-header('Location: department_docs.php?error=PDF not found or cannot be viewed');
+header('Location: department_docs?error=PDF not found or cannot be viewed');
 exit;
 ?>

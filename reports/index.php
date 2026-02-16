@@ -68,7 +68,7 @@ include '../includes/header.php';
                     </div>
                 </div>
                 <div class="card-body">
-                    <form id="reportForm" method="POST" action="generate_report.php">
+                    <form id="reportForm" method="POST" action="generate_report">
                         <div class="row g-3">
                             <!-- Client Filter -->
                             <div class="col-md-4">
@@ -422,7 +422,7 @@ function downloadPDF() {
 }
 
 function closeReports() {
-    window.location.href = '../trader/dashboard.php';
+    window.location.href = '../trader/dashboard';
 }
 
 // Load saved filters on page load

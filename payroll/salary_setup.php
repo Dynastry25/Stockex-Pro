@@ -9,7 +9,7 @@ $current_user_id = $_SESSION['user_id'];
 $current_user_role = $_SESSION['role'];
 
 if ($current_user_role !== 'hr_manager') {
-    header('Location: ../dashboard.php');
+    header('Location: ../dashboard');
     exit();
 }
 
@@ -1823,11 +1823,11 @@ include '../includes/header.php';
                                         <td><?php echo htmlspecialchars($payment['requested_by_name']); ?></td>
                                         <td>
                                             <div class="btn-group btn-group-sm">
-                                                <a href="payment_request.php?request_id=<?php echo $payment['id']; ?>" 
+                                                <a href="payment_request?request_id=<?php echo $payment['id']; ?>" 
                                                    class="btn btn-outline-primary" title="View Details">
                                                     <i class="bi bi-eye"></i>
                                                 </a>
-                                                <a href="view_salary_calculation.php?payment_id=<?php echo $payment['id']; ?>" 
+                                                <a href="view_salary_calculation?payment_id=<?php echo $payment['id']; ?>" 
                                                    class="btn btn-outline-info" title="View Calculation">
                                                     <i class="bi bi-calculator"></i>
                                                 </a>

@@ -8,7 +8,7 @@ $db = getDBConnection();
 
 // Get un-receipted buy trades from the 'trades' table
 // We use a LEFT JOIN to find trades that do not have a matching receipt
-$where_conditions = ["t.trade_type = 'BUY'"];
+$where_conditions = ["t.trade_side = 'buy'"];
 $params = [];
 
 if (isset($_GET['search']) && !empty($_GET['search'])) {
@@ -126,11 +126,11 @@ include '../includes/header.php';
                                 </td>
                                 <td><?php echo htmlspecialchars($trade['security_name']); ?></td>
                                 <td><?php echo number_format($trade['quantity']); ?></td>
-                                <td>$<?php echo format_currency($trade['price']); ?></td>
-                                <td>$<?php echo format_currency($trade['trade_value']); ?></td>
+                                <td>TZS <?php echo format_currency($trade['price']); ?></td>
+                                <td>TZS <?php echo format_currency($trade['total_value']); ?></td>
                                 <td><?php echo format_date($trade['trade_date']); ?></td>
                                 <td>
-                                    <a href="create_and_view_receipt.php?trade_id=<?php echo $trade['id']; ?>"
+                                    <a href="create_and_view_receipt?trade_id=<?php echo $trade['id']; ?>"
                                        class="btn btn-sm btn-outline-success">
                                         <i class="bi bi-file-earmark-plus"></i> Generate Receipt
                                     </a>

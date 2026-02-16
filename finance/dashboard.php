@@ -1199,12 +1199,12 @@ include '../includes/header.php';
                                             <td><?php echo htmlspecialchars($transaction['description']); ?></td>
                                             <td>
                                                 <?php if ($transaction['type'] == 'receipt'): ?>
-                                                <a href="receipt.php?action=view&id=<?php echo $transaction['id']; ?>" 
+                                                <a href="receipt?action=view&id=<?php echo $transaction['id']; ?>" 
                                                    class="btn btn-sm btn-outline-primary">
                                                     <i class="bi bi-eye"></i> Review
                                                 </a>
                                                 <?php else: ?>
-                                                <a href="payment.php?action=view&id=<?php echo $transaction['id']; ?>" 
+                                                <a href="payment?action=view&id=<?php echo $transaction['id']; ?>" 
                                                    class="btn btn-sm btn-outline-primary">
                                                     <i class="bi bi-eye"></i> Review
                                                 </a>
@@ -1298,7 +1298,7 @@ include '../includes/header.php';
                     </div>
                     <hr>
                     <div class="text-center">
-                        <a href="chart_of_accounts.php" class="btn btn-outline-primary btn-sm">
+                        <a href="chart_of_accounts" class="btn btn-outline-primary btn-sm">
                             <i class="bi bi-pencil me-1"></i>Manage Accounts
                         </a>
                     </div>
@@ -1313,7 +1313,7 @@ include '../includes/header.php';
             <div class="card">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <h6 class="mb-0"><i class="bi bi-clock-history"></i> Recent Journal Entries</h6>
-                    <a href="general_ledger.php" class="btn btn-outline-primary btn-sm">View All</a>
+                    <a href="general_ledger" class="btn btn-outline-primary btn-sm">View All</a>
                 </div>
                 <div class="card-body">
                     <?php if (empty($recent_transactions)): ?>

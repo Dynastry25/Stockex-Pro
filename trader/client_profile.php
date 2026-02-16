@@ -271,23 +271,100 @@ if (isset($_GET['id']) && is_numeric($_GET['id'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_client'])) {
     $client_id = (int)$_POST['client_id'];
     $client_name = trim($_POST['client_name']);
+    $national_id = trim($_POST['national_id']);
+    $date_of_birth = trim($_POST['date_of_birth']);
     $phone = trim($_POST['phone']);
     $email = trim($_POST['email']);
     $client_type = trim($_POST['client_type']);
+    $address = trim($_POST['address']);
+    $bank_account_number = trim($_POST['bank_account_number']);
+    $bank_name = trim($_POST['bank_name']);
+    $bank_branch = trim($_POST['bank_branch']);
+    $currency = trim($_POST['currency']);
+    $custodian_id = !empty($_POST['custodian_id']) ? (int)$_POST['custodian_id'] : null;
+    $default_brokerage_fee = !empty($_POST['default_brokerage_fee']) ? (float)$_POST['default_brokerage_fee'] : null;
+    $fee_type = trim($_POST['fee_type']);
+    $client_code = trim($_POST['client_code']);
+    $status = trim($_POST['status']);
     
     // Input validation
-    if (empty($client_name) || empty($phone) || empty($email) || empty($client_type)) {
-        $error_message = "All fields are required.";
-    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $error_message = "Invalid email format.";
-    } elseif (!preg_match('/^[0-9+\-\s]+$/', $phone)) {
-        $error_message = "Invalid phone number format.";
-    } elseif (strlen($client_name) > 255) {
-        $error_message = "Client name is too long.";
-    } else {
+    $errors = [];
+    
+    if (empty($client_name)) {
+        $errors[] = "Client name is required.";
+    }
+    
+    if (empty($cds_account)) {
+        $errors[] = "CDS account is required.";
+    }
+    
+    if (empty($client_type)) {
+        $errors[] = "Client type is required.";
+    }
+    
+    if (!empty($email) && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $errors[] = "Invalid email format.";
+    }
+    
+    if (!empty($phone) && !preg_match('/^[0-9+\-\s]+$/', $phone)) {
+        $errors[] = "Invalid phone number format.";
+    }
+    
+    if (!empty($date_of_birth) && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $date_of_birth)) {
+        $errors[] = "Invalid date format for date of birth (YYYY-MM-DD).";
+    }
+    
+    if (strlen($client_name) > 200) {
+        $errors[] = "Client name is too long (max 200 characters).";
+    }
+    
+    if (!empty($national_id) && strlen($national_id) > 50) {
+        $errors[] = "National ID is too long (max 50 characters).";
+    }
+    
+    if (empty($errors)) {
         try {
-            $stmt = $db->prepare("UPDATE clients SET client_name = ?, phone = ?, email = ?, client_type = ?, updated_at = NOW() WHERE id = ?");
-            $stmt->execute([$client_name, $phone, $email, $client_type, $client_id]);
+            // Prepare update query
+            $sql = "UPDATE clients SET 
+                    client_name = ?, 
+                    national_id = ?, 
+                    date_of_birth = ?, 
+                    phone = ?, 
+                    email = ?, 
+                    client_type = ?, 
+                    address = ?, 
+                    bank_account_number = ?, 
+                    bank_name = ?, 
+                    bank_branch = ?, 
+                    currency = ?, 
+                    custodian_id = ?, 
+                    default_brokerage_fee = ?, 
+                    fee_type = ?, 
+                    client_code = ?, 
+                    status = ?, 
+                    updated_at = NOW() 
+                    WHERE id = ?";
+            
+            $stmt = $db->prepare($sql);
+            $stmt->execute([
+                $client_name,
+                $national_id ?: null,
+                $date_of_birth ?: null,
+                $phone ?: null,
+                $email ?: null,
+                $client_type,
+                $address ?: null,
+                $bank_account_number ?: null,
+                $bank_name ?: null,
+                $bank_branch ?: null,
+                $currency ?: 'TZS',
+                $custodian_id,
+                $default_brokerage_fee,
+                $fee_type,
+                $client_code ?: null,
+                $status,
+                $client_id
+            ]);
             
             if ($stmt->rowCount() > 0) {
                 $success_message = "Client details updated successfully!";
@@ -302,6 +379,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_client'])) {
         } catch (Exception $e) {
             $error_message = "Error updating client: " . $e->getMessage();
         }
+    } else {
+        $error_message = implode("<br>", $errors);
     }
 }
 
@@ -1477,7 +1556,7 @@ include '../includes/header.php';
                 </div>
             </div>
             <div class="col-md-4 text-end">
-                <a href="trades.php" class="btn btn-outline-secondary me-2">
+                <a href="trades" class="btn btn-outline-secondary me-2">
                     <i class="bi bi-arrow-left me-1"></i>
                     Back to Trades
                 </a>
@@ -1685,6 +1764,14 @@ include '../includes/header.php';
                         <p class="mb-0"><?php echo ucfirst(htmlspecialchars($client['client_type'])); ?></p>
                     </div>
                     <div class="col-md-6 mb-3">
+                        <div class="fw-semibold">National ID:</div>
+                        <p class="mb-0"><?php echo htmlspecialchars($client['national_id'] ?? 'N/A'); ?></p>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <div class="fw-semibold">Date of Birth:</div>
+                        <p class="mb-0"><?php echo !empty($client['date_of_birth']) ? date('d/m/Y', strtotime($client['date_of_birth'])) : 'N/A'; ?></p>
+                    </div>
+                    <div class="col-md-6 mb-3">
                         <div class="fw-semibold">Phone:</div>
                         <p class="mb-0"><?php echo htmlspecialchars($client['phone'] ?? 'N/A'); ?></p>
                     </div>
@@ -1693,8 +1780,48 @@ include '../includes/header.php';
                         <p class="mb-0"><?php echo htmlspecialchars($client['email'] ?? 'N/A'); ?></p>
                     </div>
                     <div class="col-md-6 mb-3">
+                        <div class="fw-semibold">Address:</div>
+                        <p class="mb-0"><?php echo htmlspecialchars($client['address'] ?? 'N/A'); ?></p>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <div class="fw-semibold">Bank Account:</div>
+                        <p class="mb-0">
+                            <?php if ($client['bank_account_number']): ?>
+                                <?php echo htmlspecialchars($client['bank_account_number']); ?>
+                                <?php if ($client['bank_name']): ?> - <?php echo htmlspecialchars($client['bank_name']); ?><?php endif; ?>
+                                <?php if ($client['bank_branch']): ?> (<?php echo htmlspecialchars($client['bank_branch']); ?>)<?php endif; ?>
+                            <?php else: ?>
+                                N/A
+                            <?php endif; ?>
+                        </p>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <div class="fw-semibold">Currency:</div>
+                        <p class="mb-0"><?php echo htmlspecialchars($client['currency'] ?? 'TZS'); ?></p>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <div class="fw-semibold">Client Code:</div>
+                        <p class="mb-0"><?php echo htmlspecialchars($client['client_code'] ?? 'N/A'); ?></p>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <div class="fw-semibold">Status:</div>
+                        <p class="mb-0">
+                            <span class="badge <?php echo $client['status'] == 'active' ? 'bg-success' : 'bg-danger'; ?>">
+                                <?php echo ucfirst(htmlspecialchars($client['status'])); ?>
+                            </span>
+                        </p>
+                    </div>
+                    <div class="col-md-6 mb-3">
                         <div class="fw-semibold">Total Investments:</div>
                         <p class="mb-0"><?php echo number_format(count($all_trades)); ?> trades</p>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <div class="fw-semibold">Fee Type:</div>
+                        <p class="mb-0"><?php echo ucfirst(htmlspecialchars($client['fee_type'])); ?></p>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <div class="fw-semibold">Default Brokerage Fee:</div>
+                        <p class="mb-0"><?php echo !empty($client['default_brokerage_fee']) ? number_format($client['default_brokerage_fee'], 2) . '%' : 'N/A'; ?></p>
                     </div>
                     <div class="col-md-6 mb-3">
                         <div class="fw-semibold">Account Created:</div>
@@ -1963,7 +2090,7 @@ include '../includes/header.php';
 <!-- Edit Client Modal -->
 <?php if ($client): ?>
 <div class="modal fade" id="editClientModal" tabindex="-1">
-    <div class="modal-dialog">
+    <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <form method="POST" action="">
                 <input type="hidden" name="client_id" value="<?php echo htmlspecialchars($client['id'] ?? ''); ?>">
@@ -1972,25 +2099,91 @@ include '../includes/header.php';
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
-                    <div class="mb-3">
-                        <label for="client_name" class="form-label">Client Name</label>
-                        <input type="text" class="form-control" id="client_name" name="client_name" value="<?php echo htmlspecialchars($client['client_name'] ?? ''); ?>" required maxlength="255">
-                    </div>
-                    <div class="mb-3">
-                        <label for="phone" class="form-label">Phone</label>
-                        <input type="text" class="form-control" id="phone" name="phone" value="<?php echo htmlspecialchars($client['phone'] ?? ''); ?>" required pattern="[0-9+\-\s]+" title="Enter a valid phone number">
-                    </div>
-                    <div class="mb-3">
-                        <label for="email" class="form-label">Email</label>
-                        <input type="email" class="form-control" id="email" name="email" value="<?php echo htmlspecialchars($client['email'] ?? ''); ?>" required>
-                    </div>
-                    <div class="mb-3">
-                        <label for="client_type" class="form-label">Client Type</label>
-                        <select class="form-select" id="client_type" name="client_type" required>
-                            <option value="corporate" <?php echo (($client['client_type'] ?? '') === 'corporate') ? 'selected' : ''; ?>>Corporate</option>
-                            <option value="individual" <?php echo (($client['client_type'] ?? '') === 'individual') ? 'selected' : ''; ?>>Individual</option>
-                            <option value="institutional" <?php echo (($client['client_type'] ?? '') === 'institutional') ? 'selected' : ''; ?>>Institutional</option>
-                        </select>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="client_name" class="form-label">Client Name *</label>
+                            <input type="text" class="form-control" id="client_name" name="client_name" value="<?php echo htmlspecialchars($client['client_name'] ?? ''); ?>" required maxlength="200">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="cds_account" class="form-label">CDS Account *</label>
+                            <input type="text" class="form-control" id="cds_account" name="cds_account" value="<?php echo htmlspecialchars($client['cds_account'] ?? ''); ?>" required maxlength="50">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="national_id" class="form-label">National ID</label>
+                            <input type="text" class="form-control" id="national_id" name="national_id" value="<?php echo htmlspecialchars($client['national_id'] ?? ''); ?>" maxlength="50">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="date_of_birth" class="form-label">Date of Birth</label>
+                            <input type="date" class="form-control" id="date_of_birth" name="date_of_birth" value="<?php echo !empty($client['date_of_birth']) ? htmlspecialchars($client['date_of_birth']) : ''; ?>">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="phone" class="form-label">Phone</label>
+                            <input type="text" class="form-control" id="phone" name="phone" value="<?php echo htmlspecialchars($client['phone'] ?? ''); ?>" pattern="[0-9+\-\s]+" title="Enter a valid phone number">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="email" class="form-label">Email</label>
+                            <input type="email" class="form-control" id="email" name="email" value="<?php echo htmlspecialchars($client['email'] ?? ''); ?>">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="client_type" class="form-label">Client Type *</label>
+                            <select class="form-select" id="client_type" name="client_type" required>
+                                <option value="individual" <?php echo (($client['client_type'] ?? '') === 'individual') ? 'selected' : ''; ?>>Individual</option>
+                                <option value="corporate" <?php echo (($client['client_type'] ?? '') === 'corporate') ? 'selected' : ''; ?>>Corporate</option>
+                                <option value="institutional" <?php echo (($client['client_type'] ?? '') === 'institutional') ? 'selected' : ''; ?>>Institutional</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="status" class="form-label">Status *</label>
+                            <select class="form-select" id="status" name="status" required>
+                                <option value="active" <?php echo (($client['status'] ?? '') === 'active') ? 'selected' : ''; ?>>Active</option>
+                                <option value="inactive" <?php echo (($client['status'] ?? '') === 'inactive') ? 'selected' : ''; ?>>Inactive</option>
+                            </select>
+                        </div>
+                        <div class="col-12 mb-3">
+                            <label for="address" class="form-label">Address</label>
+                            <textarea class="form-control" id="address" name="address" rows="2" maxlength="500"><?php echo htmlspecialchars($client['address'] ?? ''); ?></textarea>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="bank_account_number" class="form-label">Bank Account Number</label>
+                            <input type="text" class="form-control" id="bank_account_number" name="bank_account_number" value="<?php echo htmlspecialchars($client['bank_account_number'] ?? ''); ?>" maxlength="50">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="bank_name" class="form-label">Bank Name</label>
+                            <input type="text" class="form-control" id="bank_name" name="bank_name" value="<?php echo htmlspecialchars($client['bank_name'] ?? ''); ?>" maxlength="100">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="bank_branch" class="form-label">Bank Branch</label>
+                            <input type="text" class="form-control" id="bank_branch" name="bank_branch" value="<?php echo htmlspecialchars($client['bank_branch'] ?? ''); ?>" maxlength="100">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="currency" class="form-label">Currency</label>
+                            <select class="form-select" id="currency" name="currency">
+                                <option value="TZS" <?php echo (($client['currency'] ?? 'TZS') === 'TZS') ? 'selected' : ''; ?>>TZS - Tanzanian Shilling</option>
+                                <option value="USD" <?php echo (($client['currency'] ?? '') === 'USD') ? 'selected' : ''; ?>>USD - US Dollar</option>
+                                <option value="EUR" <?php echo (($client['currency'] ?? '') === 'EUR') ? 'selected' : ''; ?>>EUR - Euro</option>
+                                <option value="GBP" <?php echo (($client['currency'] ?? '') === 'GBP') ? 'selected' : ''; ?>>GBP - British Pound</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="client_code" class="form-label">Client Code</label>
+                            <input type="text" class="form-control" id="client_code" name="client_code" value="<?php echo htmlspecialchars($client['client_code'] ?? ''); ?>" maxlength="120">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="custodian_id" class="form-label">Custodian ID</label>
+                            <input type="number" class="form-control" id="custodian_id" name="custodian_id" value="<?php echo !empty($client['custodian_id']) ? htmlspecialchars($client['custodian_id']) : ''; ?>">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="default_brokerage_fee" class="form-label">Default Brokerage Fee (%)</label>
+                            <input type="number" step="0.01" class="form-control" id="default_brokerage_fee" name="default_brokerage_fee" value="<?php echo !empty($client['default_brokerage_fee']) ? htmlspecialchars($client['default_brokerage_fee']) : ''; ?>">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="fee_type" class="form-label">Fee Type</label>
+                            <select class="form-select" id="fee_type" name="fee_type">
+                                <option value="normal" <?php echo (($client['fee_type'] ?? '') === 'normal') ? 'selected' : ''; ?>>Normal</option>
+                                <option value="liberty" <?php echo (($client['fee_type'] ?? '') === 'liberty') ? 'selected' : ''; ?>>Liberty</option>
+                                <option value="this_trade" <?php echo (($client['fee_type'] ?? '') === 'this_trade') ? 'selected' : ''; ?>>This Trade</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
                 <div class="modal-footer">

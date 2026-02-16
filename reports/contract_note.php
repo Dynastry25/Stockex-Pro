@@ -544,7 +544,7 @@ function generateEquityContractNoteHTML($trade, $contract_number, $order_number,
         
         <div style="margin-top: 30px; font-size: 10px;">
             <div style="margin-bottom: 20px;">Yours Faithfully,</div>
-            <div style="margin-bottom: 20px; font-weight: bold;">FOR VICTORY FINANCIAL SERVICES LIMITED</div>
+            <div style="margin-bottom: 20px; font-weight: bold;">FOR NEOVAM LTD</div>
             
             <div style="display: flex; justify-content: space-between; margin-top: 40px;">
                 <div style="width: 45%;">
@@ -560,8 +560,8 @@ function generateEquityContractNoteHTML($trade, $contract_number, $order_number,
         
         <div style="margin-top: 30px; text-align: center; font-size: 9px; color: #666; border-top: 1px solid #eee; padding-top: 15px;">
             <p style="margin: 0; line-height: 1.2;">
-                Victory Financial Services Limited has prepared this Report solely for informational purposes. Victory Financial Services Limited does not represent warrant or guarantee that the
-                Reports are accurate. Victory Financial Services Limited disclaims liability for any direct indirect punitive special consequential or incidental damages related to the Reports or the use
+                NEOVAM LTD has prepared this Report solely for informational purposes. NEOVAM LTD does not represent warrant or guarantee that the
+                Reports are accurate. NEOVAM LTD disclaims liability for any direct indirect punitive special consequential or incidental damages related to the Reports or the use
                 of the Reports. This disclaimer applies to the Reports in their entirety irrespective of whether the Reports are used or viewed in whole or in part.
             </p>
             <div style="text-align: right; margin-top: 5px; font-weight: bold;">Page 2 of 2</div>
@@ -719,7 +719,7 @@ Account: <?php echo substr($trade['client_cds_account'], -6); ?>        </div>
         
         <div style="margin-top: 30px; font-size: 10px;">
             <div style="margin-bottom: 20px;">Yours Faithfully,</div>
-            <div style="margin-bottom: 20px; font-weight: bold;">FOR VICTORY FINANCIAL SERVICES LIMITED</div>
+            <div style="margin-bottom: 20px; font-weight: bold;">FOR NEOVAM LTD</div>
             
             <div style="display: flex; justify-content: space-between; margin-top: 40px;">
                 <div style="width: 45%;">
@@ -735,8 +735,8 @@ Account: <?php echo substr($trade['client_cds_account'], -6); ?>        </div>
         
         <div style="margin-top: 30px; text-align: center; font-size: 9px; color: #666; border-top: 1px solid #eee; padding-top: 15px;">
             <p style="margin: 0; line-height: 1.2;">
-                Victory Financial Services Limited has prepared this Report solely for informational purposes. Victory Financial Services Limited does not represent warrant or guarantee that the
-                Reports are accurate. Victory Financial Services Limited disclaims liability for any direct indirect punitive special consequential or incidental damages related to the Reports or the use
+                NEOVAM LTD has prepared this Report solely for informational purposes. NEOVAM LTD does not represent warrant or guarantee that the
+                Reports are accurate. NEOVAM LTD disclaims liability for any direct indirect punitive special consequential or incidental damages related to the Reports or the use
                 of the Reports. This disclaimer applies to the Reports in their entirety irrespective of whether the Reports are used or viewed in whole or in part.
             </p>
             <div style="text-align: right; margin-top: 5px; font-weight: bold;">Page 2 of 2</div>
