@@ -18,3 +18,83 @@
 [10-Feb-2026 23:56:18 America/Boise] TEST 4: Check Existing Stock Prices
 [10-Feb-2026 23:56:18 America/Boise] Existing stock price records: 1
 [10-Feb-2026 23:56:18 America/Boise] === TEST STOCK API COMPLETED ===
+[16-Feb-2026 05:18:21 America/Boise] === TEST STOCK API STARTED ===
+[16-Feb-2026 05:18:21 America/Boise] TEST 1: Database Connection
+[16-Feb-2026 05:18:21 America/Boise] TEST 2: DSE API Connectivity
+[16-Feb-2026 05:18:21 America/Boise] Fetching from: https://dse.co.tz/api/get/market/prices/for/range/duration?security_code=CRDB&days=1&class=EQUITY
+[16-Feb-2026 05:18:33 America/Boise] DSE API fetch failed
+[16-Feb-2026 05:18:33 America/Boise] TEST 3: Test Insert Statement
+[16-Feb-2026 05:18:33 America/Boise] Insert test passed
+[16-Feb-2026 05:18:33 America/Boise] TEST 4: Check Existing Stock Prices
+[16-Feb-2026 05:18:33 America/Boise] Existing stock price records: 599
+[16-Feb-2026 05:18:33 America/Boise] === TEST STOCK API COMPLETED ===
+[16-Feb-2026 05:19:09 America/Boise] === TEST STOCK API STARTED ===
+[16-Feb-2026 05:19:09 America/Boise] TEST 1: Database Connection
+[16-Feb-2026 05:19:09 America/Boise] TEST 2: DSE API Connectivity
+[16-Feb-2026 05:19:09 America/Boise] Fetching from: https://dse.co.tz/api/get/market/prices/for/range/duration?security_code=CRDB&days=1&class=EQUITY
+[16-Feb-2026 05:19:19 America/Boise] DSE API fetch failed
+[16-Feb-2026 05:19:19 America/Boise] TEST 3: Test Insert Statement
+[16-Feb-2026 05:19:19 America/Boise] Insert test passed
+[16-Feb-2026 05:19:19 America/Boise] TEST 4: Check Existing Stock Prices
+[16-Feb-2026 05:19:19 America/Boise] Existing stock price records: 599
+[16-Feb-2026 05:19:19 America/Boise] === TEST STOCK API COMPLETED ===
+[16-Feb-2026 07:17:34 America/Boise] === DIAGNOSTIC: Insert Failure Debug ===
+[16-Feb-2026 07:17:34 America/Boise] ✓ Database connected
+[16-Feb-2026 07:17:34 America/Boise] 
+--- TEST 1: Check stock_companies table ---
+[16-Feb-2026 07:17:34 America/Boise] ✓ stock_companies table exists with 28 records
+[16-Feb-2026 07:17:34 America/Boise] 
+--- TEST 2: Check stock_prices table ---
+[16-Feb-2026 07:17:34 America/Boise] ✓ stock_prices table exists with 19 columns:
+[16-Feb-2026 07:17:34 America/Boise]   Columns: id, company_id, symbol, trading_date, open_price, high_price, low_price, close_price, current_price, change_value, change_percent, volume, trade_value, trades_count, market_cap, source, is_processed, created_at, updated_at
+[16-Feb-2026 07:17:34 America/Boise] 
+--- TEST 3: Check stock_fetch_logs table ---
+[16-Feb-2026 07:17:34 America/Boise] ✓ stock_fetch_logs table exists with 11 records
+[16-Feb-2026 07:17:34 America/Boise] 
+--- TEST 4: Sample company record ---
+[16-Feb-2026 07:17:34 America/Boise] ✓ Found company: ID=1, Symbol=EABL, Name=EAST AFRICAN BREWERIES LIMITED
+[16-Feb-2026 07:17:34 America/Boise] 
+--- TEST 5: Test INSERT statement ---
+[16-Feb-2026 07:17:34 America/Boise] Preparing INSERT statement...
+[16-Feb-2026 07:17:34 America/Boise] ✓ Statement prepared successfully
+[16-Feb-2026 07:17:34 America/Boise] Executing INSERT with test data: company_id=1
+[16-Feb-2026 07:17:34 America/Boise] ✓ INSERT executed successfully
+[16-Feb-2026 07:17:34 America/Boise] ✓ Record verified in database: ID=1626, Symbol=TEST_071734, Date=2026-02-16
+[16-Feb-2026 07:17:34 America/Boise] 
+--- TEST 6: Simulate fetch_log insert ---
+[16-Feb-2026 07:17:34 America/Boise] Preparing fetch_log INSERT...
+[16-Feb-2026 07:17:34 America/Boise] ✓ Fetch log INSERT prepared
+[16-Feb-2026 07:17:34 America/Boise] Executing fetch_log INSERT...
+[16-Feb-2026 07:17:34 America/Boise] ✗ Fetch log test error: SQLSTATE[01000]: Warning: 1265 Data truncated for column 'status' at row 1
+[16-Feb-2026 07:17:34 America/Boise] 
+=== DIAGNOSTIC COMPLETE ===
+[16-Feb-2026 07:19:19 America/Boise] === DIAGNOSTIC: Insert Failure Debug ===
+[16-Feb-2026 07:19:19 America/Boise] ✓ Database connected
+[16-Feb-2026 07:19:19 America/Boise] 
+--- TEST 1: Check stock_companies table ---
+[16-Feb-2026 07:19:19 America/Boise] ✓ stock_companies table exists with 28 records
+[16-Feb-2026 07:19:19 America/Boise] 
+--- TEST 2: Check stock_prices table ---
+[16-Feb-2026 07:19:19 America/Boise] ✓ stock_prices table exists with 19 columns:
+[16-Feb-2026 07:19:19 America/Boise]   Columns: id, company_id, symbol, trading_date, open_price, high_price, low_price, close_price, current_price, change_value, change_percent, volume, trade_value, trades_count, market_cap, source, is_processed, created_at, updated_at
+[16-Feb-2026 07:19:19 America/Boise] 
+--- TEST 3: Check stock_fetch_logs table ---
+[16-Feb-2026 07:19:19 America/Boise] ✓ stock_fetch_logs table exists with 12 records
+[16-Feb-2026 07:19:19 America/Boise] 
+--- TEST 4: Sample company record ---
+[16-Feb-2026 07:19:19 America/Boise] ✓ Found company: ID=1, Symbol=EABL, Name=EAST AFRICAN BREWERIES LIMITED
+[16-Feb-2026 07:19:19 America/Boise] 
+--- TEST 5: Test INSERT statement ---
+[16-Feb-2026 07:19:19 America/Boise] Preparing INSERT statement...
+[16-Feb-2026 07:19:19 America/Boise] ✓ Statement prepared successfully
+[16-Feb-2026 07:19:19 America/Boise] Executing INSERT with test data: company_id=1
+[16-Feb-2026 07:19:19 America/Boise] ✓ INSERT executed successfully
+[16-Feb-2026 07:19:19 America/Boise] ✓ Record verified in database: ID=2215, Symbol=TEST_071919, Date=2026-02-16
+[16-Feb-2026 07:19:19 America/Boise] 
+--- TEST 6: Simulate fetch_log insert ---
+[16-Feb-2026 07:19:19 America/Boise] Preparing fetch_log INSERT...
+[16-Feb-2026 07:19:19 America/Boise] ✓ Fetch log INSERT prepared
+[16-Feb-2026 07:19:19 America/Boise] Executing fetch_log INSERT...
+[16-Feb-2026 07:19:19 America/Boise] ✗ Fetch log test error: SQLSTATE[01000]: Warning: 1265 Data truncated for column 'status' at row 1
+[16-Feb-2026 07:19:19 America/Boise] 
+=== DIAGNOSTIC COMPLETE ===

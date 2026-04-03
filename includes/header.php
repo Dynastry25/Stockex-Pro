@@ -157,6 +157,12 @@
                             <span>Upload SOR Historical Transaction</span>
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/ai_tickets">
+                            <i class="bi bi-ticket-detailed"></i>
+                            <span>AI Tickets</span>
+                        </a>
+                    </li>
                     
                         <li class="nav-item">
                         <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/client_management">
@@ -182,7 +188,12 @@
                             <span>Missing trades in CSD</span>
                         </a>
                     </li>
-                   
+                       <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/forms">
+                            <i class="bi bi-list-ul"></i>
+                            <span>Forms</span>
+                        </a>
+                    </li>
                     <?php endif; ?>
                     
                     <?php if ($current_user['role'] == 'finance_officer' || $current_user['role'] == 'system_admin'): ?>

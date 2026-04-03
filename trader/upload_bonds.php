@@ -1,10 +1,16 @@
 <?php
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
+// Start output buffering to catch any accidental output
+ob_start();
+
+// Include configuration files
 require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
 
 require_login();
 require_mandate();
-
 $current_user = get_logged_in_user();
 $db = getDBConnection();
 
@@ -20,6 +26,49 @@ $financial_entries_created = 0;
 $custodian_trades_processed = 0;
 $custodian_trades_recorded = 0;
 $regulatory_assignments_created = 0;
+
+// NEW: Generate a unique T+5 alphanumeric reference for bonds without CSD reference
+function generateBondTradeReference($db) {
+    $characters = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    $max_attempts = 100; // Prevent infinite loop
+    $attempt = 0;
+    
+    while ($attempt < $max_attempts) {
+        // Generate T + 5 random alphanumeric characters
+        $reference = 'T';
+        for ($i = 0; $i < 5; $i++) {
+            $reference .= $characters[random_int(0, strlen($characters) - 1)];
+        }
+        
+        // Check if reference already exists in trades table
+        try {
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM trades WHERE trade_reference = ?");
+            $stmt->execute([$reference]);
+            $result = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($result['count'] == 0) {
+                // Also check custodian trades and other tables if needed
+                $stmt2 = $db->prepare("SELECT COUNT(*) as count FROM custodians_trades WHERE trade_reference = ?");
+                $stmt2->execute([$reference]);
+                $result2 = $stmt2->fetch(PDO::FETCH_ASSOC);
+                
+                if ($result2['count'] == 0) {
+                    error_log("Generated unique bond trade reference: {$reference}");
+                    return $reference;
+                }
+            }
+        } catch (Exception $e) {
+            error_log("Error checking trade reference uniqueness: " . $e->getMessage());
+        }
+        
+        $attempt++;
+    }
+    
+    // Fallback: Use timestamp-based reference if random generation fails
+    $fallback = 'T' . date('YmdHis') . mt_rand(100, 999);
+    error_log("Using fallback bond trade reference: {$fallback}");
+    return $fallback;
+}
 
 // NEW: Check if trade exists in csd_historical_trades and get CSD reference
 function getCSDReferenceForTrade($db, $client_cds, $security_id, $trade_date, $quantity, $price, $trade_side, $client_name = '') {
@@ -112,25 +161,23 @@ function getCSDReferenceForTrade($db, $client_cds, $security_id, $trade_date, $q
     }
 }
 
-// REPLACED: Generate trade reference - ONLY use CSD reference from historical trades
-// If no CSD reference found, return null (trade will fail validation)
+// REPLACED: Generate trade reference - use CSD reference from historical trades OR generate new T+5 reference
 function getTradeReference($db, $client_cds, $security_id, $trade_date, $quantity, $price, $trade_side, $client_name = '') {
     // Check if trade exists in CSD historical trades
     $csd_reference = getCSDReferenceForTrade($db, $client_cds, $security_id, $trade_date, $quantity, $price, $trade_side, $client_name);
     
     if ($csd_reference) {
         error_log("Using CSD reference as bond trade reference: {$csd_reference}");
-        return $csd_reference; // Always use CSD reference if found
+        return $csd_reference; // Use CSD reference if found
     }
     
-    // NO NEW GENERATION - return null if no CSD reference found
-    error_log("No CSD reference found for bond trade: {$client_cds} - {$security_id} - {$trade_date}");
-    return null;
+    // If no CSD reference found, generate a new T+5 alphanumeric reference
+    $new_reference = generateBondTradeReference($db);
+    error_log("No CSD reference found for bond trade. Generated new T+5 reference: {$new_reference}");
+    return $new_reference;
 }
 
-// REMOVED: generateShortTradeReference() function completely - not needed anymore
-
-// NEW: Check for duplicate trade (SIMPLIFIED - only checks trades table)
+// NEW: Check for duplicate trade
 function isDuplicateTrade($db, $client_cds, $security_id, $trade_date, $quantity, $price, $trade_side) {
     try {
         $stmt = $db->prepare("
@@ -389,17 +436,15 @@ function findAccountForTransaction($db, $transaction_type) {
         // VAT Accounts (from 213 - VAT Payable)
         'vat_payable_brokerage' => '213', // VAT Payable
         
-        // Regulatory Fees Payable (LIABILITIES) - UPDATED: REMOVED VRF
+        // Regulatory Fees Payable (LIABILITIES)
         'cmsa_fees_payable' => '2111',    // CMSA Fees Payable
         'dse_fees_payable' => '2112',     // DSE Fees Payable
         'csdr_fees_payable' => '2113',    // CSDR Fees Payable
-        // VRF REMOVED: 'vrf_fees_payable' => '2114',     // Value Retention Fees Payable (VRF)
         
-        // Regulatory Fees Expense (when paid) - UPDATED: REMOVED VRF
+        // Regulatory Fees Expense (when paid)
         'cmsa_fees_expense' => '561',     // CMSA Fees
         'dse_fees_expense' => '562',      // DSE Fees
         'csdr_fees_expense' => '563',     // CSDR Fees
-        // VRF REMOVED: 'vrf_fees_expense' => '564',      // Value Retention Fees (VRF)
         
         // Bond Investments
         'bond_investment' => '1251',      // Government Bonds
@@ -416,7 +461,6 @@ function findAccountForTransaction($db, $transaction_type) {
         'default_cmsa' => '2111',         // CMSA Fees Payable
         'default_dse' => '2112',          // DSE Fees Payable
         'default_csdr' => '2113',         // CSDR Fees Payable
-        // VRF REMOVED: 'default_vrf' => '2114',          // VRF Fees Payable
         'default_bond_investment' => '1251', // Government Bonds
     ];
     
@@ -566,7 +610,7 @@ function recordGeneralLedgerEntry($db, $transaction_date, $account_id, $debit, $
 }
 
 /**
- * Insert regulatory fees into assignments table for accountant review - VRF REMOVED
+ * Insert regulatory fees into assignments table for accountant review
  */
 function recordRegulatoryFeeAssignment($db, $trade_reference, $fees, $client_name, $trade_date, $security_id, $security_name, $consideration, $trade_side, $created_by) {
     try {
@@ -581,9 +625,8 @@ function recordRegulatoryFeeAssignment($db, $trade_reference, $fees, $client_nam
         $dse_fee = $fees['dse'] ?? 0;
         $cmsa_fee = $fees['cmsa'] ?? 0;
         $csd_fee = $fees['csd'] ?? 0;
-        // VRF REMOVED: $vrf_fee = $fees['vrf'] ?? 0;
         
-        $total_fees = $dse_fee + $cmsa_fee + $csd_fee; // VRF REMOVED
+        $total_fees = $dse_fee + $cmsa_fee + $csd_fee;
         
         $result = $stmt->execute([
             $trade_reference,
@@ -737,7 +780,7 @@ function createBondAccountingEntries($db, $trade_reference, $consideration, $fee
 }
 
 /**
- * Record regulatory fees expense when they are actually paid (by accountant) - VRF REMOVED
+ * Record regulatory fees expense when they are actually paid (by accountant)
  */
 function recordRegulatoryFeesPayment($db, $payment_date, $fees_paid, $reference_no, $description = '') {
     try {
@@ -748,18 +791,15 @@ function recordRegulatoryFeesPayment($db, $payment_date, $fees_paid, $reference_
         $dse_payable = getAccountIdByCode($db, 'dse_fees_payable');    // 2112 - DSE Fees Payable
         $cmsa_payable = getAccountIdByCode($db, 'cmsa_fees_payable');  // 2111 - CMSA Fees Payable
         $csd_payable = getAccountIdByCode($db, 'csdr_fees_payable');   // 2113 - CSDR Fees Payable
-        // VRF REMOVED: $vrf_payable = getAccountIdByCode($db, 'vrf_fees_payable');    // 2114 - VRF Fees Payable
         $dse_expense = getAccountIdByCode($db, 'dse_fees_expense');    // 562 - DSE Fees
         $cmsa_expense = getAccountIdByCode($db, 'cmsa_fees_expense');  // 561 - CMSA Fees
         $csd_expense = getAccountIdByCode($db, 'csdr_fees_expense');   // 563 - CSDR Fees
-        // VRF REMOVED: $vrf_expense = getAccountIdByCode($db, 'vrf_fees_expense');    // 564 - VRF Fees
         
         $dse_fee = $fees_paid['dse'] ?? 0;
         $cmsa_fee = $fees_paid['cmsa'] ?? 0;
         $csd_fee = $fees_paid['csd'] ?? 0;
-        // VRF REMOVED: $vrf_fee = $fees_paid['vrf'] ?? 0;
         
-        $total_payment = $dse_fee + $cmsa_fee + $csd_fee; // VRF REMOVED
+        $total_payment = $dse_fee + $cmsa_fee + $csd_fee;
         
         if ($total_payment > 0) {
             // When paying regulatory fees:
@@ -827,8 +867,6 @@ function recordRegulatoryFeesPayment($db, $payment_date, $fees_paid, $reference_
                 $entries_created += 2;
             }
             
-            // VRF SECTION REMOVED
-            
             // Record cash payment
             recordGeneralLedgerEntry(
                 $db, $payment_date, $cash_account,
@@ -853,7 +891,7 @@ function recordRegulatoryFeesPayment($db, $payment_date, $fees_paid, $reference_
  */
 function calculateCustodianFees($fees) {
     $brokerage_fees = ($fees['brokerage'] ?? 0) + ($fees['vat'] ?? 0);
-    $other_fees = ($fees['cmsa'] ?? 0) + ($fees['csd'] ?? 0) + ($fees['dse'] ?? 0); // VRF REMOVED
+    $other_fees = ($fees['cmsa'] ?? 0) + ($fees['csd'] ?? 0) + ($fees['dse'] ?? 0);
     $total_fees = $brokerage_fees + $other_fees;
     
     return [
@@ -1024,7 +1062,7 @@ function safe_int_format($value) {
     return number_format((int)$numeric_value);
 }
 
-// Function to calculate bond fees based on your charges structure - VRF REMOVED
+// Function to calculate bond fees based on your charges structure
 function calculateBondFees($quantity, $price, $consideration) {
     $fees = [];
     
@@ -1038,16 +1076,15 @@ function calculateBondFees($quantity, $price, $consideration) {
     // VAT on Brokerage (18%)
     $fees['vat'] = $fees['brokerage'] * 0.18;
     
-    // Other fees (for accountant assignment) - VRF REMOVED
+    // Other fees (for accountant assignment)
     $fees['cmsa'] = $consideration * (0.01 / 100);
     $fees['csd'] = $face_value * (0.0118 / 100);
     $fees['dse'] = $face_value * (0.02006 / 100);
-    // VRF REMOVED: $fees['vrf'] = $face_value * (0.0025 / 100);
     
     // Total brokerage + VAT only (for immediate accounting)
     $fees['brokerage_vat_total'] = $fees['brokerage'] + $fees['vat'];
     
-    // Total regulatory fees (for assignment) - VRF REMOVED
+    // Total regulatory fees (for assignment)
     $fees['regulatory_total'] = $fees['cmsa'] + $fees['csd'] + $fees['dse'];
     
     error_log("Bond fees calculated: Brokerage={$fees['brokerage']}, VAT={$fees['vat']}, CMSA={$fees['cmsa']}, CSD={$fees['csd']}, DSE={$fees['dse']}");
@@ -1140,7 +1177,7 @@ function mapCSVRowToDatabaseBond($row) {
     ];
 }
 
-// UPDATED: Function to validate bond data - requires CSD reference to exist
+// UPDATED: Function to validate bond data - CSD reference is optional now
 function validateBondData($row, $line_num, $db, $company_code) {
     $errors = [];
     
@@ -1209,33 +1246,18 @@ function validateBondData($row, $line_num, $db, $company_code) {
         }
     }
     
-    // NEW: Check if CSD reference exists for this trade
+    // REMOVED: The check for CSD reference existence is no longer required
+    // We'll generate one automatically if it doesn't exist
+    
+    // Check for duplicate trade (if we have enough info)
     if (!empty($mapped_data['client_cds']) && !empty($security_id) && !empty($mapped_data['trade_date'])) {
         $quantity = !empty($mapped_data['quantity']) ? (int)$mapped_data['quantity'] : 0;
         $price = !empty($mapped_data['price']) ? (float)$mapped_data['price'] : 0;
         $trade_side = strtolower(trim($mapped_data['trade_side']));
-        $client_name = $mapped_data['client_name'];
         
-        // Get trade reference (MUST be from CSD historical trades)
-        $trade_reference = getTradeReference(
-            $db,
-            $mapped_data['client_cds'],
-            $security_id,
-            $mapped_data['trade_date'],
-            $quantity,
-            $price,
-            $trade_side,
-            $client_name
-        );
-        
-        // If no CSD reference found, add error
-        if (!$trade_reference) {
-            $errors[] = "No CSD reference found for this bond trade. Trade must exist in CSD historical trades.";
-        } else {
-            // Check for duplicate trade
-            if (isDuplicateTrade($db, $mapped_data['client_cds'], $security_id, $mapped_data['trade_date'], $quantity, $price, $trade_side)) {
-                $errors[] = "Duplicate trade detected. This bond trade already exists in the database.";
-            }
+        // We need to check for duplicates WITHOUT requiring a CSD reference
+        if (isDuplicateTrade($db, $mapped_data['client_cds'], $security_id, $mapped_data['trade_date'], $quantity, $price, $trade_side)) {
+            $errors[] = "Duplicate trade detected. This bond trade already exists in the database.";
         }
     }
     
@@ -1376,7 +1398,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $is_company_trade = (trim(strtolower($mapped_data['client_name'])) === trim(strtolower($company_name)));
                             $is_custodian_trade = isCustodianTrade($mapped_data['sca_code'], $company_code);
                             
-                            // Get trade reference (from CSD historical trades)
+                            // Get trade reference (from CSD historical trades OR generate new T+5)
                             $trade_reference = getTradeReference(
                                 $db,
                                 $mapped_data['client_cds'],
@@ -1392,7 +1414,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 'line_number' => $line_number++,
                                 'data' => $row,
                                 'mapped_data' => $mapped_data,
-                                'trade_reference' => $trade_reference, // Will be null if no CSD reference
+                                'trade_reference' => $trade_reference, // Will always have a value now
                                 'has_errors' => false, // Will be set during validation
                                 'errors' => [],
                                 'is_company_trade' => $is_company_trade,
@@ -1439,10 +1461,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $custodian_trades_recorded = 0;
                                 $regulatory_assignments_created = 0;
                                 $bonds_auto_created = 0;
+                                $csd_references_used = 0;
+                                $generated_references = 0;
                                 
                                 foreach ($preview_data as $preview_row) {
                                     $mapped_data = $preview_row['mapped_data'];
-                                    $trade_reference = $preview_row['trade_reference']; // Use CSD reference
+                                    $trade_reference = $preview_row['trade_reference']; // Use CSD reference or generated T+5
+                                    
+                                    // Track if we used CSD or generated
+                                    if (strpos($trade_reference, 'T') === 0 && strlen($trade_reference) == 6) {
+                                        $generated_references++;
+                                        error_log("Using GENERATED T+5 reference for bond: {$trade_reference}");
+                                    } else {
+                                        $csd_references_used++;
+                                        error_log("Using CSD reference for bond: {$trade_reference}");
+                                    }
                                     
                                     $security_id = $mapped_data['security_id'];
                                     $trade_date = $mapped_data['trade_date'];
@@ -1475,7 +1508,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     
                                     $bond_name_to_use = $bond_details ? $bond_details['bond_name'] : $security_id;
                                     
-                                    // Insert trade record (using CSD reference)
+                                    // Insert trade record (using CSD reference or generated T+5)
                                     $trade_insert_stmt = $db->prepare("
                                         INSERT INTO trades (
                                             trade_reference, asset_class, security_id, security_name,
@@ -1517,7 +1550,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         substr($counterparty_broker, 0, 100)
                                     ]);
                                     
-                                    error_log("Successfully inserted bond trade with CSD reference: {$trade_reference}");
+                                    error_log("Successfully inserted bond trade with reference: {$trade_reference}");
                                     
                                     // Record company investment if it's a company trade
                                     if ($is_company_trade && $consideration > 0) {
@@ -1530,7 +1563,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     if ($consideration > 0) {
                                         $fees = calculateBondFees($quantity, $price, $consideration);
                                         
-                                        // Record regulatory fee assignment for accountant review - VRF REMOVED
+                                        // Record regulatory fee assignment for accountant review
                                         if (($fees['dse'] > 0 || $fees['cmsa'] > 0 || $fees['csd'] > 0)) {
                                             $assignment_result = recordRegulatoryFeeAssignment(
                                                 $db,
@@ -1603,7 +1636,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $tb_result = generateTrialBalance($db, date('Y-m-d'));
                                 
                                 if ($processed > 0) {
-                                    $success_message = "Successfully processed {$processed} bond trades using CSD references from historical trades.";
+                                    $success_message = "Successfully processed {$processed} bond trades.";
+                                    
+                                    if ($csd_references_used > 0) {
+                                        $success_message .= " <strong>{$csd_references_used} trades</strong> used existing CSD references.";
+                                    }
+                                    
+                                    if ($generated_references > 0) {
+                                        $success_message .= " <strong>{$generated_references} trades</strong> received new T+5 references.";
+                                    }
                                     
                                     if ($bonds_auto_created > 0) {
                                         $success_message .= " <strong>{$bonds_auto_created} bonds auto-created</strong> in database.";
@@ -1620,10 +1661,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     }
                                     
                                     if ($regulatory_assignments_created > 0) {
-                                        $success_message .= ". <strong>{$regulatory_assignments_created} regulatory fee assignments created</strong> for accountant review (VRF fees not applicable for bonds).";
+                                        $success_message .= ". <strong>{$regulatory_assignments_created} regulatory fee assignments created</strong> for accountant review.";
                                     }
                                     
-                                    $success_message .= "<br><small><strong>Note:</strong> All trade references are from CSD historical trades database.</small>";
+                                    $success_message .= "<br><small><strong>Note:</strong> Trade references are either from CSD historical trades or newly generated T+5 alphanumeric codes.</small>";
                                     $preview_data = [];
                                 }
                                 
@@ -1664,5 +1705,242 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+$page_title = 'Upload Bonds';
 include '../includes/header.php';
 ?>
+
+<div class="container-fluid">
+    <div class="page-header">
+        <div class="container">
+            <h1 class="page-title">Upload Bonds</h1>
+            <p class="page-subtitle">Upload bond trade data from CSV files and validate it before it enters the trading workflow.</p>
+            <p class="text-muted"><small>
+                <strong>Company:</strong> <?php echo htmlspecialchars($company_name); ?> |
+                <strong>Code:</strong> <?php echo htmlspecialchars($company_code); ?>
+            </small></p>
+            <p class="text-info small mb-0">
+                <i class="bi bi-info-circle"></i>
+                Bond uploads only process rows whose Asset Class is set to Bond. 
+                <strong>Trades without CSD references will receive new T+5 alphanumeric references.</strong>
+            </p>
+        </div>
+    </div>
+
+    <div class="container">
+        <?php if ($success_message): ?>
+            <div class="alert alert-success">
+                <i class="bi bi-check-circle me-2"></i>
+                <?php echo $success_message; ?>
+            </div>
+        <?php endif; ?>
+
+        <?php if ($error_message && !$has_errors): ?>
+            <div class="alert alert-danger">
+                <i class="bi bi-exclamation-triangle me-2"></i>
+                <?php echo nl2br(htmlspecialchars($error_message)); ?>
+            </div>
+        <?php endif; ?>
+
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Bond Upload</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST" enctype="multipart/form-data" id="uploadForm">
+                    <div class="mb-3">
+                        <label for="bond_file" class="form-label">Select Bond CSV File</label>
+                        <input type="file" class="form-control" id="bond_file" name="bond_file" accept=".csv" required>
+                        <div class="form-text">
+                            <strong>Required CSV columns:</strong><br>
+                            • <strong>Security</strong> - Bond identifier/security code<br>
+                            • <strong>Name</strong> - Client name<br>
+                            • <strong>CSD Account</strong> - Client CDS account number<br>
+                            • <strong>SCA Code</strong> - Custodian/company code used to determine direct vs custodian trades<br>
+                            • <strong>Buy\Sell</strong> - Trade direction (Buy/Sell)<br>
+                            • <strong>Quantity</strong> - Nominal units<br>
+                            • <strong>Price</strong> - Trade price<br>
+                            • <strong>Asset Class</strong> - Must be <strong>Bond</strong><br>
+                            • <strong>Trade Date</strong> - Date format accepted from your upload file<br>
+                            • <strong>Settlement Date</strong> - Settlement value date<br>
+                            <strong>Processing rules:</strong> 5MB size limit, duplicate detection, client auto-creation where allowed, 
+                            and automatic T+5 reference generation when no CSD reference exists.
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary" id="uploadButton">
+                        <i class="bi bi-upload me-1"></i>Upload Bonds
+                    </button>
+                    <a href="upload_interface.php" class="btn btn-secondary">Back to Upload Hub</a>
+                    <a href="enter_bonds.php" class="btn btn-outline-secondary">Manual Bond Entry</a>
+                </form>
+            </div>
+        </div>
+
+        <?php if ($has_errors && !empty($preview_data)): ?>
+        <div class="card mt-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Validation Errors Found - Bond Rows Only</h5>
+                <span class="badge bg-danger">
+                    <?php
+                    $error_count = 0;
+                    foreach ($preview_data as $row) {
+                        $error_count += count($row['errors']);
+                    }
+                    echo count($preview_data) . ' rows • ' . $error_count . ' validation errors';
+                    ?>
+                </span>
+            </div>
+            <div class="card-body p-0">
+                <div class="alert alert-danger m-3">
+                    <i class="bi bi-exclamation-triangle me-2"></i>
+                    <strong>Upload failed because of validation errors.</strong> Fix the rows below and try again.
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Line</th>
+                                <th>Security</th>
+                                <th>Name</th>
+                                <th>SCA Code</th>
+                                <th>Trade Type</th>
+                                <th>Asset Type</th>
+                                <th>CSD Account</th>
+                                <th>Buy\Sell</th>
+                                <th>Quantity</th>
+                                <th>Price</th>
+                                <th>Consideration</th>
+                                <th>Trade Reference</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($preview_data as $preview_row):
+                                $mapped_data = $preview_row['mapped_data'];
+                                $consideration = !empty($mapped_data['consideration'])
+                                    ? (float) $mapped_data['consideration']
+                                    : ((float) $mapped_data['quantity'] * (float) $mapped_data['price']);
+                                
+                                // Determine reference source for display
+                                $reference_display = $preview_row['trade_reference'];
+                                $reference_class = '';
+                                if ($preview_row['trade_reference']) {
+                                    if (strpos($preview_row['trade_reference'], 'T') === 0 && strlen($preview_row['trade_reference']) == 6) {
+                                        $reference_display = '<span class="badge bg-info">New: ' . htmlspecialchars($preview_row['trade_reference']) . '</span>';
+                                    } else {
+                                        $reference_display = '<span class="badge bg-success">CSD: ' . htmlspecialchars($preview_row['trade_reference']) . '</span>';
+                                    }
+                                } else {
+                                    $reference_display = '<span class="badge bg-warning">Will generate</span>';
+                                }
+                            ?>
+                            <tr class="<?php echo $preview_row['has_errors'] ? 'table-danger' : 'table-success'; ?>">
+                                <td class="fw-bold"><?php echo $preview_row['line_number']; ?></td>
+                                <td><?php echo htmlspecialchars($mapped_data['security_id']); ?></td>
+                                <td>
+                                    <?php echo htmlspecialchars($mapped_data['client_name']); ?>
+                                    <?php if ($preview_row['is_company_trade']): ?>
+                                        <span class="badge bg-info ms-1">Company</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td><?php echo htmlspecialchars($mapped_data['sca_code']); ?></td>
+                                <td>
+                                    <?php if ($preview_row['is_custodian_trade']): ?>
+                                        <span class="badge bg-warning">Custodian</span>
+                                    <?php else: ?>
+                                        <span class="badge bg-primary">Direct</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td><?php echo htmlspecialchars(ucfirst($mapped_data['asset_class'])); ?></td>
+                                <td><?php echo htmlspecialchars($mapped_data['client_cds']); ?></td>
+                                <td><?php echo htmlspecialchars(ucfirst($mapped_data['trade_side'])); ?></td>
+                                <td><?php echo safe_int_format($mapped_data['quantity']); ?></td>
+                                <td>Tsh<?php echo safe_number_format($mapped_data['price']); ?></td>
+                                <td>Tsh<?php echo safe_int_format($consideration); ?></td>
+                                <td><?php echo $reference_display; ?></td>
+                                <td>
+                                    <?php if ($preview_row['has_errors']): ?>
+                                        <span class="badge bg-danger">Validation Error</span>
+                                    <?php else: ?>
+                                        <span class="badge bg-success">Valid</span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                            <?php if ($preview_row['has_errors']): ?>
+                            <tr class="table-warning">
+                                <td colspan="13" class="small">
+                                    <strong>Error:</strong> <?php echo htmlspecialchars(implode('; ', $preview_row['errors'])); ?>
+                                </td>
+                            </tr>
+                            <?php endif; ?>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <?php endif; ?>
+
+        <div class="card mt-4">
+            <div class="card-header">
+                <h6 class="mb-0">Bond Upload Controls</h6>
+            </div>
+            <div class="card-body">
+                <small class="text-muted"><strong>Validation flow:</strong></small>
+                <ul class="mb-3">
+                    <li>Only bond rows are processed from the uploaded CSV.</li>
+                    <li>Each row gets a trade reference - either from CSD historical trades or a newly generated T+5 reference.</li>
+                    <li>New T+5 references follow the format: T followed by 5 alphanumeric characters (e.g., T5A9B2).</li>
+                    <li>Duplicate bond trades are blocked before insert.</li>
+                    <li>Custodian trades are detected from the SCA code and routed accordingly.</li>
+                </ul>
+                <small class="text-muted"><strong>Before uploading:</strong></small>
+                <ul class="mb-0">
+                    <li>Confirm the bond identifiers match your configured bond master data.</li>
+                    <li>Ensure dates and quantities are accurate.</li>
+                    <li>Use CSV files below 5MB and keep the original column names intact.</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const uploadForm = document.getElementById('uploadForm');
+    const uploadButton = document.getElementById('uploadButton');
+
+    if (!uploadForm || !uploadButton) {
+        return;
+    }
+
+    uploadForm.addEventListener('submit', function(e) {
+        const fileInput = document.getElementById('bond_file');
+        const file = fileInput.files[0];
+
+        if (!file) {
+            return;
+        }
+
+        uploadButton.disabled = true;
+        uploadButton.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>Processing...';
+
+        const fileSize = file.size / 1024 / 1024;
+        if (fileSize > 5) {
+            e.preventDefault();
+            alert('File size must be less than 5MB');
+            uploadButton.disabled = false;
+            uploadButton.innerHTML = '<i class="bi bi-upload me-1"></i>Upload Bonds';
+            return;
+        }
+
+        if (!file.name.toLowerCase().endsWith('.csv')) {
+            e.preventDefault();
+            alert('Please select a CSV file');
+            uploadButton.disabled = false;
+            uploadButton.innerHTML = '<i class="bi bi-upload me-1"></i>Upload Bonds';
+        }
+    });
+});
+</script>
+
+<?php include '../includes/footer.php'; ?>

@@ -5,10 +5,10 @@
  * Retrieve stock price data from database
  * 
  * Usage:
- * GET  /api/v1/stock_prices.php - Get all stocks (today's prices)
- * GET  /api/v1/stock_prices.php?symbol=CRDB - Get specific stock
- * GET  /api/v1/stock_prices.php?symbol=CRDB&days=30 - Get historical data
- * GET  /api/v1/stock_prices.php?date=2026-02-10 - Get prices for specific date
+ * GET  /api/v1/stock_prices.php - Get latest snapshot for all symbols
+ * GET  /api/v1/stock_prices.php?symbol=CRDB - Get latest snapshot for CRDB
+ * GET  /api/v1/stock_prices.php?symbol=CRDB&days=30 - Get historical data (last 30 days)
+ * GET  /api/v1/stock_prices.php?date=2026-02-10 - Get snapshots for specific date
  * 
  * Query Parameters:
  * - symbol: Stock symbol (e.g., CRDB, NMB, TBL)
@@ -64,63 +64,112 @@ try {
     
     error_log("Stock prices request: symbol={$symbol}, days={$days}, date={$date}");
     
-    // Build query
-    $where_conditions = [];
+    // Determine if any date filter is applied
+    $dateFiltersApplied = $date || ($from_date && $to_date) || $days > 1;
+    
+    // Prepare parameters array
     $params = [];
     
-    // Filter by symbol
-    if ($symbol) {
-        $where_conditions[] = "sp.symbol = ?";
-        $params[] = $symbol;
-    }
-    
-    // Filter by date
-    if ($date) {
-        $where_conditions[] = "sp.trading_date = ?";
-        $params[] = $date;
-    } elseif ($from_date && $to_date) {
-        $where_conditions[] = "sp.trading_date BETWEEN ? AND ?";
-        $params[] = $from_date;
-        $params[] = $to_date;
-    } elseif ($days > 1) {
-        $where_conditions[] = "sp.trading_date >= DATE_SUB(CURDATE(), INTERVAL ? DAY)";
-        $params[] = $days;
+    if (!$dateFiltersApplied) {
+        // ---- LATEST SNAPSHOT MODE ----
+        // Build subquery to get max snapshot_time per symbol (optionally filtered by symbol)
+        $subQuery = "SELECT symbol, MAX(snapshot_time) as max_time
+                     FROM stock_prices
+                     WHERE 1=1";
+        if ($symbol) {
+            $subQuery .= " AND symbol = ?";
+            $params[] = $symbol;
+        }
+        $subQuery .= " GROUP BY symbol";
+        
+        // Main query joining with the subquery
+        $query = "
+            SELECT 
+                sp.id,
+                sp.symbol,
+                sc.name as company_name,
+                sc.full_name,
+                sp.trading_date,
+                sp.open_price,
+                sp.high_price,
+                sp.low_price,
+                sp.close_price,
+                sp.current_price,
+                sp.change_value,
+                sp.change_percent,
+                sp.volume,
+                sp.trade_value,
+                sp.market_cap,
+                sc.currency,
+                sc.exchange,
+                sp.created_at,
+                sp.updated_at
+            FROM stock_prices sp
+            INNER JOIN (
+                $subQuery
+            ) latest ON sp.symbol = latest.symbol AND sp.snapshot_time = latest.max_time
+            INNER JOIN stock_companies sc ON sp.company_id = sc.id
+            ORDER BY sp.symbol ASC
+            LIMIT {$limit}
+        ";
+        
     } else {
-        // Default: today's date or latest available
-        $where_conditions[] = "sp.trading_date = (SELECT MAX(trading_date) FROM stock_prices WHERE symbol = sp.symbol)";
+        // ---- HISTORICAL MODE ----
+        // Build where conditions based on date filters
+        $where_conditions = [];
+        
+        if ($symbol) {
+            $where_conditions[] = "sp.symbol = ?";
+            $params[] = $symbol;
+        }
+        
+        if ($date) {
+            $where_conditions[] = "sp.trading_date = ?";
+            $params[] = $date;
+        } elseif ($from_date && $to_date) {
+            $where_conditions[] = "sp.trading_date BETWEEN ? AND ?";
+            $params[] = $from_date;
+            $params[] = $to_date;
+        } elseif ($days > 1) {
+            $where_conditions[] = "sp.trading_date >= DATE_SUB(CURDATE(), INTERVAL ? DAY)";
+            $params[] = $days;
+        } else {
+            // Should not happen because $dateFiltersApplied is true, but fallback
+            $where_conditions[] = "sp.trading_date = CURDATE()";
+        }
+        
+        $where_clause = !empty($where_conditions) ? 'WHERE ' . implode(' AND ', $where_conditions) : '';
+        
+        $query = "
+            SELECT 
+                sp.id,
+                sp.symbol,
+                sc.name as company_name,
+                sc.full_name,
+                sp.trading_date,
+                sp.open_price,
+                sp.high_price,
+                sp.low_price,
+                sp.close_price,
+                sp.current_price,
+                sp.change_value,
+                sp.change_percent,
+                sp.volume,
+                sp.trade_value,
+                sp.market_cap,
+                sc.currency,
+                sc.exchange,
+                sp.created_at,
+                sp.updated_at
+            FROM stock_prices sp
+            INNER JOIN stock_companies sc ON sp.company_id = sc.id
+            {$where_clause}
+            ORDER BY sp.trading_date DESC, sp.snapshot_time DESC, sp.symbol ASC
+            LIMIT {$limit}
+        ";
     }
-    
-    $where_clause = !empty($where_conditions) ? 'WHERE ' . implode(' AND ', $where_conditions) : '';
     
     // Execute query
-    $query = "
-        SELECT 
-            sp.id,
-            sp.symbol,
-            sc.name as company_name,
-            sc.full_name,
-            sp.trading_date,
-            sp.open_price,
-            sp.high_price,
-            sp.low_price,
-            sp.close_price,
-            sp.current_price,
-            sp.change_value,
-            sp.change_percent,
-            sp.volume,
-            sp.trade_value,
-            sp.market_cap,
-            sc.currency,
-            sc.exchange,
-            sp.created_at,
-            sp.updated_at
-        FROM stock_prices sp
-        INNER JOIN stock_companies sc ON sp.company_id = sc.id
-        {$where_clause}
-        ORDER BY sp.trading_date DESC, sp.symbol ASC
-        LIMIT {$limit}
-    ";
-    
     $stmt = $db->prepare($query);
     $stmt->execute($params);
     $prices = $stmt->fetchAll(PDO::FETCH_ASSOC);

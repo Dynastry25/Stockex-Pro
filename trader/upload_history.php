@@ -566,7 +566,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                                              trade_date, settlement_date, exchange_reference, 
                                              trade_side, market_type, settlement_type,
                                              client_id, uploaded_by, uploaded_at)
-                                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
                                         ");
                                         
                                         $stmt->execute([

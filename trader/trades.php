@@ -10,6 +10,23 @@ $db = getDBConnection();
 $success_message = '';
 $error_message = '';
 
+function buildTradeListUrl($overrides = []) {
+    $query = $_GET;
+
+    foreach ($overrides as $key => $value) {
+        if ($value === null || $value === '') {
+            unset($query[$key]);
+            continue;
+        }
+
+        $query[$key] = $value;
+    }
+
+    $queryString = http_build_query($query);
+
+    return $queryString ? '?' . $queryString : '?';
+}
+
 // Get company details from database
 $company_stmt = $db->query("SELECT * FROM companies WHERE status = 'active' ORDER BY id LIMIT 1");
 $company = $company_stmt->fetch();
@@ -1125,7 +1142,7 @@ $clients = [];
 $stmt = $db->query("SELECT id, client_name, cds_account FROM clients WHERE status = 'active' ORDER BY client_name");
 $clients = $stmt->fetchAll();
 
-// Get trades with extensive filtering including dates - WITHOUT PAGINATION (client-side)
+// Get trades with extensive filtering using server-side pagination
 $where_conditions = [];
 $params = [];
 
@@ -1180,7 +1197,27 @@ if (empty($where_conditions)) {
     $where_clause = implode(' AND ', $where_conditions);
 }
 
-// Get all trades without pagination
+$allowed_page_sizes = [10, 25, 50, 100, 500];
+$default_per_page = 50;
+$per_page = isset($_GET['per_page']) ? (int) $_GET['per_page'] : $default_per_page;
+if (!in_array($per_page, $allowed_page_sizes, true)) {
+    $per_page = $default_per_page;
+}
+
+$page = isset($_GET['page']) ? max(1, (int) $_GET['page']) : 1;
+
+$count_stmt = $db->prepare("SELECT COUNT(*) AS total FROM trades t WHERE $where_clause");
+$count_stmt->execute($params);
+$total_trades = (int) $count_stmt->fetch()['total'];
+
+$total_pages = max(1, (int) ceil($total_trades / $per_page));
+if ($page > $total_pages) {
+    $page = $total_pages;
+}
+
+$offset = ($page - 1) * $per_page;
+
+// Get only the current page of trades
 $stmt = $db->prepare("
     SELECT t.*, 
            COALESCE(e.stock_name, b.security_id, etf.stock_name) AS asset_name,
@@ -1200,13 +1237,15 @@ $stmt = $db->prepare("
     LEFT JOIN clients cl ON t.client_cds_account = cl.cds_account AND cl.is_active = 1
     WHERE $where_clause
     ORDER BY t.created_at DESC
+    LIMIT " . (int) $per_page . " OFFSET " . (int) $offset . "
 ");
 
 $stmt->execute($params);
 $trades = $stmt->fetchAll();
 
-// Get total count for display
-$total_trades = count($trades);
+$current_page_count = count($trades);
+$showing_from = $total_trades > 0 ? $offset + 1 : 0;
+$showing_to = $total_trades > 0 ? $offset + $current_page_count : 0;
 
 // Check if we need to show contract modal
 $show_contract_modal = isset($_GET['show_contract_modal']) && isset($_SESSION['contract_modal_data']);
@@ -1214,9 +1253,6 @@ $show_contract_modal = isset($_GET['show_contract_modal']) && isset($_SESSION['c
 $page_title = 'Trade Management';
 include '../includes/header.php';
 ?>
-
-<!-- The rest of your HTML/PHP code remains exactly the same as in your second file -->
-<!-- Only the PHP functions above were fixed -->
 
 <!-- Enhanced professional trade management header with modern styling -->
 <div class="page-header">
@@ -1745,23 +1781,22 @@ include '../includes/header.php';
                     </button>
                 </div>
             <?php else: ?>
-                <!-- Bootstrap table with client-side pagination -->
+                <!-- Bootstrap table with server-side pagination -->
                 <div class="p-3 border-bottom">
                     <div class="d-flex justify-content-between align-items-center">
                         <div>
                             <small class="text-muted">
-                                Showing <span id="currentCount"><?php echo number_format(min(10, $total_trades)); ?></span> of <?php echo number_format($total_trades); ?> trades
+                                Showing <?php echo number_format($current_page_count); ?> of <?php echo number_format($total_trades); ?> trades
                             </small>
                         </div>
                         <div class="d-flex align-items-center">
                             <label for="pageSize" class="form-label mb-0 me-2 small">Show:</label>
                             <select id="pageSize" class="form-select form-select-sm" style="width: auto;">
-                                <option value="10">10</option>
-                                <option value="25">25</option>
-                                <option value="50">50</option>
-                                <option value="100">100</option>
-                                <option value="500">500</option>
-                                <option value="all">All</option>
+                                <option value="10" <?php echo $per_page === 10 ? 'selected' : ''; ?>>10</option>
+                                <option value="25" <?php echo $per_page === 25 ? 'selected' : ''; ?>>25</option>
+                                <option value="50" <?php echo $per_page === 50 ? 'selected' : ''; ?>>50</option>
+                                <option value="100" <?php echo $per_page === 100 ? 'selected' : ''; ?>>100</option>
+                                <option value="500" <?php echo $per_page === 500 ? 'selected' : ''; ?>>500</option>
                             </select>
                         </div>
                     </div>
@@ -1801,7 +1836,7 @@ include '../includes/header.php';
                                     $asset_class_badge = 'bg-info';
                                 }
                             ?>
-                                <tr class="trade-row border-bottom" style="border-color: var(--border-light) !important;">
+                                <tr class="border-bottom" style="border-color: var(--border-light) !important;">
                                     <td class="border-0 py-3">
                                         <div class="fw-semibold text-primary"><?php echo htmlspecialchars($trade['trade_reference']); ?></div>
                                         <small class="text-muted">Trade ID: <?php echo $trade['id']; ?></small>
@@ -1943,12 +1978,48 @@ include '../includes/header.php';
                     <div class="d-flex justify-content-between align-items-center">
                         <div>
                             <small class="text-muted">
-                                Showing <span id="showingFrom">1</span> to <span id="showingTo"><?php echo number_format(min(10, $total_trades)); ?></span> of <?php echo number_format($total_trades); ?> trades
+                                Showing <?php echo number_format($showing_from); ?> to <?php echo number_format($showing_to); ?> of <?php echo number_format($total_trades); ?> trades
                             </small>
                         </div>
                         <nav>
-                            <ul class="pagination pagination-sm mb-0" id="pagination">
-                                <!-- Pagination will be generated by JavaScript -->
+                            <ul class="pagination pagination-sm mb-0">
+                                <?php $previous_disabled = $page <= 1; ?>
+                                <li class="page-item <?php echo $previous_disabled ? 'disabled' : ''; ?>">
+                                    <a class="page-link" href="<?php echo $previous_disabled ? '#' : buildTradeListUrl(['page' => $page - 1]); ?>" aria-label="Previous">
+                                        <span aria-hidden="true">&laquo;</span>
+                                    </a>
+                                </li>
+                                <?php
+                                $start_page = max(1, $page - 2);
+                                $end_page = min($total_pages, $page + 2);
+
+                                if ($start_page > 1):
+                                ?>
+                                    <li class="page-item"><a class="page-link" href="<?php echo buildTradeListUrl(['page' => 1]); ?>">1</a></li>
+                                    <?php if ($start_page > 2): ?>
+                                        <li class="page-item disabled"><span class="page-link">...</span></li>
+                                    <?php endif; ?>
+                                <?php endif; ?>
+
+                                <?php for ($page_number = $start_page; $page_number <= $end_page; $page_number++): ?>
+                                    <li class="page-item <?php echo $page_number === $page ? 'active' : ''; ?>">
+                                        <a class="page-link" href="<?php echo buildTradeListUrl(['page' => $page_number]); ?>"><?php echo $page_number; ?></a>
+                                    </li>
+                                <?php endfor; ?>
+
+                                <?php if ($end_page < $total_pages): ?>
+                                    <?php if ($end_page < $total_pages - 1): ?>
+                                        <li class="page-item disabled"><span class="page-link">...</span></li>
+                                    <?php endif; ?>
+                                    <li class="page-item"><a class="page-link" href="<?php echo buildTradeListUrl(['page' => $total_pages]); ?>"><?php echo $total_pages; ?></a></li>
+                                <?php endif; ?>
+
+                                <?php $next_disabled = $page >= $total_pages; ?>
+                                <li class="page-item <?php echo $next_disabled ? 'disabled' : ''; ?>">
+                                    <a class="page-link" href="<?php echo $next_disabled ? '#' : buildTradeListUrl(['page' => $page + 1]); ?>" aria-label="Next">
+                                        <span aria-hidden="true">&raquo;</span>
+                                    </a>
+                                </li>
                             </ul>
                         </nav>
                     </div>
@@ -2147,8 +2218,15 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // Initialize client-side pagination
-    initPagination();
+    const pageSizeSelect = document.getElementById('pageSize');
+    if (pageSizeSelect) {
+        pageSizeSelect.addEventListener('change', function() {
+            const url = new URL(window.location.href);
+            url.searchParams.set('per_page', this.value);
+            url.searchParams.set('page', '1');
+            window.location.href = url.toString();
+        });
+    }
 });
 
 function updateInstruments() {
@@ -2205,112 +2283,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 });
-
-// Client-side pagination function
-function initPagination() {
-    const rows = document.querySelectorAll('.trade-row');
-    const totalRows = rows.length;
-    const pageSizeSelect = document.getElementById('pageSize');
-    const currentCount = document.getElementById('currentCount');
-    const showingFrom = document.getElementById('showingFrom');
-    const showingTo = document.getElementById('showingTo');
-    const pagination = document.getElementById('pagination');
-    
-    let currentPage = 1;
-    let pageSize = parseInt(pageSizeSelect.value) || 10;
-    
-    function updateDisplay() {
-        // Hide all rows
-        rows.forEach(row => row.style.display = 'none');
-        
-        // Calculate start and end indices
-        const startIndex = (currentPage - 1) * pageSize;
-        const endIndex = pageSize === 'all' ? totalRows : Math.min(startIndex + pageSize, totalRows);
-        
-        // Show rows for current page
-        for (let i = startIndex; i < endIndex; i++) {
-            if (rows[i]) {
-                rows[i].style.display = '';
-            }
-        }
-        
-        // Update counters
-        const displayCount = pageSize === 'all' ? totalRows : Math.min(pageSize, totalRows);
-        currentCount.textContent = displayCount.toLocaleString();
-        showingFrom.textContent = (startIndex + 1).toLocaleString();
-        showingTo.textContent = endIndex.toLocaleString();
-        
-        // Generate pagination buttons
-        generatePaginationButtons();
-    }
-    
-    function generatePaginationButtons() {
-        pagination.innerHTML = '';
-        
-        if (pageSize === 'all' || totalRows <= pageSize) {
-            return; // No pagination needed
-        }
-        
-        const totalPages = Math.ceil(totalRows / pageSize);
-        
-        // Previous button
-        const prevLi = document.createElement('li');
-        prevLi.className = 'page-item' + (currentPage === 1 ? ' disabled' : '');
-        prevLi.innerHTML = `
-            <a class="page-link" href="#" aria-label="Previous" ${currentPage === 1 ? 'tabindex="-1"' : ''}>
-                <span aria-hidden="true">&laquo;</span>
-            </a>
-        `;
-        prevLi.querySelector('a').addEventListener('click', (e) => {
-            e.preventDefault();
-            if (currentPage > 1) {
-                currentPage--;
-                updateDisplay();
-            }
-        });
-        pagination.appendChild(prevLi);
-        
-        // Page buttons
-        for (let i = 1; i <= totalPages; i++) {
-            const li = document.createElement('li');
-            li.className = 'page-item' + (i === currentPage ? ' active' : '');
-            li.innerHTML = `<a class="page-link" href="#">${i}</a>`;
-            li.querySelector('a').addEventListener('click', (e) => {
-                e.preventDefault();
-                currentPage = i;
-                updateDisplay();
-            });
-            pagination.appendChild(li);
-        }
-        
-        // Next button
-        const nextLi = document.createElement('li');
-        nextLi.className = 'page-item' + (currentPage === totalPages ? ' disabled' : '');
-        nextLi.innerHTML = `
-            <a class="page-link" href="#" aria-label="Next" ${currentPage === totalPages ? 'tabindex="-1"' : ''}>
-                <span aria-hidden="true">&raquo;</span>
-            </a>
-        `;
-        nextLi.querySelector('a').addEventListener('click', (e) => {
-            e.preventDefault();
-            if (currentPage < totalPages) {
-                currentPage++;
-                updateDisplay();
-            }
-        });
-        pagination.appendChild(nextLi);
-    }
-    
-    // Handle page size change
-    pageSizeSelect.addEventListener('change', function() {
-        pageSize = this.value === 'all' ? 'all' : parseInt(this.value);
-        currentPage = 1;
-        updateDisplay();
-    });
-    
-    // Initial display
-    updateDisplay();
-}
 
 (function() {
     'use strict';
