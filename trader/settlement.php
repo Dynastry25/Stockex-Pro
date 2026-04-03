@@ -1,6 +1,7 @@
 <?php
 require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
+require_once '../includes/dealing_sheet_helpers.php';
 
 // Check user permissions - finance, admin, and operations can access
 $user_role = $_SESSION['role'] ?? '';
@@ -15,8 +16,29 @@ if (!in_array($user_role, $allowed_roles)) {
 }
 
 $db = getDBConnection();
+$current_user = get_logged_in_user() ?: get_session_user();
 $success_message = '';
 $error_message = '';
+
+if (function_exists('dealingSheetEnsureSchema')) {
+    try {
+        dealingSheetEnsureSchema($db);
+    } catch (Exception $e) {
+        error_log('Unable to initialize dealing sheet schema on settlement page: ' . $e->getMessage());
+    }
+}
+
+function syncSettlementTradeToDealingSheetSafely($db, $tradeId, $user) {
+    if (!function_exists('dealingSheetSyncTradeLifecycle')) {
+        return;
+    }
+
+    try {
+        dealingSheetSyncTradeLifecycle($db, (int) $tradeId, $user, false);
+    } catch (Exception $e) {
+        error_log('Failed to sync settlement status for trade ' . (int) $tradeId . ': ' . $e->getMessage());
+    }
+}
 
 // Get company details
 $company_stmt = $db->query("SELECT * FROM companies WHERE status = 'active' ORDER BY id LIMIT 1");
@@ -313,6 +335,7 @@ if (isset($_POST['bulk_payment']) && isset($_POST['trade_ids'])) {
                     ");
                     
                     if ($update_stmt->execute([$user_id, $notes, $trade_id])) {
+                        syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
                         // Create payment record in payment book
                         $amount = $trade['consideration'];
                         $description = $narration ?: "Payment for " . $trade['security_id'] . " shares " . ($trade['trade_side'] === 'sell' ? 'sold' : 'purchased') . " - Trade Ref: " . $trade['trade_reference'];
@@ -536,6 +559,7 @@ if (isset($_POST['single_payment']) && isset($_POST['trade_id'])) {
             ");
             
             if ($update_stmt->execute([$user_id, $notes, $trade_id])) {
+                syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
                 if (!$existing_payment) {
                     // Update payment record in payment book
                     $amount = $trade['consideration'];
@@ -660,6 +684,7 @@ if (isset($_POST['link_trade']) && isset($_POST['trade_id']) && isset($_POST['li
                         ");
                         
                         if ($update_stmt->execute([$notes, $user_id, $trade_id])) {
+                            syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
                             $success_message = "Trade successfully linked! Sale linked to buy trade.";
                         } else {
                             $error_message = "Error updating trade status.";
@@ -708,6 +733,7 @@ if (isset($_POST['mark_unpaid']) && isset($_POST['trade_id'])) {
             ");
             
             if ($update_stmt->execute([$notes, $trade_id])) {
+                syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
                 // Deactivate payment record if exists
                 $payment_stmt = $db->prepare("
                     UPDATE payments 
@@ -770,6 +796,7 @@ if (isset($_POST['mark_failed']) && isset($_POST['trade_id'])) {
         ");
         
         if ($stmt->execute([$failure_reason, $action_needed, $notes, $user_id, $trade_id])) {
+            syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
             $success_message = 'Trade marked as failed with reason.';
         } else {
             $error_message = 'Error marking trade as failed.';
@@ -800,6 +827,7 @@ if (isset($_POST['retry_failed']) && isset($_POST['trade_id'])) {
         ");
         
         if ($stmt->execute([$notes, $trade_id])) {
+            syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
             $success_message = 'Trade ready for payment retry.';
         } else {
             $error_message = 'Error resetting failed trade.';
@@ -842,6 +870,7 @@ if (isset($_POST['bulk_action']) && isset($_POST['trade_ids'])) {
                             WHERE id = ?
                         ");
                         if ($stmt->execute([$notes, $trade_id])) {
+                            syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
                             $processed++;
                         } else {
                             $failed++;
@@ -864,6 +893,7 @@ if (isset($_POST['bulk_action']) && isset($_POST['trade_ids'])) {
                             WHERE id = ?
                         ");
                         if ($stmt->execute([$failure_reason, $action_needed, $notes, $user_id, $trade_id])) {
+                            syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
                             $processed++;
                         } else {
                             $failed++;

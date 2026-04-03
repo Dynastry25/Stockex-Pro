@@ -146,6 +146,18 @@
                         </a>
                     </li>
                     <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/dealing_sheet.php">
+                            <i class="bi bi-journal-check"></i>
+                            <span>Dealing Sheets</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/order_sheet.php">
+                            <i class="bi bi-journal-text"></i>
+                            <span>Order Intake</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link" href="<?php echo BASE_URL; ?>trader/upload_interface">
                             <i class="bi bi-upload"></i>
                             <span>Upload Trades</span>

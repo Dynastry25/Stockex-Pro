@@ -8,6 +8,7 @@
 
 require_once __DIR__ . '/../../config/config.php';
 require_once __DIR__ . '/../../includes/financial_helpers.php';
+require_once __DIR__ . '/../../includes/dealing_sheet_helpers.php';
 
 header('Content-Type: application/json');
 
@@ -22,6 +23,7 @@ if (!is_logged_in()) {
 
 $db = getDBConnection();
 $user = get_logged_in_user();
+dealingSheetEnsureSchema($db);
 
 $method = $_SERVER['REQUEST_METHOD'];
 $action = $_GET['action'] ?? null;
@@ -63,7 +65,32 @@ try {
                 'success' => true,
                 'data' => [
                     'orders' => $orders,
-                    'note' => 'Placeholder data: API integration pending'
+                    'note' => 'Live order-intake records from dealing sheet lifecycle'
+                ]
+            ]);
+            break;
+
+        case 'dealing_sheets':
+            if ($method !== 'GET') {
+                throw new Exception('Method not allowed');
+            }
+
+            $filters = [
+                'view' => $_GET['view'] ?? 'all',
+                'search' => $_GET['search'] ?? '',
+                'stage' => $_GET['stage'] ?? 'all',
+                'asset_class' => $_GET['asset_class'] ?? 'all',
+                'payment_status' => $_GET['payment_status'] ?? 'all',
+                'date_from' => $_GET['date_from'] ?? '',
+                'date_to' => $_GET['date_to'] ?? '',
+            ];
+
+            echo json_encode([
+                'success' => true,
+                'data' => [
+                    'overview' => dealingSheetOverview($db),
+                    'sheets' => dealingSheetList($db, $filters),
+                    'filters' => $filters
                 ]
             ]);
             break;
@@ -88,7 +115,7 @@ try {
             http_response_code(400);
             echo json_encode([
                 'success' => false,
-                'message' => 'Invalid action. Supported actions: trades, orders, mark_popup_shown'
+                'message' => 'Invalid action. Supported actions: trades, orders, dealing_sheets, mark_popup_shown'
             ]);
             break;
     }

@@ -8,6 +8,7 @@
 
 // Include API config for CORS headers and utilities
 require_once __DIR__ . '/../config.php';
+require_once __DIR__ . '/../../includes/dealing_sheet_helpers.php';
 require_once __DIR__ . '/../../tcpdf/tcpdf.php';
 
 // ============================================================================
@@ -653,6 +654,17 @@ try {
     }
     
     $trade_id = intval($_GET['trade_id']);
+    $dealing_sheet_user = [
+        'id' => $_SESSION['user_id'] ?? null,
+        'full_name' => $_SESSION['full_name'] ?? ($_SESSION['username'] ?? 'System User')
+    ];
+
+    try {
+        dealingSheetEnsureSchema($db);
+        dealingSheetMarkContractGeneratedForTrade($db, $trade_id, $dealing_sheet_user, false);
+    } catch (Exception $e) {
+        error_log('Contract note dealing sheet sync failed for trade ' . $trade_id . ': ' . $e->getMessage());
+    }
     
     // Get company details from database
     $company_stmt = $db->query("SELECT * FROM companies WHERE status = 'active' ORDER BY id LIMIT 1");

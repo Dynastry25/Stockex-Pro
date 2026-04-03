@@ -1,14 +1,52 @@
 <?php
 require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
+require_once '../includes/dealing_sheet_helpers.php';
 require_once '../tcpdf/tcpdf.php';
 
 require_trader();
 require_mandate();
 
 $db = getDBConnection();
+$current_user = get_logged_in_user() ?: get_session_user();
+$dealing_sheet_enabled = false;
 $success_message = '';
 $error_message = '';
+
+if (function_exists('dealingSheetEnsureSchema')) {
+    try {
+        dealingSheetEnsureSchema($db);
+        $dealing_sheet_enabled = true;
+    } catch (Exception $e) {
+        error_log('Unable to initialize dealing sheet schema on trades page: ' . $e->getMessage());
+    }
+}
+
+function syncTradeToDealingSheetSafely($db, $tradeId, $user, $createIfMissing = false)
+{
+    if (!function_exists('dealingSheetSyncTradeLifecycle')) {
+        return;
+    }
+
+    try {
+        dealingSheetSyncTradeLifecycle($db, (int) $tradeId, $user, $createIfMissing);
+    } catch (Exception $e) {
+        error_log('Failed to sync trade ' . (int) $tradeId . ' to dealing sheet lifecycle: ' . $e->getMessage());
+    }
+}
+
+function markTradeContractNoteGeneratedSafely($db, $tradeId, $user, $createIfMissing = false)
+{
+    if (!function_exists('dealingSheetMarkContractGeneratedForTrade')) {
+        return;
+    }
+
+    try {
+        dealingSheetMarkContractGeneratedForTrade($db, (int) $tradeId, $user, $createIfMissing);
+    } catch (Exception $e) {
+        error_log('Failed to mark contract note generation for trade ' . (int) $tradeId . ': ' . $e->getMessage());
+    }
+}
 
 function buildTradeListUrl($overrides = []) {
     $query = $_GET;
@@ -507,6 +545,7 @@ if (isset($_GET['action']) && isset($_GET['id'])) {
             case 'cancel':
                 $stmt = $db->prepare("UPDATE trades SET status = 'cancelled' WHERE id = ?");
                 if ($stmt->execute([$trade_id])) {
+                    syncTradeToDealingSheetSafely($db, $trade_id, $current_user);
                     show_alert('Trade cancelled successfully. It will not appear in receipts or ledgers.', 'warning');
                 } else {
                     show_alert('Error cancelling trade.', 'danger');
@@ -516,6 +555,7 @@ if (isset($_GET['action']) && isset($_GET['id'])) {
             case 'enable':
                 $stmt = $db->prepare("UPDATE trades SET status = 'active' WHERE id = ?");
                 if ($stmt->execute([$trade_id])) {
+                    syncTradeToDealingSheetSafely($db, $trade_id, $current_user);
                     show_alert('Trade enabled successfully.', 'success');
                 } else {
                     show_alert('Error enabling trade.', 'danger');
@@ -525,6 +565,7 @@ if (isset($_GET['action']) && isset($_GET['id'])) {
             case 'settle':
                 $stmt = $db->prepare("UPDATE trades SET status = 'settled' WHERE id = ?");
                 if ($stmt->execute([$trade_id])) {
+                    syncTradeToDealingSheetSafely($db, $trade_id, $current_user);
                     show_alert('Trade marked as settled successfully.', 'success');
                 } else {
                     show_alert('Error settling trade.', 'danger');
@@ -780,7 +821,7 @@ function calculateFees($db, $asset_class, $consideration, $quantity, $price) {
 
 // Function to generate Contract Note PDF
 function generateContractNotePDF($trade_id, $contract_type = 'single') {
-    global $db, $company_name;
+    global $db, $company_name, $current_user;
     
     // Get the specific trade with all details
     $stmt = $db->prepare("
@@ -808,6 +849,8 @@ function generateContractNotePDF($trade_id, $contract_type = 'single') {
     if (!$trade) {
         die('Trade not found');
     }
+
+    markTradeContractNoteGeneratedSafely($db, $trade_id, $current_user);
     
     // Calculate fees using the same function as first code
     $fees = calculateFees($db, $trade['asset_class'], 
@@ -858,7 +901,7 @@ function generateContractNotePDF($trade_id, $contract_type = 'single') {
 
 // Function to generate summary contract note for multiple trades (Equities/ETFs only)
 function generateSummaryContractNote($client_id, $trade_date, $trade_side, $security_id) {
-    global $db, $company_name;
+    global $db, $company_name, $current_user;
     
     // Get all trades for this client on the same day with same security and trade side
     $stmt = $db->prepare("
@@ -885,6 +928,10 @@ function generateSummaryContractNote($client_id, $trade_date, $trade_side, $secu
     
     if (empty($trades)) {
         die('No trades found for summary');
+    }
+
+    foreach ($trades as $trade) {
+        markTradeContractNoteGeneratedSafely($db, $trade['id'], $current_user);
     }
     
     // Calculate summary data
@@ -970,7 +1017,7 @@ function generateSummaryContractNote($client_id, $trade_date, $trade_side, $secu
 
 // Function to generate detailed contract notes for multiple trades
 function generateDetailedContractNotes($client_id, $trade_date, $trade_side, $security_id) {
-    global $db, $company_name;
+    global $db, $company_name, $current_user;
     
     // Get all trades for this client on the same day with same security and trade side
     $stmt = $db->prepare("
@@ -997,6 +1044,10 @@ function generateDetailedContractNotes($client_id, $trade_date, $trade_side, $se
     
     if (empty($trades)) {
         die('No trades found for detailed notes');
+    }
+
+    foreach ($trades as $trade) {
+        markTradeContractNoteGeneratedSafely($db, $trade['id'], $current_user);
     }
     
     // Create PDF document
@@ -1960,6 +2011,13 @@ include '../includes/header.php';
                                                title="Generate Contract Note">
                                                 <i class="bi bi-file-earmark-text"></i>
                                             </a>
+                                            <?php if ($dealing_sheet_enabled): ?>
+                                                <a href="dealing_sheet.php?trade_id=<?php echo $trade['id']; ?>"
+                                                   class="btn btn-outline-warning btn-sm"
+                                                   title="Open Dealing Sheet">
+                                                    <i class="bi bi-journal-check"></i>
+                                                </a>
+                                            <?php endif; ?>
                                             <a href="view_trade?id=<?php echo $trade['id']; ?>" 
                                                class="btn btn-outline-secondary btn-sm" 
                                                title="View Details">
