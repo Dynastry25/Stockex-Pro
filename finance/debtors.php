@@ -805,6 +805,7 @@ $limit_for_query = $records_per_page > 0 ? $records_per_page : null;
 $result = getAllBalances($db, $entity_type, $as_of_date, $start_date, $end_date, $limit_for_query, $offset);
 $all_data = $result['data'];
 $total_count = $result['total_count'];
+$total_pages = $records_per_page > 0 ? (int)ceil($total_count / $records_per_page) : 1;
 
 // Apply additional filters
 if ($balance_status !== 'all') {
