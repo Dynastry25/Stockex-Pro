@@ -57,6 +57,8 @@ if (!function_exists('dealingSheetEnsureSchema')) {
                 payment_reference VARCHAR(100) NULL,
                 payment_status VARCHAR(30) NOT NULL DEFAULT 'pending',
                 contract_note_status VARCHAR(30) NOT NULL DEFAULT 'pending',
+                execution_status VARCHAR(30) NOT NULL DEFAULT 'pending',
+                priority VARCHAR(30) NOT NULL DEFAULT 'normal',
                 checked_by INT NULL,
                 checked_at DATETIME NULL,
                 approved_by INT NULL,
@@ -73,7 +75,9 @@ if (!function_exists('dealingSheetEnsureSchema')) {
                 INDEX idx_dealing_sheet_stage (lifecycle_stage),
                 INDEX idx_dealing_sheet_trade (trade_id),
                 INDEX idx_dealing_sheet_trade_date (trade_date),
-                INDEX idx_dealing_sheet_client (client_cds_account)
+                INDEX idx_dealing_sheet_client (client_cds_account),
+                INDEX idx_execution_status (execution_status),
+                INDEX idx_priority (priority)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         ");
 
@@ -94,49 +98,56 @@ if (!function_exists('dealingSheetEnsureSchema')) {
         ");
 
         $sheetColumns = [
-            'trade_id' => "ALTER TABLE dealing_sheets ADD COLUMN trade_id INT NULL AFTER sheet_reference",
-            'trade_reference' => "ALTER TABLE dealing_sheets ADD COLUMN trade_reference VARCHAR(100) NULL AFTER trade_id",
-            'lifecycle_stage' => "ALTER TABLE dealing_sheets ADD COLUMN lifecycle_stage VARCHAR(30) NOT NULL DEFAULT 'draft' AFTER trade_reference",
-            'approval_status' => "ALTER TABLE dealing_sheets ADD COLUMN approval_status VARCHAR(30) NOT NULL DEFAULT 'pending' AFTER lifecycle_stage",
-            'payment_status' => "ALTER TABLE dealing_sheets ADD COLUMN payment_status VARCHAR(30) NOT NULL DEFAULT 'pending' AFTER payment_reference",
-            'contract_note_status' => "ALTER TABLE dealing_sheets ADD COLUMN contract_note_status VARCHAR(30) NOT NULL DEFAULT 'pending' AFTER payment_status",
-            'checked_by' => "ALTER TABLE dealing_sheets ADD COLUMN checked_by INT NULL AFTER contract_note_status",
-            'checked_at' => "ALTER TABLE dealing_sheets ADD COLUMN checked_at DATETIME NULL AFTER checked_by",
-            'approved_by' => "ALTER TABLE dealing_sheets ADD COLUMN approved_by INT NULL AFTER checked_at",
-            'approved_at' => "ALTER TABLE dealing_sheets ADD COLUMN approved_at DATETIME NULL AFTER approved_by",
-            'dealer_name' => "ALTER TABLE dealing_sheets ADD COLUMN dealer_name VARCHAR(255) NULL AFTER approved_at",
-            'dealer_signature' => "ALTER TABLE dealing_sheets ADD COLUMN dealer_signature VARCHAR(255) NULL AFTER dealer_name",
-            'execution_notes' => "ALTER TABLE dealing_sheets ADD COLUMN execution_notes TEXT NULL AFTER dealer_signature",
-            'approval_notes' => "ALTER TABLE dealing_sheets ADD COLUMN approval_notes TEXT NULL AFTER execution_notes",
-            'remarks' => "ALTER TABLE dealing_sheets ADD COLUMN remarks TEXT NULL AFTER approval_notes",
-            'created_by' => "ALTER TABLE dealing_sheets ADD COLUMN created_by INT NULL AFTER remarks",
-            'updated_by' => "ALTER TABLE dealing_sheets ADD COLUMN updated_by INT NULL AFTER created_by",
+            'trade_id' => "ALTER TABLE dealing_sheets ADD COLUMN IF NOT EXISTS trade_id INT NULL AFTER sheet_reference",
+            'trade_reference' => "ALTER TABLE dealing_sheets ADD COLUMN IF NOT EXISTS trade_reference VARCHAR(100) NULL AFTER trade_id",
+            'lifecycle_stage' => "ALTER TABLE dealing_sheets ADD COLUMN IF NOT EXISTS lifecycle_stage VARCHAR(30) NOT NULL DEFAULT 'draft' AFTER trade_reference",
+            'approval_status' => "ALTER TABLE dealing_sheets ADD COLUMN IF NOT EXISTS approval_status VARCHAR(30) NOT NULL DEFAULT 'pending' AFTER lifecycle_stage",
+            'payment_status' => "ALTER TABLE dealing_sheets ADD COLUMN IF NOT EXISTS payment_status VARCHAR(30) NOT NULL DEFAULT 'pending' AFTER payment_reference",
+            'contract_note_status' => "ALTER TABLE dealing_sheets ADD COLUMN IF NOT EXISTS contract_note_status VARCHAR(30) NOT NULL DEFAULT 'pending' AFTER payment_status",
+            'execution_status' => "ALTER TABLE dealing_sheets ADD COLUMN IF NOT EXISTS execution_status VARCHAR(30) NOT NULL DEFAULT 'pending' AFTER contract_note_status",
+            'priority' => "ALTER TABLE dealing_sheets ADD COLUMN IF NOT EXISTS priority VARCHAR(30) NOT NULL DEFAULT 'normal' AFTER execution_status",
+            'checked_by' => "ALTER TABLE dealing_sheets ADD COLUMN IF NOT EXISTS checked_by INT NULL AFTER priority",
+            'checked_at' => "ALTER TABLE dealing_sheets ADD COLUMN IF NOT EXISTS checked_at DATETIME NULL AFTER checked_by",
+            'approved_by' => "ALTER TABLE dealing_sheets ADD COLUMN IF NOT EXISTS approved_by INT NULL AFTER checked_at",
+            'approved_at' => "ALTER TABLE dealing_sheets ADD COLUMN IF NOT EXISTS approved_at DATETIME NULL AFTER approved_by",
+            'dealer_name' => "ALTER TABLE dealing_sheets ADD COLUMN IF NOT EXISTS dealer_name VARCHAR(255) NULL AFTER approved_at",
+            'dealer_signature' => "ALTER TABLE dealing_sheets ADD COLUMN IF NOT EXISTS dealer_signature VARCHAR(255) NULL AFTER dealer_name",
+            'execution_notes' => "ALTER TABLE dealing_sheets ADD COLUMN IF NOT EXISTS execution_notes TEXT NULL AFTER dealer_signature",
+            'approval_notes' => "ALTER TABLE dealing_sheets ADD COLUMN IF NOT EXISTS approval_notes TEXT NULL AFTER execution_notes",
+            'remarks' => "ALTER TABLE dealing_sheets ADD COLUMN IF NOT EXISTS remarks TEXT NULL AFTER approval_notes",
+            'created_by' => "ALTER TABLE dealing_sheets ADD COLUMN IF NOT EXISTS created_by INT NULL AFTER remarks",
+            'updated_by' => "ALTER TABLE dealing_sheets ADD COLUMN IF NOT EXISTS updated_by INT NULL AFTER created_by",
         ];
 
         $existingSheetColumns = dealingSheetGetTableColumns($db, 'dealing_sheets');
         foreach ($sheetColumns as $column => $sql) {
             if (!isset($existingSheetColumns[$column])) {
-                $db->exec($sql);
+                try {
+                    $db->exec($sql);
+                } catch (PDOException $e) {
+                    error_log("Error adding column $column: " . $e->getMessage());
+                }
             }
         }
 
         $historyColumns = [
-            'from_stage' => "ALTER TABLE dealing_sheet_history ADD COLUMN from_stage VARCHAR(30) NULL AFTER action_type",
-            'to_stage' => "ALTER TABLE dealing_sheet_history ADD COLUMN to_stage VARCHAR(30) NULL AFTER from_stage",
-            'action_notes' => "ALTER TABLE dealing_sheet_history ADD COLUMN action_notes TEXT NULL AFTER to_stage",
-            'performed_by' => "ALTER TABLE dealing_sheet_history ADD COLUMN performed_by INT NULL AFTER action_notes",
-            'performed_by_name' => "ALTER TABLE dealing_sheet_history ADD COLUMN performed_by_name VARCHAR(255) NULL AFTER performed_by",
+            'from_stage' => "ALTER TABLE dealing_sheet_history ADD COLUMN IF NOT EXISTS from_stage VARCHAR(30) NULL AFTER action_type",
+            'to_stage' => "ALTER TABLE dealing_sheet_history ADD COLUMN IF NOT EXISTS to_stage VARCHAR(30) NULL AFTER from_stage",
+            'action_notes' => "ALTER TABLE dealing_sheet_history ADD COLUMN IF NOT EXISTS action_notes TEXT NULL AFTER to_stage",
+            'performed_by' => "ALTER TABLE dealing_sheet_history ADD COLUMN IF NOT EXISTS performed_by INT NULL AFTER action_notes",
+            'performed_by_name' => "ALTER TABLE dealing_sheet_history ADD COLUMN IF NOT EXISTS performed_by_name VARCHAR(255) NULL AFTER performed_by",
         ];
 
         $existingHistoryColumns = dealingSheetGetTableColumns($db, 'dealing_sheet_history');
         foreach ($historyColumns as $column => $sql) {
             if (!isset($existingHistoryColumns[$column])) {
-                $db->exec($sql);
+                try {
+                    $db->exec($sql);
+                } catch (PDOException $e) {
+                    error_log("Error adding column $column: " . $e->getMessage());
+                }
             }
         }
-
-        dealingSheetGetTableColumns($db, 'dealing_sheets', true);
-        dealingSheetGetTableColumns($db, 'dealing_sheet_history', true);
 
         $initialized = true;
     }
@@ -413,6 +424,8 @@ if (!function_exists('dealingSheetEnsureSchema')) {
             'payment_reference' => '',
             'payment_status' => (($trade['settlement_status'] ?? '') === 'paid' || ($trade['status'] ?? '') === 'settled') ? 'paid' : 'pending',
             'contract_note_status' => 'pending',
+            'execution_status' => 'executed',
+            'priority' => 'normal',
             'checked_by' => null,
             'checked_at' => null,
             'approved_by' => null,
@@ -499,7 +512,7 @@ if (!function_exists('dealingSheetEnsureSchema')) {
             'sheet_reference', 'trade_reference', 'lifecycle_stage', 'approval_status', 'order_type',
             'asset_class', 'security_id', 'security_name', 'client_name', 'client_cds_account',
             'broker_code', 'broker_name', 'payment_method', 'payment_reference', 'payment_status',
-            'contract_note_status', 'dealer_name', 'dealer_signature'
+            'contract_note_status', 'dealer_name', 'dealer_signature', 'execution_status', 'priority'
         ];
 
         foreach ($stringFields as $field) {
@@ -539,6 +552,16 @@ if (!function_exists('dealingSheetEnsureSchema')) {
         $textFields = ['execution_notes', 'approval_notes', 'remarks'];
         foreach ($textFields as $field) {
             $clean[$field] = isset($payload[$field]) ? trim((string) $payload[$field]) : '';
+        }
+
+        // Set default execution_status if not provided
+        if (empty($clean['execution_status'])) {
+            $clean['execution_status'] = 'pending';
+        }
+
+        // Set default priority if not provided
+        if (empty($clean['priority'])) {
+            $clean['priority'] = 'normal';
         }
 
         return $clean;
@@ -630,6 +653,8 @@ if (!function_exists('dealingSheetEnsureSchema')) {
             'payment_reference' => $clean['payment_reference'] ?: ($existing['payment_reference'] ?? ''),
             'payment_status' => $clean['payment_status'] ?: ($existing['payment_status'] ?? 'pending'),
             'contract_note_status' => $clean['contract_note_status'] ?: ($existing['contract_note_status'] ?? 'pending'),
+            'execution_status' => $clean['execution_status'] ?: ($existing['execution_status'] ?? 'pending'),
+            'priority' => $clean['priority'] ?: ($existing['priority'] ?? 'normal'),
             'checked_by' => $existing['checked_by'] ?? null,
             'checked_at' => $existing['checked_at'] ?? null,
             'approved_by' => $existing['approved_by'] ?? null,
@@ -874,6 +899,7 @@ if (!function_exists('dealingSheetEnsureSchema')) {
         switch ($action) {
             case 'save_draft':
                 $updates['lifecycle_stage'] = 'draft';
+                $updates['execution_status'] = 'pending';
                 $notes = 'Draft saved.';
                 break;
 
@@ -895,6 +921,7 @@ if (!function_exists('dealingSheetEnsureSchema')) {
                 $updates['trade_date'] = $sheet['trade_date'] ?: date('Y-m-d');
                 $updates['execution_time'] = $sheet['execution_time'] ?: date('H:i:s');
                 $updates['lifecycle_stage'] = 'executed';
+                $updates['execution_status'] = 'executed';
                 $notes = 'Execution captured and synchronized to trades.';
                 break;
 
@@ -980,6 +1007,7 @@ if (!function_exists('dealingSheetEnsureSchema')) {
 
             case 'cancel':
                 $updates['lifecycle_stage'] = 'cancelled';
+                $updates['execution_status'] = 'cancelled';
                 $notes = 'Dealing sheet cancelled.';
                 break;
 
@@ -996,9 +1024,11 @@ if (!function_exists('dealingSheetEnsureSchema')) {
                 $updates['trade_date'] = $trade['trade_date'] ?? $sheet['trade_date'];
                 $updates['settlement_date'] = $trade['settlement_date'] ?? $sheet['settlement_date'];
                 $updates['execution_time'] = $trade['time_executed'] ?? $sheet['execution_time'];
+                $updates['execution_status'] = 'executed';
 
                 if (($trade['status'] ?? '') === 'cancelled') {
                     $updates['lifecycle_stage'] = 'cancelled';
+                    $updates['execution_status'] = 'cancelled';
                 } else {
                     $updates['lifecycle_stage'] = dealingSheetResolveLifecycleStage($sheet, $trade);
                 }
@@ -1075,7 +1105,14 @@ if (!function_exists('dealingSheetEnsureSchema')) {
             LIMIT 1
         ");
         $stmt->execute([(int) $sheetId]);
-        return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        // Ensure execution_status has a default value
+        if ($result && !isset($result['execution_status'])) {
+            $result['execution_status'] = 'pending';
+        }
+        
+        return $result ?: null;
     }
 
     function dealingSheetGetHistory($db, $sheetId)

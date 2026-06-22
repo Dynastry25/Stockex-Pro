@@ -515,3 +515,6 @@ Stack trace:
 [05-Feb-2026 15:11:31 UTC] salary_calculations table doesn't exist: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.salary_calculations' doesn't exist
 [14-Feb-2026 06:40:59 UTC] PHP Deprecated:  htmlspecialchars(): Passing null to parameter #1 ($string) of type string is deprecated in /home1/jrozqhmy/public_html/website_02cf635f/hr/leave_management.php on line 735
 [14-Feb-2026 06:40:59 UTC] PHP Deprecated:  htmlspecialchars(): Passing null to parameter #1 ($string) of type string is deprecated in /home1/jrozqhmy/public_html/website_02cf635f/hr/leave_management.php on line 736
+[04-May-2026 10:13:29 UTC] PHP Deprecated:  htmlspecialchars(): Passing null to parameter #1 ($string) of type string is deprecated in /home1/jrozqhmy/public_html/website_02cf635f/hr/leave_management.php on line 735
+[04-May-2026 10:13:29 UTC] PHP Deprecated:  htmlspecialchars(): Passing null to parameter #1 ($string) of type string is deprecated in /home1/jrozqhmy/public_html/website_02cf635f/hr/leave_management.php on line 736
+[04-May-2026 10:18:11 UTC] salary_calculations table doesn't exist: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.salary_calculations' doesn't exist

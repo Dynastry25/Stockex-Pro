@@ -610,17 +610,33 @@ function recordGeneralLedgerEntry($db, $transaction_date, $account_id, $debit, $
 }
 
 /**
- * Insert regulatory fees into assignments table for accountant review
+ * Insert regulatory fees into assignments table for accountant review - FIXED
  */
 function recordRegulatoryFeeAssignment($db, $trade_reference, $fees, $client_name, $trade_date, $security_id, $security_name, $consideration, $trade_side, $created_by) {
     try {
-        $stmt = $db->prepare("
-            INSERT INTO regulatory_fee_assignments 
-            (trade_reference, client_name, security_id, security_name, trade_date, 
-             dse_fee, cmsa_fee, csd_fee, total_fees, consideration, trade_side,
-             status, treatment_type, created_by, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, NOW(), NOW())
-        ");
+        // First check if the table has the dismissed_by column
+        $check_stmt = $db->query("SHOW COLUMNS FROM regulatory_fee_assignments LIKE 'dismissed_by'");
+        $has_dismissed_by = $check_stmt->rowCount() > 0;
+        
+        // Build the INSERT statement based on table structure
+        if ($has_dismissed_by) {
+            $stmt = $db->prepare("
+                INSERT INTO regulatory_fee_assignments 
+                (trade_reference, client_name, security_id, security_name, trade_date, 
+                 dse_fee, cmsa_fee, csd_fee, total_fees, consideration, trade_side,
+                 status, treatment_type, created_by, created_at, updated_at,
+                 dismissed_by, dismissed_at, dismissed_reason, is_dismissed)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, NOW(), NOW(), NULL, NULL, NULL, 0)
+            ");
+        } else {
+            $stmt = $db->prepare("
+                INSERT INTO regulatory_fee_assignments 
+                (trade_reference, client_name, security_id, security_name, trade_date, 
+                 dse_fee, cmsa_fee, csd_fee, total_fees, consideration, trade_side,
+                 status, treatment_type, created_by, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, NOW(), NOW())
+            ");
+        }
         
         $dse_fee = $fees['dse'] ?? 0;
         $cmsa_fee = $fees['cmsa'] ?? 0;
@@ -628,20 +644,37 @@ function recordRegulatoryFeeAssignment($db, $trade_reference, $fees, $client_nam
         
         $total_fees = $dse_fee + $cmsa_fee + $csd_fee;
         
-        $result = $stmt->execute([
-            $trade_reference,
-            substr($client_name, 0, 255),
-            substr($security_id, 0, 50),
-            substr($security_name, 0, 200),
-            $trade_date,
-            round($dse_fee, 2),
-            round($cmsa_fee, 2),
-            round($csd_fee, 2),
-            round($total_fees, 2),
-            round($consideration, 2),
-            $trade_side,
-            $created_by
-        ]);
+        if ($has_dismissed_by) {
+            $result = $stmt->execute([
+                $trade_reference,
+                substr($client_name, 0, 255),
+                substr($security_id, 0, 50),
+                substr($security_name, 0, 200),
+                $trade_date,
+                round($dse_fee, 2),
+                round($cmsa_fee, 2),
+                round($csd_fee, 2),
+                round($total_fees, 2),
+                round($consideration, 2),
+                $trade_side,
+                $created_by
+            ]);
+        } else {
+            $result = $stmt->execute([
+                $trade_reference,
+                substr($client_name, 0, 255),
+                substr($security_id, 0, 50),
+                substr($security_name, 0, 200),
+                $trade_date,
+                round($dse_fee, 2),
+                round($cmsa_fee, 2),
+                round($csd_fee, 2),
+                round($total_fees, 2),
+                round($consideration, 2),
+                $trade_side,
+                $created_by
+            ]);
+        }
         
         if ($result) {
             error_log("Successfully inserted regulatory fee assignment for bond trade: {$trade_reference} - DSE: {$dse_fee}, CMSA: {$cmsa_fee}, CSD: {$csd_fee}, Total: {$total_fees}");
@@ -1092,7 +1125,7 @@ function calculateBondFees($quantity, $price, $consideration) {
     return $fees;
 }
 
-// MODIFIED: Updated Map CSV row to database with PROPER date conversion for bonds
+// UPDATED: Map CSV row to database with support for YYYY/MM/DD, MM/DD/YYYY, YYYY-MM-DD
 function mapCSVRowToDatabaseBond($row) {
     // Trim all values from the row before processing
     $trimmed_row = [];
@@ -1100,32 +1133,72 @@ function mapCSVRowToDatabaseBond($row) {
         $trimmed_row[$key] = is_string($value) ? trim($value) : $value;
     }
     
-    // Convert MM/DD/YYYY date format to YYYY-MM-DD
+    // Convert date formats to YYYY-MM-DD - supports YYYY/MM/DD, MM/DD/YYYY, YYYY-MM-DD
     $trade_date = '';
     if (!empty($trimmed_row['Trade Date'])) {
         $date_str = trim($trimmed_row['Trade Date']);
+        
+        // Check if date is in YYYY/MM/DD format
+        if (preg_match('/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/', $date_str, $matches)) {
+            $year = $matches[1];
+            $month = str_pad($matches[2], 2, '0', STR_PAD_LEFT);
+            $day = str_pad($matches[3], 2, '0', STR_PAD_LEFT);
+            $trade_date = $year . '-' . $month . '-' . $day;
+            error_log("Converted Trade Date (YYYY/MM/DD): {$date_str} -> {$trade_date}");
+        }
         // Check if date is in MM/DD/YYYY format
-        if (preg_match('/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/', $date_str, $matches)) {
+        elseif (preg_match('/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/', $date_str, $matches)) {
             $month = str_pad($matches[1], 2, '0', STR_PAD_LEFT);
             $day = str_pad($matches[2], 2, '0', STR_PAD_LEFT);
             $year = $matches[3];
             $trade_date = $year . '-' . $month . '-' . $day;
-        } elseif (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date_str)) {
-            // Already in YYYY-MM-DD format
+            error_log("Converted Trade Date (MM/DD/YYYY): {$date_str} -> {$trade_date}");
+        } 
+        // Check if date is in YYYY-MM-DD format
+        elseif (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date_str)) {
             $trade_date = $date_str;
+            error_log("Trade Date already in YYYY-MM-DD: {$trade_date}");
+        }
+        // Check if date is in YYYYMMDD format
+        elseif (preg_match('/^\d{8}$/', $date_str)) {
+            $trade_date = substr($date_str, 0, 4) . '-' . substr($date_str, 4, 2) . '-' . substr($date_str, 6, 2);
+            error_log("Converted Trade Date (YYYYMMDD): {$date_str} -> {$trade_date}");
+        } else {
+            error_log("WARNING: Unrecognized Trade Date format: {$date_str}");
         }
     }
     
     $settlement_date = '';
     if (!empty($trimmed_row['Settlement Date'])) {
         $date_str = trim($trimmed_row['Settlement Date']);
-        if (preg_match('/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/', $date_str, $matches)) {
+        
+        // Check if date is in YYYY/MM/DD format
+        if (preg_match('/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/', $date_str, $matches)) {
+            $year = $matches[1];
+            $month = str_pad($matches[2], 2, '0', STR_PAD_LEFT);
+            $day = str_pad($matches[3], 2, '0', STR_PAD_LEFT);
+            $settlement_date = $year . '-' . $month . '-' . $day;
+            error_log("Converted Settlement Date (YYYY/MM/DD): {$date_str} -> {$settlement_date}");
+        }
+        // Check if date is in MM/DD/YYYY format
+        elseif (preg_match('/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/', $date_str, $matches)) {
             $month = str_pad($matches[1], 2, '0', STR_PAD_LEFT);
             $day = str_pad($matches[2], 2, '0', STR_PAD_LEFT);
             $year = $matches[3];
             $settlement_date = $year . '-' . $month . '-' . $day;
-        } elseif (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date_str)) {
+            error_log("Converted Settlement Date (MM/DD/YYYY): {$date_str} -> {$settlement_date}");
+        } 
+        // Check if date is in YYYY-MM-DD format
+        elseif (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date_str)) {
             $settlement_date = $date_str;
+            error_log("Settlement Date already in YYYY-MM-DD: {$settlement_date}");
+        }
+        // Check if date is in YYYYMMDD format
+        elseif (preg_match('/^\d{8}$/', $date_str)) {
+            $settlement_date = substr($date_str, 0, 4) . '-' . substr($date_str, 4, 2) . '-' . substr($date_str, 6, 2);
+            error_log("Converted Settlement Date (YYYYMMDD): {$date_str} -> {$settlement_date}");
+        } else {
+            error_log("WARNING: Unrecognized Settlement Date format: {$date_str}");
         }
     }
     
@@ -1133,11 +1206,18 @@ function mapCSVRowToDatabaseBond($row) {
     $maturity_date = '';
     if (!empty($trimmed_row['Maturity Date'])) {
         $date_str = trim($trimmed_row['Maturity Date']);
-        if (preg_match('/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/', $date_str, $matches)) {
+        if (preg_match('/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/', $date_str, $matches)) {
+            $year = $matches[1];
+            $month = str_pad($matches[2], 2, '0', STR_PAD_LEFT);
+            $day = str_pad($matches[3], 2, '0', STR_PAD_LEFT);
+            $maturity_date = $year . '-' . $month . '-' . $day;
+            error_log("Converted Maturity Date (YYYY/MM/DD): {$date_str} -> {$maturity_date}");
+        } elseif (preg_match('/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/', $date_str, $matches)) {
             $month = str_pad($matches[1], 2, '0', STR_PAD_LEFT);
             $day = str_pad($matches[2], 2, '0', STR_PAD_LEFT);
             $year = $matches[3];
             $maturity_date = $year . '-' . $month . '-' . $day;
+            error_log("Converted Maturity Date (MM/DD/YYYY): {$date_str} -> {$maturity_date}");
         }
     }
     
@@ -1151,6 +1231,9 @@ function mapCSVRowToDatabaseBond($row) {
     $client_cds = $trimmed_row['CSD Account'] ?? 
                   $trimmed_row['CDS Account'] ?? '';
     
+    // Log the extracted dates for debugging
+    error_log("Bond Date Mapping - Trade Date: {$trade_date}, Settlement Date: {$settlement_date}, Maturity Date: {$maturity_date}");
+    
     return [
         'security_id' => $trimmed_row['Security'] ?? '',
         'bond_name' => $trimmed_row['Security'] ?? 'Unknown Bond',
@@ -1160,8 +1243,8 @@ function mapCSVRowToDatabaseBond($row) {
         'quantity' => $trimmed_row['Quantity'] ?? 0,
         'price' => $trimmed_row['Price'] ?? 0,
         'sca_code' => $trimmed_row['SCA Code'] ?? '',
-        'trade_date' => $trade_date ?: date('Y-m-d'),
-        'settlement_date' => $settlement_date ?: date('Y-m-d', strtotime('+2 days')),
+        'trade_date' => $trade_date ?: date('Y-m-d'), // Fallback to today if not found
+        'settlement_date' => $settlement_date ?: date('Y-m-d', strtotime('+2 days')), // Fallback to T+2
         'maturity_date' => $maturity_date,
         'consideration' => $trimmed_row['Consideration'] ?? 0,
         'counterparty_name' => $trimmed_row['Counterparty Name'] ?? '',
@@ -1314,17 +1397,33 @@ function parseCSVSecurely($file_path) {
     
     if (($handle = fopen($file_path, "r")) !== FALSE) {
         try {
-            // Read header row with explicit parameters
-            $header = fgetcsv($handle, 0, ",", '"', '\\');
+            // Read first line to detect delimiter
+            $first_line = fgets($handle);
+            rewind($handle);
+            
+            $delimiter = ',';
+            if (strpos($first_line, "\t") !== false) {
+                $delimiter = "\t";
+                error_log("Detected TAB delimiter in bond CSV file");
+            } elseif (strpos($first_line, ';') !== false) {
+                $delimiter = ';';
+                error_log("Detected SEMICOLON delimiter in bond CSV file");
+            } else {
+                error_log("Using COMMA delimiter in bond CSV file");
+            }
+            
+            // Read header row with detected delimiter
+            $header = fgetcsv($handle, 0, $delimiter, '"', '\\');
             if ($header === FALSE) {
                 throw new Exception("Could not read CSV header");
             }
             
             // Trim whitespace from header names
             $header = array_map('trim', $header);
+            error_log("Bond CSV Headers found: " . implode(' | ', $header));
             
             $line_number = 1;
-            while (($data = fgetcsv($handle, 0, ",", '"', '\\')) !== FALSE) {
+            while (($data = fgetcsv($handle, 0, $delimiter, '"', '\\')) !== FALSE) {
                 $line_number++;
                 
                 // Skip empty rows
@@ -1347,7 +1446,6 @@ function parseCSVSecurely($file_path) {
                 if (count($header) !== count($data)) {
                     error_log("CSV line $line_number: Column count mismatch. Header: " . count($header) . ", Data: " . count($data));
                     
-                    // Pad or truncate data to match header count
                     if (count($data) < count($header)) {
                         $data = array_pad($data, count($header), '');
                     } else {
@@ -1581,6 +1679,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                             if ($assignment_result) {
                                                 $regulatory_assignments_created++;
                                                 error_log("Regulatory fee assignment recorded for bond: {$trade_reference}");
+                                            } else {
+                                                error_log("Failed to record regulatory fee assignment for bond: {$trade_reference}");
                                             }
                                         }
                                         
@@ -1662,8 +1762,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     
                                     if ($regulatory_assignments_created > 0) {
                                         $success_message .= ". <strong>{$regulatory_assignments_created} regulatory fee assignments created</strong> for accountant review.";
+                                    } else {
+                                        $success_message .= ". <strong>No regulatory fee assignments created</strong> (check logs for errors).";
                                     }
                                     
+                                    $success_message .= "<br><small><strong>Date Extraction:</strong> Trade dates and settlement dates were extracted from your CSV file - NOT today's date. Supports YYYY/MM/DD, MM/DD/YYYY, and YYYY-MM-DD formats.</small>";
                                     $success_message .= "<br><small><strong>Note:</strong> Trade references are either from CSD historical trades or newly generated T+5 alphanumeric codes.</small>";
                                     $preview_data = [];
                                 }
@@ -1760,10 +1863,11 @@ include '../includes/header.php';
                             • <strong>Quantity</strong> - Nominal units<br>
                             • <strong>Price</strong> - Trade price<br>
                             • <strong>Asset Class</strong> - Must be <strong>Bond</strong><br>
-                            • <strong>Trade Date</strong> - Date format accepted from your upload file<br>
-                            • <strong>Settlement Date</strong> - Settlement value date<br>
+                            • <strong>Trade Date</strong> - Date format: <strong>YYYY/MM/DD</strong>, MM/DD/YYYY, or YYYY-MM-DD<br>
+                            • <strong>Settlement Date</strong> - Date format: <strong>YYYY/MM/DD</strong>, MM/DD/YYYY, or YYYY-MM-DD<br>
                             <strong>Processing rules:</strong> 5MB size limit, duplicate detection, client auto-creation where allowed, 
                             and automatic T+5 reference generation when no CSD reference exists.
+                            <br><strong>Date Extraction:</strong> Dates are extracted from your CSV file - NOT today's date.
                         </div>
                     </div>
                     <button type="submit" class="btn btn-primary" id="uploadButton">
@@ -1809,6 +1913,8 @@ include '../includes/header.php';
                                 <th>Quantity</th>
                                 <th>Price</th>
                                 <th>Consideration</th>
+                                <th>Trade Date</th>
+                                <th>Settlement Date</th>
                                 <th>Trade Reference</th>
                                 <th>Status</th>
                             </tr>
@@ -1856,6 +1962,8 @@ include '../includes/header.php';
                                 <td><?php echo safe_int_format($mapped_data['quantity']); ?></td>
                                 <td>Tsh<?php echo safe_number_format($mapped_data['price']); ?></td>
                                 <td>Tsh<?php echo safe_int_format($consideration); ?></td>
+                                <td><strong><?php echo htmlspecialchars($mapped_data['trade_date']); ?></strong></td>
+                                <td><?php echo htmlspecialchars($mapped_data['settlement_date']); ?></td>
                                 <td><?php echo $reference_display; ?></td>
                                 <td>
                                     <?php if ($preview_row['has_errors']): ?>
@@ -1867,7 +1975,7 @@ include '../includes/header.php';
                             </tr>
                             <?php if ($preview_row['has_errors']): ?>
                             <tr class="table-warning">
-                                <td colspan="13" class="small">
+                                <td colspan="15" class="small">
                                     <strong>Error:</strong> <?php echo htmlspecialchars(implode('; ', $preview_row['errors'])); ?>
                                 </td>
                             </tr>
@@ -1892,12 +2000,14 @@ include '../includes/header.php';
                     <li>New T+5 references follow the format: T followed by 5 alphanumeric characters (e.g., T5A9B2).</li>
                     <li>Duplicate bond trades are blocked before insert.</li>
                     <li>Custodian trades are detected from the SCA code and routed accordingly.</li>
+                    <li><strong>Dates are extracted from the CSV file</strong> - Supports YYYY/MM/DD, MM/DD/YYYY, YYYY-MM-DD, and YYYYMMDD formats.</li>
                 </ul>
                 <small class="text-muted"><strong>Before uploading:</strong></small>
                 <ul class="mb-0">
                     <li>Confirm the bond identifiers match your configured bond master data.</li>
                     <li>Ensure dates and quantities are accurate.</li>
                     <li>Use CSV files below 5MB and keep the original column names intact.</li>
+                    <li>Check that the <strong>Asset Class</strong> column contains "Bond" for all rows you want to process.</li>
                 </ul>
             </div>
         </div>

@@ -59,3 +59,7 @@ Stack trace:
 #0 /home1/jrozqhmy/public_html/website_02cf635f/auth/login.php(62): sanitize_input(NULL)
 #1 {main}
   thrown in /home1/jrozqhmy/public_html/website_02cf635f/config/config.php on line 57
+[23-May-2026 08:17:14 UTC] Warning: Could not auto-create employee record for user 21: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.employees' doesn't exist
+[23-May-2026 08:19:00 UTC] Warning: Could not auto-create employee record for user 22: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.employees' doesn't exist
+[23-May-2026 08:20:40 UTC] Warning: Could not auto-create employee record for user 23: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.employees' doesn't exist
+[11-Jun-2026 06:28:52 UTC] Warning: Could not auto-create employee record for user 24: SQLSTATE[42S02]: Base table or view not found: 1146 Table 'jrozqhmy_stock_exchange_db.employees' doesn't exist
