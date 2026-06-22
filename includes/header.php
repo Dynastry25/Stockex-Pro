@@ -379,18 +379,7 @@
                             <span>Reports Dashboard</span>
                         </a>
                     </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>reports/receipts">
-                            <i class="bi bi-receipt"></i>
-                            <span>Receipts</span>
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>reports/invoices">
-                            <i class="bi bi-file-earmark-invoice"></i>
-                            <span>Invoices</span>
-                        </a>
-                    </li>
+
                 </ul>
             </div>
         </nav>
