@@ -461,33 +461,7 @@ include '../includes/header.php';
                                             </div>
                                         </div>
                                     </div>
-                                    <div class="col-md-4">
-                                        <div class="card border-info">
-                                            <div class="card-body text-center">
-                                                <i class="fas fa-file-alt fa-2x text-info mb-2"></i>
-                                                <h6>Order Forms</h6>
-                                                <button type="button" onclick="generateReport('order_forms')" class="btn btn-info btn-sm">Generate</button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="col-md-4">
-                                        <div class="card border-success">
-                                            <div class="card-body text-center">
-                                                <i class="fas fa-chart-pie fa-2x text-success mb-2"></i>
-                                                <h6>Asset Class Summary</h6>
-                                                <button type="button" onclick="generateReport('asset_class_summary')" class="btn btn-success btn-sm">Generate</button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="col-md-4">
-                                        <div class="card border-primary">
-                                            <div class="card-body text-center">
-                                                <i class="fas fa-balance-scale fa-2x text-primary mb-2"></i>
-                                                <h6>Portfolio Analysis</h6>
-                                                <button type="button" onclick="generateReport('portfolio_analysis')" class="btn btn-primary btn-sm">Generate</button>
-                                            </div>
-                                        </div>
-                                    </div>
+
                                 </div>
                             </div>
                         </div>
