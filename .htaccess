@@ -3,15 +3,24 @@
 
 <IfModule mod_rewrite.c>
     RewriteEngine On
-    RewriteBase /
+    # On cPanel, replace "/" with "/stockex/" (your subfolder name)
+    RewriteBase /stockex/
 
-    # Redirect /file.php -> /file
+    # If installed in a subfolder on cPanel, uncomment and edit the line below:
+    # RewriteBase /stockex/
+
+    # Redirect /file.php -> /file (absolute path to avoid double subdirectory)
     RewriteCond %{THE_REQUEST} \s/+(.+?)\.php[\s?] [NC]
-    RewriteRule ^ %1 [R=301,L]
+    RewriteRule ^ /%1 [R=301,L]
 
     # Internally map /file -> /file.php when it exists
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteCond %{REQUEST_FILENAME} !-d
     RewriteCond %{REQUEST_FILENAME}.php -f
     RewriteRule ^(.+)$ $1.php [L,QSA]
+
+    # Fallback: if the .php file doesn't exist, try the directory's index.php
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^(.+)$ index.php [L,QSA]
 </IfModule>
