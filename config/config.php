@@ -15,8 +15,8 @@ if (session_status() === PHP_SESSION_NONE) {
 
 // --- Global Constants ---
 // Use defined constants for values that do not change to improve maintainability.
-// define('BASE_URL', 'https://stockex.neovam.com/');
-define('BASE_URL', 'http://localhost/stockex/');
+define('BASE_URL', 'https://stockex.neovam.com/');
+// define('BASE_URL', 'http://localhost/stockex/');
 define('UPLOAD_PATH', 'uploads/');
 define('MAX_FILE_SIZE', 50 * 1024 * 1024); // 50MB in bytes
 
