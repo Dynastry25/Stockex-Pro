@@ -1483,13 +1483,23 @@ include '../includes/header.php';
                                             </td>
                                             <td>
                                                 <?php if ($trade['settlement_status'] === 'linked'): ?>
-                                                    <button type="button" class="btn btn-outline-info btn-sm" onclick="showLinkedDetails(<?php echo $trade['id']; ?>, <?php echo $trade['linked_trade_id']; ?>, '<?php echo addslashes($trade['linked_trade_ref']); ?>', '<?php echo addslashes($trade['linked_client_name']); ?>', '<?php echo addslashes($trade['linked_security']); ?>', '<?php echo $trade['linked_amount']; ?>')">
-                                                        <i class="bi bi-eye"></i> View Link
-                                                    </button>
+                                                    <div class="btn-group btn-group-sm">
+                                                        <button type="button" class="btn btn-outline-info btn-sm" onclick="showLinkedDetails(<?php echo $trade['id']; ?>, <?php echo $trade['linked_trade_id']; ?>, '<?php echo addslashes($trade['linked_trade_ref']); ?>', '<?php echo addslashes($trade['linked_client_name']); ?>', '<?php echo addslashes($trade['linked_security']); ?>', '<?php echo $trade['linked_amount']; ?>')">
+                                                            <i class="bi bi-eye"></i> View Link
+                                                        </button>
+                                                        <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
+                                                            <i class="bi bi-file-earmark-text"></i>
+                                                        </a>
+                                                    </div>
                                                 <?php elseif ($trade['settlement_status'] === 'paid'): ?>
-                                                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="markAsUnpaid(<?php echo $trade['id']; ?>)">
-                                                        <i class="bi bi-arrow-counterclockwise"></i> Undo
-                                                    </button>
+                                                    <div class="btn-group btn-group-sm">
+                                                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="markAsUnpaid(<?php echo $trade['id']; ?>)">
+                                                            <i class="bi bi-arrow-counterclockwise"></i> Undo
+                                                        </button>
+                                                        <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
+                                                            <i class="bi bi-file-earmark-text"></i>
+                                                        </a>
+                                                    </div>
                                                 <?php elseif ($trade['settlement_status'] === 'failed'): ?>
                                                     <div class="btn-group btn-group-sm">
                                                         <button type="button" class="btn btn-outline-warning btn-sm" data-bs-toggle="modal" data-bs-target="#failureDetailsModal" 
@@ -1499,6 +1509,9 @@ include '../includes/header.php';
                                                         <button type="button" class="btn btn-outline-success btn-sm" onclick="retryFailed(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-arrow-repeat"></i> Retry
                                                         </button>
+                                                        <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
+                                                            <i class="bi bi-file-earmark-text"></i>
+                                                        </a>
                                                     </div>
                                                 <?php elseif ($trade['trade_side'] === 'sell'): ?>
                                                     <div class="btn-group btn-group-sm">
@@ -1511,6 +1524,9 @@ include '../includes/header.php';
                                                         <button type="button" class="btn btn-outline-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-x-lg"></i> Failed
                                                         </button>
+                                                        <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
+                                                            <i class="bi bi-file-earmark-text"></i>
+                                                        </a>
                                                     </div>
                                                 <?php else: ?>
                                                     <div class="btn-group btn-group-sm">
@@ -1520,6 +1536,9 @@ include '../includes/header.php';
                                                         <button type="button" class="btn btn-outline-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-x-lg"></i> Failed
                                                         </button>
+                                                        <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
+                                                            <i class="bi bi-file-earmark-text"></i>
+                                                        </a>
                                                     </div>
                                                 <?php endif; ?>
                                             </td>
@@ -1658,6 +1677,9 @@ include '../includes/header.php';
                                                         <button type="button" class="btn btn-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-x-lg"></i> Failed
                                                         </button>
+                                                        <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
+                                                            <i class="bi bi-file-earmark-text"></i>
+                                                        </a>
                                                     </div>
                                                 <?php else: ?>
                                                     <div class="btn-group btn-group-sm">
@@ -1667,6 +1689,9 @@ include '../includes/header.php';
                                                         <button type="button" class="btn btn-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-x-lg"></i> Failed
                                                         </button>
+                                                        <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
+                                                            <i class="bi bi-file-earmark-text"></i>
+                                                        </a>
                                                     </div>
                                                 <?php endif; ?>
                                             </td>
@@ -1743,6 +1768,9 @@ include '../includes/header.php';
                                                         <button type="button" class="btn btn-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-x-lg"></i> Failed
                                                         </button>
+                                                        <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
+                                                            <i class="bi bi-file-earmark-text"></i>
+                                                        </a>
                                                     </div>
                                                 <?php else: ?>
                                                     <div class="btn-group btn-group-sm">
@@ -1752,6 +1780,9 @@ include '../includes/header.php';
                                                         <button type="button" class="btn btn-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-x-lg"></i> Failed
                                                         </button>
+                                                        <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
+                                                            <i class="bi bi-file-earmark-text"></i>
+                                                        </a>
                                                     </div>
                                                 <?php endif; ?>
                                             </td>
@@ -1826,9 +1857,14 @@ include '../includes/header.php';
                                                 ?>
                                             </td>
                                             <td>
-                                                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="markAsUnpaid(<?php echo $trade['id']; ?>)">
-                                                    <i class="bi bi-arrow-counterclockwise"></i> Undo
-                                                </button>
+                                                <div class="btn-group btn-group-sm">
+                                                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="markAsUnpaid(<?php echo $trade['id']; ?>)">
+                                                        <i class="bi bi-arrow-counterclockwise"></i> Undo
+                                                    </button>
+                                                    <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
+                                                        <i class="bi bi-file-earmark-text"></i>
+                                                    </a>
+                                                </div>
                                             </td>
                                         </tr>
                                     <?php endforeach; ?>
@@ -1899,9 +1935,14 @@ include '../includes/header.php';
                                                 <?php endif; ?>
                                             </td>
                                             <td>
-                                                <button type="button" class="btn btn-outline-info btn-sm" onclick="showLinkedDetails(<?php echo $trade['id']; ?>, <?php echo $trade['linked_trade_id']; ?>, '<?php echo addslashes($trade['linked_trade_ref']); ?>', '<?php echo addslashes($trade['linked_client_name']); ?>', '<?php echo addslashes($trade['linked_security']); ?>', '<?php echo $trade['linked_amount']; ?>')">
-                                                    <i class="bi bi-eye"></i> View Link
-                                                </button>
+                                                <div class="btn-group btn-group-sm">
+                                                    <button type="button" class="btn btn-outline-info btn-sm" onclick="showLinkedDetails(<?php echo $trade['id']; ?>, <?php echo $trade['linked_trade_id']; ?>, '<?php echo addslashes($trade['linked_trade_ref']); ?>', '<?php echo addslashes($trade['linked_client_name']); ?>', '<?php echo addslashes($trade['linked_security']); ?>', '<?php echo $trade['linked_amount']; ?>')">
+                                                        <i class="bi bi-eye"></i> View Link
+                                                    </button>
+                                                    <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
+                                                        <i class="bi bi-file-earmark-text"></i>
+                                                    </a>
+                                                </div>
                                             </td>
                                         </tr>
                                     <?php endforeach; ?>
@@ -1974,6 +2015,9 @@ include '../includes/header.php';
                                                     <button type="button" class="btn btn-outline-success btn-sm" onclick="retryFailed(<?php echo $trade['id']; ?>)">
                                                         <i class="bi bi-arrow-repeat"></i> Retry
                                                     </button>
+                                                    <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
+                                                        <i class="bi bi-file-earmark-text"></i>
+                                                    </a>
                                                 </div>
                                             </td>
                                         </tr>
