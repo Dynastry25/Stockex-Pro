@@ -2365,12 +2365,6 @@ include '../includes/header.php';
                                                    title="Cancel Trade">
                                                     <i class="bi bi-x-lg"></i>
                                                 </a>
-                                                <a href="?action=settle&id=<?php echo $trade['id']; ?>" 
-                                                   class="btn btn-outline-info btn-sm" 
-                                                   onclick="return confirm('Mark this trade as settled?')"
-                                                   title="Settle Trade">
-                                                    <i class="bi bi-check-circle"></i>
-                                                </a>
                                             <?php elseif ($trade['status'] == 'cancelled'): ?>
                                                 <a href="?action=enable&id=<?php echo $trade['id']; ?>" 
                                                    class="btn btn-outline-success btn-sm" 
@@ -2384,13 +2378,6 @@ include '../includes/header.php';
                                                title="Generate Contract Note">
                                                 <i class="bi bi-file-earmark-text"></i>
                                             </a>
-                                            <?php if ($dealing_sheet_enabled): ?>
-                                                <a href="dealing_sheet.php?trade_id=<?php echo $trade['id']; ?>"
-                                                   class="btn btn-outline-warning btn-sm"
-                                                   title="Open Dealing Sheet">
-                                                    <i class="bi bi-journal-check"></i>
-                                                </a>
-                                            <?php endif; ?>
                                             <a href="view_trade?id=<?php echo $trade['id']; ?>" 
                                                class="btn btn-outline-secondary btn-sm" 
                                                title="View Details">
