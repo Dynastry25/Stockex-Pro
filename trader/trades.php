@@ -887,11 +887,11 @@ class ContractNotePDF extends TCPDF {
         }
         $this->Cell(40, 3.5, number_format($fees['cmsa'], 2), 0, 1, 'R');
         
-        $this->Cell(100, 3.5, 'DSE Transaction Fee', 0, 0, 'L');
+        $this->Cell(100, 3.5, 'DSE Transaction Fee(VAT INCL)', 0, 0, 'L');
         if ($is_bond) {
-            $this->Cell(40, 3.5, '@ 0.0170% (+18% VAT = 0.02006%)', 0, 0, 'L');
+            $this->Cell(40, 3.5, '@ 0.02006%', 0, 0, 'L');
         } else {
-            $this->Cell(40, 3.5, '@ 0.1400% (+18% VAT = 0.1652%)', 0, 0, 'L');
+            $this->Cell(40, 3.5, '@ 0.1652%', 0, 0, 'L');
         }
         $this->Cell(40, 3.5, number_format($fees['dse'], 2), 0, 1, 'R');
         
@@ -901,11 +901,11 @@ class ContractNotePDF extends TCPDF {
             $this->Cell(40, 3.5, number_format($fees['fidelity'], 2), 0, 1, 'R');
         }
         
-        $this->Cell(100, 3.5, 'CDS Fee', 0, 0, 'L');
+        $this->Cell(100, 3.5, 'CDS Fee(VAT INCL)', 0, 0, 'L');
         if ($is_bond) {
-            $this->Cell(40, 3.5, '@ 0.0100% (+18% VAT = 0.0118%)', 0, 0, 'L');
+            $this->Cell(40, 3.5, '@ 0.0118%', 0, 0, 'L');
         } else {
-            $this->Cell(40, 3.5, '@ 0.0600% (+18% VAT = 0.0708%)', 0, 0, 'L');
+            $this->Cell(40, 3.5, '@ 0.0708%', 0, 0, 'L');
         }
         $this->Cell(40, 3.5, number_format($fees['csd'], 2), 0, 1, 'R');
         
