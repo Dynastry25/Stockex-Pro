@@ -1045,12 +1045,12 @@ $stats_query = "
         SUM(CASE WHEN t.settlement_status = 'paid' THEN t.consideration ELSE 0 END) as paid_value,
         SUM(CASE WHEN t.settlement_status = 'failed' THEN t.consideration ELSE 0 END) as failed_value,
         SUM(CASE WHEN t.settlement_status = 'linked' THEN t.consideration ELSE 0 END) as linked_value,
-        SUM(CASE WHEN t.settlement_status NOT IN ('paid', 'failed', 'linked') AND t.settlement_date < ? THEN 1 ELSE 0 END) as overdue_count,
-        SUM(CASE WHEN t.settlement_status NOT IN ('paid', 'failed', 'linked') AND t.settlement_date < ? THEN t.consideration ELSE 0 END) as overdue_value,
-        SUM(CASE WHEN t.settlement_status NOT IN ('paid', 'failed', 'linked') AND t.settlement_date = ? THEN 1 ELSE 0 END) as today_count,
-        SUM(CASE WHEN t.settlement_status NOT IN ('paid', 'failed', 'linked') AND t.settlement_date = ? THEN t.consideration ELSE 0 END) as today_value,
-        SUM(CASE WHEN t.settlement_status NOT IN ('paid', 'failed', 'linked') AND t.settlement_date > ? THEN 1 ELSE 0 END) as upcoming_count,
-        SUM(CASE WHEN t.settlement_status NOT IN ('paid', 'failed', 'linked') AND t.settlement_date > ? THEN t.consideration ELSE 0 END) as upcoming_value,
+        SUM(CASE WHEN (t.settlement_status IS NULL OR t.settlement_status NOT IN ('paid', 'failed', 'linked')) AND t.settlement_date < ? THEN 1 ELSE 0 END) as overdue_count,
+        SUM(CASE WHEN (t.settlement_status IS NULL OR t.settlement_status NOT IN ('paid', 'failed', 'linked')) AND t.settlement_date < ? THEN t.consideration ELSE 0 END) as overdue_value,
+        SUM(CASE WHEN (t.settlement_status IS NULL OR t.settlement_status NOT IN ('paid', 'failed', 'linked')) AND t.settlement_date = ? THEN 1 ELSE 0 END) as today_count,
+        SUM(CASE WHEN (t.settlement_status IS NULL OR t.settlement_status NOT IN ('paid', 'failed', 'linked')) AND t.settlement_date = ? THEN t.consideration ELSE 0 END) as today_value,
+        SUM(CASE WHEN (t.settlement_status IS NULL OR t.settlement_status NOT IN ('paid', 'failed', 'linked')) AND t.settlement_date > ? THEN 1 ELSE 0 END) as upcoming_count,
+        SUM(CASE WHEN (t.settlement_status IS NULL OR t.settlement_status NOT IN ('paid', 'failed', 'linked')) AND t.settlement_date > ? THEN t.consideration ELSE 0 END) as upcoming_value,
         SUM(t.consideration) as total_value
     FROM trades t
     WHERE t.settlement_date IS NOT NULL 

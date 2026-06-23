@@ -722,7 +722,12 @@ class ContractNotePDF extends TCPDF {
         $this->SetFont('helvetica', 'B', 10);
         $this->Cell(0, 5, strtoupper($trade['client_name']), 0, 1, 'L');
         $this->SetFont('helvetica', '', 7);
-        $this->Cell(0, 3, 'Account Ending: ' . substr($trade['client_cds_account'], -4), 0, 1, 'L');
+        if (!empty($trade['client_address'])) {
+            $this->Cell(0, 3, 'PO Box: ' . $trade['client_address'], 0, 1, 'L');
+        }
+        if (!empty($trade['client_email'])) {
+            $this->Cell(0, 3, 'Email: ' . $trade['client_email'], 0, 1, 'L');
+        }
         
         $this->Ln(10);
         
@@ -1150,7 +1155,9 @@ function generateContractNotePDF($trade_id, $contract_type = 'single') {
                c_seller.company_code as seller_cds_account,
                cl.fee_type as client_fee_type,
                cl.default_brokerage_fee,
-               cl.liberty_mode as client_liberty_mode
+               cl.liberty_mode as client_liberty_mode,
+               cl.address as client_address,
+               cl.email as client_email
         FROM trades t
         LEFT JOIN equities e ON t.security_id = e.security_id AND t.asset_class = 'equity'
         LEFT JOIN bonds b ON t.security_id = b.security_id AND t.asset_class = 'bond'
@@ -1671,9 +1678,11 @@ $stmt = $db->prepare("
            c_seller.company_name as seller_company_name,
            cl.id as client_id,
            cl.client_name as proper_client_name,
-           cl.fee_type as client_fee_type,
-           cl.default_brokerage_fee,
-           cl.liberty_mode as client_liberty_mode
+                cl.fee_type as client_fee_type,
+                cl.default_brokerage_fee,
+                cl.liberty_mode as client_liberty_mode,
+                cl.address as client_address,
+                cl.email as client_email
     FROM trades t
     LEFT JOIN equities e ON t.security_id = e.security_id AND t.asset_class = 'equity'
     LEFT JOIN bonds b ON t.security_id = b.security_id AND t.asset_class = 'bond'
