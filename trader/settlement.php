@@ -2620,4 +2620,84 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 </script>
 
+<!-- Export Modal -->
+<div class="modal fade" id="exportModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title"><i class="bi bi-download me-2"></i>Export Settlement Report</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="export_settlement_contracts">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Export Type <span class="text-danger">*</span></label>
+                        <div class="d-flex gap-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="export_type" id="exportTypeContract" value="contract_notes" checked>
+                                <label class="form-check-label" for="exportTypeContract">
+                                    <i class="bi bi-file-earmark-text text-primary me-1"></i> Contract Notes
+                                </label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="export_type" id="exportTypeClient" value="client_list">
+                                <label class="form-check-label" for="exportTypeClient">
+                                    <i class="bi bi-people text-info me-1"></i> Client List
+                                </label>
+                            </div>
+                        </div>
+                        <small class="text-muted">
+                            <span id="exportTypeHelp">Combined contract notes for each client who traded on the selected date.</span>
+                        </small>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="export_date" class="form-label fw-bold">Settlement Date <span class="text-danger">*</span></label>
+                        <input type="date" class="form-control" id="export_date" name="export_date" value="<?php echo date('Y-m-d'); ?>" required>
+                        <small class="text-muted">Select the settlement date to export.</small>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="cds_filter" class="form-label fw-bold">CDS Account (Optional)</label>
+                        <input type="text" class="form-control" id="cds_filter" name="cds_filter" placeholder="Leave blank for all clients">
+                        <small class="text-muted">Filter by a specific CDS account number. Leave empty to include all clients.</small>
+                    </div>
+
+                    <div class="alert alert-info mb-0">
+                        <i class="bi bi-info-circle me-2"></i>
+                        <strong>Contract Notes:</strong> Generates a single PDF with contract notes grouped by client. Clients with multiple trades on the same security get a summary contract note with trade breakdown.
+                        <hr class="my-2">
+                        <strong>Client List:</strong> Generates a PDF report listing all clients and trades due for settlement on the selected date.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-download me-1"></i> Export PDF
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const contractRadio = document.getElementById('exportTypeContract');
+    const clientRadio = document.getElementById('exportTypeClient');
+    const helpText = document.getElementById('exportTypeHelp');
+
+    function updateExportHelp() {
+        if (contractRadio.checked) {
+            helpText.textContent = 'Combined contract notes for each client who traded on the selected date.';
+        } else {
+            helpText.textContent = 'PDF list of all clients and their trades due for settlement on the selected date.';
+        }
+    }
+
+    contractRadio.addEventListener('change', updateExportHelp);
+    clientRadio.addEventListener('change', updateExportHelp);
+});
+</script>
+
 <?php include '../includes/footer.php'; ?>
