@@ -14,6 +14,7 @@ require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
 require_once '../includes/dealing_sheet_helpers.php';
 require_once '../tcpdf/tcpdf.php';
+require_once __DIR__ . '/../reports/traits/ReportHeaderTrait.php';
 
 require_trader();
 require_mandate();
@@ -27,6 +28,8 @@ $view = $_GET['view'] ?? 'all';
 // DEALING SHEET PDF CLASS
 // ============================================
 class DealingSheetPDF extends TCPDF {
+    use ReportHeaderTrait;
+    
     private $company_name = '';
     private $watermark_enabled = true;
     
@@ -39,25 +42,13 @@ class DealingSheetPDF extends TCPDF {
     }
     
     public function Header() {
-        // Logo
-        $image_file = __DIR__ . '/../assets/HeaderLogoVfsl.jpg';
-        if (file_exists($image_file)) {
-            $this->Image($image_file, 25, 8, 160, 0, 'JPG', '', 'T', false, 300, '', false, false, 0, false, false, false);
-        } else {
-            $this->SetFont('helvetica', 'B', 12);
-            $this->SetXY(25, 10);
-            $this->Cell(160, 6, $this->company_name, 0, 1, 'C');
-            $this->SetFont('helvetica', '', 7);
-            $this->Cell(160, 3, 'Registered Stockbroker', 0, 1, 'C');
-        }
+        $this->renderReportHeader();
         
-        $this->SetLineWidth(0.3);
-        $this->Line(25, 22, 185, 22);
+        $y = $this->GetY();
         
-        // Watermark
         if ($this->watermark_enabled) {
             $this->SetAlpha(0.05);
-            $this->SetFont('helvetica', 'B', 45);
+            $this->SetFont('times', 'B', 45);
             $this->SetTextColor(200, 200, 200);
             $this->StartTransform();
             $this->Rotate(45, 105, 150);
@@ -66,6 +57,8 @@ class DealingSheetPDF extends TCPDF {
             $this->SetAlpha(1);
             $this->SetTextColor(0, 0, 0);
         }
+        
+        $this->SetY($y + 2);
     }
     
     public function Footer() {

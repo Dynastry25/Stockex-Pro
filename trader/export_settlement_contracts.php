@@ -67,6 +67,7 @@ $query = "
     WHERE t.settlement_date IS NOT NULL 
     AND t.settlement_date = ?
     AND t.status = 'active'
+    AND t.trade_side = 'sell'
     AND (t.settlement_status IS NULL OR t.settlement_status NOT IN ('cancelled'))
 ";
 
@@ -112,85 +113,188 @@ if ($export_type === 'client_list') {
     $pdf->SetAuthor($company_name);
     $pdf->SetTitle('Settlement Client List - ' . $export_date);
     $pdf->SetSubject('Settlement Due Clients');
-    $pdf->SetMargins(15, 15, 15);
+    $pdf->SetMargins(40, 15, 15);
     $pdf->SetAutoPageBreak(true, 15);
     $pdf->AddPage();
+    renderVfslPdfHeader($pdf, $company_name);
 
-    // Header
-    $pdf->SetFont('helvetica', 'B', 16);
-    $pdf->Cell(0, 10, strtoupper($company_name), 0, 1, 'C');
-    $pdf->SetFont('helvetica', '', 9);
-    $pdf->Cell(0, 5, 'SETTLEMENT CLIENT LIST', 0, 1, 'C');
-    $pdf->Cell(0, 5, 'Settlement Date: ' . date('d/m/Y', strtotime($export_date)), 0, 1, 'C');
-    $pdf->Ln(5);
-
-    // Summary
     $pdf->SetFont('helvetica', 'B', 10);
-    $pdf->Cell(0, 6, 'Total Clients: ' . count($grouped) . ' | Total Trades: ' . count($trades), 0, 1, 'L');
+    $pdf->Cell(0, 6, 'SETTLEMENT CLIENT LIST', 0, 1, 'C');
+    $pdf->SetFont('helvetica', '', 8);
+    $pdf->Cell(0, 5, 'Settlement Date: ' . date('d/m/Y', strtotime($export_date)), 0, 1, 'C');
+    $pdf->Cell(0, 5, 'Total Clients: ' . count($grouped) . ' | Total Trades: ' . count($trades), 0, 1, 'C');
     $pdf->Ln(3);
 
-    // Table header
-    $pdf->SetFont('helvetica', 'B', 8);
-    $pdf->SetFillColor(230, 230, 230);
-    $headers = ['#', 'CDS Account', 'Client Name', 'Side', 'Security', 'Quantity', 'Price', 'Consideration (TZS)', 'Status'];
-    $colWidths = [8, 22, 45, 10, 28, 18, 20, 28, 16];
-    $totalWidth = array_sum($colWidths);
+    $colSide = 8; $colSecurity = 48; $colQty = 18; $colPrice = 22; $colConsider = 34;
+    $tradeWidth = $colSide + $colSecurity + $colQty + $colPrice + $colConsider;
+    $labelW = 55; $valueW = 35;
+    $summaryLeft = $tradeWidth - $labelW - $valueW;
 
-    foreach ($headers as $i => $h) {
-        $pdf->Cell($colWidths[$i], 7, $h, 1, 0, 'C', true);
-    }
-    $pdf->Ln();
-
-    // Table rows
-    $pdf->SetFont('helvetica', '', 7);
-    $idx = 1;
-    $grand_total = 0;
+    // Grand totals
+    $grand_consider = 0; $grand_brokerage = 0; $grand_bank = 0; $grand_totfees = 0; $grand_net = 0;
 
     foreach ($grouped as $cds => $group) {
-        $client_drawn = false;
-        foreach ($group['trades'] as $trade) {
-            $status = ucfirst($trade['settlement_status'] ?? 'Pending');
-            $side = strtoupper($trade['trade_side']);
-            $consideration = floatval($trade['consideration']);
-            $grand_total += $side === 'SELL' ? $consideration : 0;
+        $group_trades = $group['trades'];
+        $client_name = $group['client_name'];
 
-            if (!$client_drawn) {
-                // Client sub-header
-                $pdf->SetFont('helvetica', 'B', 7);
-                $pdf->SetFillColor(245, 245, 250);
-                $pdf->Cell($totalWidth, 6, 'Client: ' . $group['client_name'] . ' (CDS: ' . $cds . ')', 1, 1, 'L', true);
-                $pdf->SetFont('helvetica', '', 7);
-                $client_drawn = true;
+        // Subgroup by side + security
+        $subgroups = [];
+        foreach ($group_trades as $t) {
+            $key = $t['trade_side'] . '|' . $t['security_id'];
+            $subgroups[$key][] = $t;
+        }
+
+        // Total consideration for ALL client trades
+        $client_total_consider = 0;
+        $client_total_qty = 0;
+        foreach ($group_trades as $t) {
+            $client_total_consider += floatval($t['consideration']);
+            $client_total_qty += floatval($t['quantity']);
+        }
+
+        // Calculate fees ONCE on total consideration
+        $first_trade = $group_trades[0];
+        $asset_class = $first_trade['asset_class'];
+        $client_fee = [
+            'fee_type' => $first_trade['client_fee_type'] ?? 'default',
+            'default_brokerage_fee' => $first_trade['default_brokerage_fee'] ?? 0,
+            'liberty_mode' => $first_trade['client_liberty_mode'] ?? 'replace_all'
+        ];
+        $effective_rate = getEffectiveBrokerageRate($db, $first_trade, $client_fee);
+        $liberty_mode = $first_trade['liberty_mode'] ?? ($client_fee['liberty_mode'] ?? 'replace_all');
+        $is_liberty = ($first_trade['brokerage_fee_type'] === 'liberty' || $first_trade['brokerage_fee_type'] === 'this_trade');
+
+        $avg_price = $client_total_qty > 0 ? $client_total_consider / $client_total_qty : 0;
+
+        $client_fees = calculateFeesWithEffectiveRate($db, $asset_class,
+            $client_total_consider, $client_total_qty, $avg_price,
+            $effective_rate, $liberty_mode, $is_liberty);
+
+        $client_bank = calculateBankCharge($client_total_consider);
+        $client_fees['bank_charge'] = $client_bank;
+        $client_fees['total'] += $client_bank;
+
+        $client_brokerage = $client_fees['brokerage'];
+        $client_totfees = $client_fees['total'];
+        $client_net = $client_total_consider - $client_totfees;
+
+        $grand_consider += $client_total_consider;
+        $grand_brokerage += $client_brokerage;
+        $grand_bank += $client_bank;
+        $grand_totfees += $client_totfees;
+        $grand_net += $client_net;
+
+        // Page break check
+        if ($pdf->GetY() > 210) {
+            $pdf->AddPage();
+        }
+
+        // Client header
+        $pdf->SetFont('helvetica', 'B', 8);
+        $pdf->SetFillColor(240, 240, 245);
+        $pdf->Cell($tradeWidth, 7, 'Client: ' . $client_name . '  |  CDS: ' . $cds . '  |  Trades: ' . count($group_trades), 1, 1, 'L', true);
+
+        // Trade column headers
+        $pdf->SetFont('helvetica', 'B', 7);
+        $pdf->SetFillColor(230, 230, 230);
+        $pdf->Cell($colSide, 6, 'Side', 1, 0, 'C', true);
+        $pdf->Cell($colSecurity, 6, 'Security', 1, 0, 'C', true);
+        $pdf->Cell($colQty, 6, 'Qty', 1, 0, 'C', true);
+        $pdf->Cell($colPrice, 6, 'Price', 1, 0, 'C', true);
+        $pdf->Cell($colConsider, 6, 'Consideration', 1, 1, 'C', true);
+
+        $pdf->SetFont('helvetica', '', 7);
+
+        foreach ($subgroups as $key => $subgroup) {
+            list($trade_side, $security_id) = explode('|', $key);
+
+            if (count($subgroup) > 1) {
+                $qty = 0; $consider = 0;
+                foreach ($subgroup as $t) {
+                    $qty += floatval($t['quantity']);
+                    $consider += floatval($t['consideration']);
+                }
+                $price = $qty > 0 ? $consider / $qty : 0;
+                $sec_label = $security_id . ' *';
+            } else {
+                $t = $subgroup[0];
+                $qty = floatval($t['quantity']);
+                $price = floatval($t['price']);
+                $consider = floatval($t['consideration']);
+                $sec_label = $security_id;
             }
-
-            $pdf->Cell($colWidths[0], 5, $idx++, 1, 0, 'C');
-            $pdf->Cell($colWidths[1], 5, $cds, 1, 0, 'C');
-            $pdf->Cell($colWidths[2], 5, $trade['client_name'], 1, 0, 'L');
-            $pdf->Cell($colWidths[3], 5, $side, 1, 0, 'C');
-            $pdf->Cell($colWidths[4], 5, $trade['security_id'], 1, 0, 'L');
-            $pdf->Cell($colWidths[5], 5, number_format($trade['quantity'], 0), 1, 0, 'R');
-            $pdf->Cell($colWidths[6], 5, number_format($trade['price'], 4), 1, 0, 'R');
-            $pdf->Cell($colWidths[7], 5, number_format($consideration, 2), 1, 0, 'R');
-            $pdf->Cell($colWidths[8], 5, $status, 1, 1, 'C');
 
             if ($pdf->GetY() > 255) {
                 $pdf->AddPage();
-                $pdf->SetFont('helvetica', 'B', 8);
+                $pdf->SetFont('helvetica', 'B', 7);
                 $pdf->SetFillColor(230, 230, 230);
-                foreach ($headers as $i => $h) {
-                    $pdf->Cell($colWidths[$i], 7, $h, 1, 0, 'C', true);
-                }
-                $pdf->Ln();
+                $pdf->Cell($colSide, 6, 'Side', 1, 0, 'C', true);
+                $pdf->Cell($colSecurity, 6, 'Security', 1, 0, 'C', true);
+                $pdf->Cell($colQty, 6, 'Qty', 1, 0, 'C', true);
+                $pdf->Cell($colPrice, 6, 'Price', 1, 0, 'C', true);
+                $pdf->Cell($colConsider, 6, 'Consideration', 1, 1, 'C', true);
                 $pdf->SetFont('helvetica', '', 7);
             }
+
+            $pdf->Cell($colSide, 5, strtoupper($trade_side), 1, 0, 'C');
+            $pdf->Cell($colSecurity, 5, $sec_label, 1, 0, 'L');
+            $pdf->Cell($colQty, 5, number_format($qty, 0), 1, 0, 'R');
+            $pdf->Cell($colPrice, 5, number_format($price, 4), 1, 0, 'R');
+            $pdf->Cell($colConsider, 5, number_format($consider, 2), 1, 1, 'R');
         }
+
+        // Fee summary block
+        $pdf->Ln(1);
+        $pdf->SetFont('helvetica', '', 8);
+        $pdf->Cell($summaryLeft, 5, '', 0, 0, 'L');
+        $pdf->Cell($labelW, 5, 'Total Consideration:', 0, 0, 'R');
+        $pdf->SetFont('helvetica', 'B', 8);
+        $pdf->Cell($valueW, 5, number_format($client_total_consider, 2), 0, 1, 'R');
+
+        $pdf->SetFont('helvetica', '', 8);
+        $pdf->Cell($summaryLeft, 5, '', 0, 0, 'L');
+        $pdf->Cell($labelW, 5, 'Brokerage:', 0, 0, 'R');
+        $pdf->Cell($valueW, 5, number_format($client_brokerage, 2), 0, 1, 'R');
+
+        $pdf->Cell($summaryLeft, 5, '', 0, 0, 'L');
+        $pdf->Cell($labelW, 5, 'Bank Charges:', 0, 0, 'R');
+        $pdf->Cell($valueW, 5, number_format($client_bank, 2), 0, 1, 'R');
+
+        $pdf->Cell($summaryLeft, 5, '', 0, 0, 'L');
+        $pdf->Cell($labelW, 5, 'Total Fees:', 0, 0, 'R');
+        $pdf->Cell($valueW, 5, number_format($client_totfees, 2), 0, 1, 'R');
+
+        $pdf->SetFont('helvetica', 'B', 9);
+        $pdf->Cell($summaryLeft, 6, '', 0, 0, 'L');
+        $pdf->Cell($labelW, 6, 'NET AMOUNT RECEIVABLE:', 0, 0, 'R');
+        $pdf->SetFont('helvetica', 'B', 10);
+        $pdf->Cell($valueW, 6, number_format($client_net, 2), 0, 1, 'R');
+
+        $pdf->Ln(4);
     }
 
-    // Totals
-    $pdf->Ln(3);
+    // Grand total summary
+    $pdf->SetFillColor(220, 220, 220);
     $pdf->SetFont('helvetica', 'B', 9);
-    $pdf->Cell(80, 6, 'Total Trades: ' . count($trades), 0, 0, 'L');
-    $pdf->Cell(0, 6, 'Total Clients: ' . count($grouped), 0, 1, 'L');
+    $pdf->Cell($summaryLeft, 7, '', 0, 0, 'L');
+    $pdf->Cell($labelW, 7, 'GRAND TOTAL CONSIDERATION:', 1, 0, 'R', true);
+    $pdf->Cell($valueW, 7, number_format($grand_consider, 2), 1, 1, 'R', true);
+    $pdf->Cell($summaryLeft, 7, '', 0, 0, 'L');
+    $pdf->Cell($labelW, 7, 'GRAND TOTAL BROKERAGE:', 1, 0, 'R', true);
+    $pdf->Cell($valueW, 7, number_format($grand_brokerage, 2), 1, 1, 'R', true);
+    $pdf->Cell($summaryLeft, 7, '', 0, 0, 'L');
+    $pdf->Cell($labelW, 7, 'GRAND TOTAL BANK CHARGES:', 1, 0, 'R', true);
+    $pdf->Cell($valueW, 7, number_format($grand_bank, 2), 1, 1, 'R', true);
+    $pdf->Cell($summaryLeft, 7, '', 0, 0, 'L');
+    $pdf->Cell($labelW, 7, 'GRAND TOTAL FEES:', 1, 0, 'R', true);
+    $pdf->Cell($valueW, 7, number_format($grand_totfees, 2), 1, 1, 'R', true);
+    $pdf->Cell($summaryLeft, 7, '', 0, 0, 'L');
+    $pdf->Cell($labelW, 7, 'GRAND NET RECEIVABLE:', 1, 0, 'R', true);
+    $pdf->Cell($valueW, 7, number_format($grand_net, 2), 1, 1, 'R', true);
+
+    $pdf->Ln(3);
+    $pdf->SetFont('helvetica', 'I', 7);
+    $pdf->Cell(0, 4, '* Multiple trades averaged per security', 0, 1, 'L');
 
     $filename = 'settlement_client_list_' . date('Ymd', strtotime($export_date)) . '.pdf';
     $pdf->Output($filename, 'I');

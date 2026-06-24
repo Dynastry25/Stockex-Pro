@@ -29,6 +29,7 @@ require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
 require_once '../includes/dealing_sheet_helpers.php';
 require_once '../tcpdf/tcpdf.php';
+require_once __DIR__ . '/../reports/traits/ReportHeaderTrait.php';
 
 // Verify user is logged in
 require_trader();
@@ -183,6 +184,8 @@ if ($is_sell) {
 // PDF CLASS
 // ============================================
 class DealingSheetPDF extends TCPDF {
+    use ReportHeaderTrait;
+    
     private $company_name = '';
     
     public function setCompanyName($name) {
@@ -190,18 +193,7 @@ class DealingSheetPDF extends TCPDF {
     }
     
     public function Header() {
-        // Company header
-        $this->SetFont('helvetica', 'B', 14);
-        $this->SetXY(15, 8);
-        $this->Cell(180, 6, $this->company_name, 0, 1, 'C');
-        $this->SetFont('helvetica', '', 8);
-        $this->Cell(180, 4, 'Registered Stockbroker - Dar es Salaam Stock Exchange', 0, 1, 'C');
-        $this->SetFont('helvetica', 'I', 7);
-        $this->Cell(180, 4, 'Website: www.core.co.tz | Email: info@core.co.tz', 0, 1, 'C');
-        
-        $this->SetLineWidth(0.3);
-        $this->Line(15, 22, 195, 22);
-        $this->Ln(4);
+        $this->renderReportHeader();
     }
     
     public function Footer() {

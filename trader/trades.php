@@ -3,6 +3,7 @@ require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
 require_once '../includes/dealing_sheet_helpers.php';
 require_once '../tcpdf/tcpdf.php';
+require_once __DIR__ . '/../reports/traits/ReportHeaderTrait.php';
 
 require_trader();
 require_mandate();
@@ -50,6 +51,7 @@ function markTradeContractNoteGeneratedSafely($db, $tradeId, $user, $createIfMis
 
 function buildTradeListUrl($overrides = []) {
     $query = $_GET;
+    unset($query['ajax']);
 
     foreach ($overrides as $key => $value) {
         if ($value === null || $value === '') {
@@ -610,6 +612,8 @@ function calculateFeesWithEffectiveRate($db, $asset_class, $consideration, $quan
 
 // Define ContractNotePDF class
 class ContractNotePDF extends TCPDF {
+    use ReportHeaderTrait;
+    
     private $watermark_enabled = false;
     private $company_name = '';
     private $total_trades = 0;
@@ -632,40 +636,38 @@ class ContractNotePDF extends TCPDF {
     }
     
     public function Header() {
-        $image_file = '../assets/HeaderLogoVfsl.jpg';
-        if (file_exists($image_file)) {
-            $this->Image($image_file, 25, 8, 160, 0, 'JPG', '', 'T', false, 300, '', false, false, 0, false, false, false);
-        } else {
-            $this->SetFont('helvetica', 'B', 11);
-            $this->SetXY(25, 8);
-            $this->Cell(160, 5, $this->company_name, 0, 1, 'C');
-            $this->SetFont('helvetica', '', 7);
-            $this->Cell(160, 3, 'Registered Stockbroker', 0, 1, 'C');
-        }
+        $this->renderReportHeader();
         
-        $this->SetLineWidth(0.2);
-        $this->Line(25, 18, 185, 18);
+        $y = $this->GetY();
         
-        $this->SetFont('helvetica', '', 6);
-        $this->SetXY(25, 19);
-        $this->Cell(160, 3, '(Subject to the Rules and Practice of the Dar es Salaam Stock Exchange)', 0, 1, 'C');
+        $this->SetFont('times', 'I', 7);
+        $this->SetTextColor(4, 45, 146);
+        $this->SetXY(15, $y);
+        $this->Cell(180, 3, '(Subject to the Rules and Practice of the Dar es Salaam Stock Exchange)', 0, 1, 'C');
+        $y += 4;
         
         if ($this->total_trades > 1) {
-            $this->SetFont('helvetica', '', 5);
+            $this->SetFont('times', '', 6);
             $this->SetTextColor(120, 120, 120);
-            $this->SetXY(25, 22);
+            $this->SetXY(15, $y);
             $this->Cell(10, 3, 'Trade ' . $this->current_trade . ' of ' . $this->total_trades, 0, 0, 'L');
             $this->SetTextColor(0, 0, 0);
+            $y += 3;
         }
         
         if ($this->watermark_enabled) {
             $this->SetAlpha(0.05);
-            $this->SetFont('helvetica', 'B', 50);
+            $this->SetFont('times', 'B', 50);
             $this->SetTextColor(200, 200, 200);
-            $this->RotatedText(105, 150, $this->company_name, 45);
+            $this->StartTransform();
+            $this->Rotate(45, 105, 150);
+            $this->Text(105, 150, $this->company_name);
+            $this->StopTransform();
             $this->SetAlpha(1);
             $this->SetTextColor(0, 0, 0);
         }
+        
+        $this->SetY($y + 2);
     }
     
     public function Footer() {
@@ -1643,7 +1645,13 @@ if (isset($_GET['commission_type']) && !empty($_GET['commission_type'])) {
 
 if (isset($_GET['search']) && !empty($_GET['search'])) {
     $search_term = '%' . $_GET['search'] . '%';
-    $where_conditions[] = "(t.trade_reference LIKE ? OR t.security_id LIKE ? OR t.client_name LIKE ? OR t.counterparty_name LIKE ?)";
+    $where_conditions[] = "(t.trade_reference LIKE ? OR t.security_id LIKE ? OR t.security_name LIKE ? OR t.client_name LIKE ? OR t.client_cds_account LIKE ? OR t.counterparty_name LIKE ? OR t.asset_class LIKE ? OR t.trade_side LIKE ? OR t.status LIKE ? OR t.brokerage_fee_type LIKE ?)";
+    $params[] = $search_term;
+    $params[] = $search_term;
+    $params[] = $search_term;
+    $params[] = $search_term;
+    $params[] = $search_term;
+    $params[] = $search_term;
     $params[] = $search_term;
     $params[] = $search_term;
     $params[] = $search_term;
@@ -1713,6 +1721,13 @@ $showing_to = $total_trades > 0 ? $offset + $current_page_count : 0;
 $show_contract_modal = isset($_GET['show_contract_modal']) && isset($_SESSION['contract_modal_data']);
 
 $page_title = 'Trade Management';
+
+// AJAX handler for live search - returns JSON with table fragment
+$is_ajax = isset($_GET['ajax']) && $_GET['ajax'] === '1';
+if ($is_ajax) {
+    ob_start();
+}
+
 include '../includes/header.php';
 ?>
 
@@ -2038,107 +2053,102 @@ include '../includes/header.php';
     endif; 
     ?>
 
-    <!-- Filters Section -->
+    <!-- Filters Section (collapsed by default) -->
     <div class="card dashboard-card mb-4">
         <div class="card-header bg-transparent border-0 pb-0">
             <div class="d-flex align-items-center">
                 <div class="me-2">
                     <i class="bi bi-funnel text-primary"></i>
                 </div>
-                <h6 class="mb-0 fw-semibold">Filter & Search Trades</h6>
+                <h6 class="mb-0 fw-semibold">Advanced Filters</h6>
+                <button class="btn btn-sm btn-outline-secondary ms-auto" type="button" data-bs-toggle="collapse" data-bs-target="#filterCollapse" aria-expanded="false">
+                    <i class="bi bi-chevron-down"></i>
+                </button>
             </div>
         </div>
-        <div class="card-body">
-            <form method="GET" action="" class="row g-4">
-                <div class="col-lg-2 col-md-4">
-                    <label for="status" class="form-label fw-semibold text-dark">Status</label>
-                    <div class="input-group">
-                        <span class="input-group-text bg-light border-end-0">
-                            <i class="bi bi-check-circle-fill text-muted"></i>
-                        </span>
-                        <select class="form-select border-start-0" id="status" name="status">
-                            <option value="">All Statuses</option>
-                            <option value="active" <?php echo (isset($_GET['status']) && $_GET['status'] == 'active') ? 'selected' : ''; ?>>Active</option>
-                            <option value="cancelled" <?php echo (isset($_GET['status']) && $_GET['status'] == 'cancelled') ? 'selected' : ''; ?>>Cancelled</option>
-                            <option value="settled" <?php echo (isset($_GET['status']) && $_GET['status'] == 'settled') ? 'selected' : ''; ?>>Settled</option>
-                        </select>
+        <div class="collapse" id="filterCollapse">
+            <div class="card-body">
+                <form method="GET" action="" class="row g-4" id="filterForm">
+                    <div class="col-lg-2 col-md-4">
+                        <label for="status" class="form-label fw-semibold text-dark">Status</label>
+                        <div class="input-group">
+                            <span class="input-group-text bg-light border-end-0">
+                                <i class="bi bi-check-circle-fill text-muted"></i>
+                            </span>
+                            <select class="form-select border-start-0" id="status" name="status">
+                                <option value="">All Statuses</option>
+                                <option value="active" <?php echo (isset($_GET['status']) && $_GET['status'] == 'active') ? 'selected' : ''; ?>>Active</option>
+                                <option value="cancelled" <?php echo (isset($_GET['status']) && $_GET['status'] == 'cancelled') ? 'selected' : ''; ?>>Cancelled</option>
+                                <option value="settled" <?php echo (isset($_GET['status']) && $_GET['status'] == 'settled') ? 'selected' : ''; ?>>Settled</option>
+                            </select>
+                        </div>
                     </div>
-                </div>
-                <div class="col-lg-2 col-md-4">
-                    <label for="type" class="form-label fw-semibold text-dark">Asset Type</label>
-                    <div class="input-group">
-                        <span class="input-group-text bg-light border-end-0">
-                            <i class="bi bi-collection text-muted"></i>
-                        </span>
-                        <select class="form-select border-start-0" id="type" name="type">
-                            <option value="">All Types</option>
-                            <option value="bond" <?php echo (isset($_GET['type']) && $_GET['type'] == 'bond') ? 'selected' : ''; ?>>Bonds</option>
-                            <option value="equity" <?php echo (isset($_GET['type']) && $_GET['type'] == 'equity') ? 'selected' : ''; ?>>Equities</option>
-                            <option value="Exchange Traded Funds" <?php echo (isset($_GET['type']) && $_GET['type'] == 'Exchange Traded Funds') ? 'selected' : ''; ?>>ETFs</option>
-                        </select>
+                    <div class="col-lg-2 col-md-4">
+                        <label for="type" class="form-label fw-semibold text-dark">Asset Type</label>
+                        <div class="input-group">
+                            <span class="input-group-text bg-light border-end-0">
+                                <i class="bi bi-collection text-muted"></i>
+                            </span>
+                            <select class="form-select border-start-0" id="type" name="type">
+                                <option value="">All Types</option>
+                                <option value="bond" <?php echo (isset($_GET['type']) && $_GET['type'] == 'bond') ? 'selected' : ''; ?>>Bonds</option>
+                                <option value="equity" <?php echo (isset($_GET['type']) && $_GET['type'] == 'equity') ? 'selected' : ''; ?>>Equities</option>
+                                <option value="Exchange Traded Funds" <?php echo (isset($_GET['type']) && $_GET['type'] == 'Exchange Traded Funds') ? 'selected' : ''; ?>>ETFs</option>
+                            </select>
+                        </div>
                     </div>
-                </div>
-                <div class="col-lg-2 col-md-4">
-                    <label for="commission_type" class="form-label fw-semibold text-dark">Commission Type</label>
-                    <div class="input-group">
-                        <span class="input-group-text bg-light border-end-0">
-                            <i class="bi bi-percent text-muted"></i>
-                        </span>
-                        <select class="form-select border-start-0" id="commission_type" name="commission_type">
-                            <option value="">All Types</option>
-                            <option value="normal" <?php echo (isset($_GET['commission_type']) && $_GET['commission_type'] == 'normal') ? 'selected' : ''; ?>>Normal (Standard)</option>
-                            <option value="liberty" <?php echo (isset($_GET['commission_type']) && $_GET['commission_type'] == 'liberty') ? 'selected' : ''; ?>>Liberty (Permanent)</option>
-                            <option value="this_trade" <?php echo (isset($_GET['commission_type']) && $_GET['commission_type'] == 'this_trade') ? 'selected' : ''; ?>>This Trade Only</option>
-                        </select>
+                    <div class="col-lg-2 col-md-4">
+                        <label for="commission_type" class="form-label fw-semibold text-dark">Commission Type</label>
+                        <div class="input-group">
+                            <span class="input-group-text bg-light border-end-0">
+                                <i class="bi bi-percent text-muted"></i>
+                            </span>
+                            <select class="form-select border-start-0" id="commission_type" name="commission_type">
+                                <option value="">All Types</option>
+                                <option value="normal" <?php echo (isset($_GET['commission_type']) && $_GET['commission_type'] == 'normal') ? 'selected' : ''; ?>>Normal (Standard)</option>
+                                <option value="liberty" <?php echo (isset($_GET['commission_type']) && $_GET['commission_type'] == 'liberty') ? 'selected' : ''; ?>>Liberty (Permanent)</option>
+                                <option value="this_trade" <?php echo (isset($_GET['commission_type']) && $_GET['commission_type'] == 'this_trade') ? 'selected' : ''; ?>>This Trade Only</option>
+                            </select>
+                        </div>
                     </div>
-                </div>
-                <div class="col-lg-2 col-md-6">
-                    <label for="trade_date_from" class="form-label fw-semibold text-dark">Trade Date From</label>
-                    <div class="input-group">
-                        <span class="input-group-text bg-light border-end-0">
-                            <i class="bi bi-calendar text-muted"></i>
-                        </span>
-                        <input type="date" class="form-control border-start-0" id="trade_date_from" name="trade_date_from" 
-                               value="<?php echo isset($_GET['trade_date_from']) ? htmlspecialchars($_GET['trade_date_from']) : ''; ?>">
+                    <div class="col-lg-2 col-md-6">
+                        <label for="trade_date_from" class="form-label fw-semibold text-dark">Trade Date From</label>
+                        <div class="input-group">
+                            <span class="input-group-text bg-light border-end-0">
+                                <i class="bi bi-calendar text-muted"></i>
+                            </span>
+                            <input type="date" class="form-control border-start-0" id="trade_date_from" name="trade_date_from" 
+                                   value="<?php echo isset($_GET['trade_date_from']) ? htmlspecialchars($_GET['trade_date_from']) : ''; ?>">
+                        </div>
                     </div>
-                </div>
-                <div class="col-lg-2 col-md-6">
-                    <label for="trade_date_to" class="form-label fw-semibold text-dark">Trade Date To</label>
-                    <div class="input-group">
-                        <span class="input-group-text bg-light border-end-0">
-                            <i class="bi bi-calendar text-muted"></i>
-                        </span>
-                        <input type="date" class="form-control border-start-0" id="trade_date_to" name="trade_date_to" 
-                               value="<?php echo isset($_GET['trade_date_to']) ? htmlspecialchars($_GET['trade_date_to']) : ''; ?>">
+                    <div class="col-lg-2 col-md-6">
+                        <label for="trade_date_to" class="form-label fw-semibold text-dark">Trade Date To</label>
+                        <div class="input-group">
+                            <span class="input-group-text bg-light border-end-0">
+                                <i class="bi bi-calendar text-muted"></i>
+                            </span>
+                            <input type="date" class="form-control border-start-0" id="trade_date_to" name="trade_date_to" 
+                                   value="<?php echo isset($_GET['trade_date_to']) ? htmlspecialchars($_GET['trade_date_to']) : ''; ?>">
+                        </div>
                     </div>
-                </div>
-                <div class="col-lg-2 col-md-6">
-                    <label for="search" class="form-label fw-semibold text-dark">Search</label>
-                    <div class="input-group">
-                        <span class="input-group-text bg-light border-end-0">
-                            <i class="bi bi-search text-muted"></i>
-                        </span>
-                        <input type="text" class="form-control border-start-0 border-end-0" id="search" name="search" 
-                               placeholder="Search by ref, instrument, or client..."
-                               value="<?php echo isset($_GET['search']) ? htmlspecialchars($_GET['search']) : ''; ?>">
+                    <div class="col-lg-12">
+                        <div class="d-flex gap-2 justify-content-end">
+                            <button type="submit" class="btn btn-primary">
+                                <i class="bi bi-funnel me-1"></i> Apply Filters
+                            </button>
+                            <a href="trades.php" class="btn btn-outline-secondary">
+                                <i class="bi bi-arrow-clockwise"></i> Reset
+                            </a>
+                        </div>
                     </div>
-                </div>
-                <div class="col-lg-12">
-                    <div class="d-flex gap-2 justify-content-end">
-                        <button type="submit" class="btn btn-primary">
-                            <i class="bi bi-funnel me-1"></i> Apply Filters
-                        </button>
-                        <a href="trades.php" class="btn btn-outline-secondary">
-                            <i class="bi bi-arrow-clockwise"></i> Reset
-                        </a>
-                    </div>
-                </div>
-            </form>
+                </form>
+            </div>
         </div>
     </div>
 
+    <!--AJAX_TABLE_START-->
     <!-- Trades Table -->
-    <div class="card dashboard-card">
+    <div class="card dashboard-card" id="trades-card">
         <div class="card-header bg-transparent border-0 pb-0">
             <div class="d-flex justify-content-between align-items-center">
                 <div class="d-flex align-items-center">
@@ -2148,7 +2158,7 @@ include '../includes/header.php';
                     <h6 class="mb-0 fw-semibold">Trading Portfolio</h6>
                 </div>
                 <div class="d-flex align-items-center">
-                    <span class="badge bg-primary px-3 py-2 me-2"><?php echo number_format($total_trades); ?> Total Trades</span>
+                    <span class="badge bg-primary px-3 py-2 me-2" id="tradeCount"><?php echo number_format($total_trades); ?> Total Trades</span>
                     <div class="dropdown">
                         <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">
                             <i class="bi bi-three-dots"></i>
@@ -2161,6 +2171,16 @@ include '../includes/header.php';
                                 </a>
                             </li>
                         </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="row mt-2">
+                <div class="col">
+                    <div class="position-relative">
+                        <input type="text" class="form-control form-control-sm ps-5" id="liveSearch" 
+                               placeholder="Live search across all columns..." autocomplete="off"
+                               value="<?php echo isset($_GET['search']) ? htmlspecialchars($_GET['search']) : ''; ?>">
+                        <i class="bi bi-search position-absolute top-50 start-0 translate-middle-y ms-3 text-muted" style="font-size:0.8rem"></i>
                     </div>
                 </div>
             </div>
@@ -2450,10 +2470,11 @@ include '../includes/header.php';
                 </div>
             <?php endif; ?>
         </div>
+        </div>
     </div>
-</div>
+    <!--AJAX_TABLE_END-->
 
-<!-- Upload Trade Modal -->
+    <!-- Upload Trade Modal -->
 <div class="modal fade" id="uploadTradeModal" tabindex="-1">
     <div class="modal-dialog modal-xl">
         <div class="modal-content" style="border-radius: var(--radius-xl); border: none; box-shadow: var(--shadow-xl);">
@@ -2755,9 +2776,95 @@ function calculateTotal() {
         });
     }, false);
 })();
+
+// Live search AJAX handler
+let searchTimeout;
+const liveSearch = document.getElementById('liveSearch');
+const tableCard = document.getElementById('trades-card');
+const tradeCount = document.getElementById('tradeCount');
+
+function reloadTable() {
+    const url = new URL(window.location);
+    const searchVal = liveSearch ? liveSearch.value.trim() : '';
+    if (searchVal) {
+        url.searchParams.set('search', searchVal);
+    } else {
+        url.searchParams.delete('search');
+    }
+    url.searchParams.set('ajax', '1');
+    url.searchParams.set('page', '1');
+    
+    fetch(url.toString())
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                const newHtml = data.html;
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = newHtml;
+                const newCardBody = tempDiv.querySelector('.card-body');
+                const newPagination = tempDiv.querySelector('.p-3.border-top');
+                const oldCardBody = tableCard.querySelector('.card-body');
+                const oldPagination = tableCard.querySelector('.p-3.border-top');
+                if (newCardBody && oldCardBody) oldCardBody.replaceWith(newCardBody);
+                if (newPagination) {
+                    if (oldPagination) oldPagination.replaceWith(newPagination);
+                    else tableCard.appendChild(newPagination);
+                } else if (oldPagination) {
+                    oldPagination.remove();
+                }
+                if (tradeCount) tradeCount.textContent = Number(data.total).toLocaleString() + ' Total Trades';
+                const cleanUrl = new URL(window.location);
+                cleanUrl.searchParams.delete('ajax');
+                window.history.replaceState({}, '', cleanUrl);
+            }
+        })
+        .catch(() => {});
+}
+
+if (liveSearch) {
+    liveSearch.addEventListener('input', function() {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(reloadTable, 300);
+    });
+    // Listen for filter form submits to also reload ajax
+    const filterForm = document.getElementById('filterForm');
+    if (filterForm) {
+        filterForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            const formUrl = new URL(this.action, window.location.origin);
+            const formData = new FormData(this);
+            formData.forEach((val, key) => {
+                if (val) formUrl.searchParams.set(key, val);
+                else formUrl.searchParams.delete(key);
+            });
+            // Preserve live search value
+            const searchVal = liveSearch ? liveSearch.value.trim() : '';
+            if (searchVal) formUrl.searchParams.set('search', searchVal);
+            window.location.href = formUrl.toString();
+        });
+    }
+}
 </script>
 
-<?php include '../includes/footer.php'; ?>
+<?php
+if ($is_ajax) {
+    $full_html = ob_get_clean();
+    // Extract table fragment between markers
+    preg_match('/<!--AJAX_TABLE_START-->(.*?)<!--AJAX_TABLE_END-->/s', $full_html, $matches);
+    $table_html = $matches[1] ?? '';
+    header('Content-Type: application/json');
+    echo json_encode([
+        'success' => true,
+        'html' => $table_html,
+        'total' => $total_trades,
+        'showing_from' => $showing_from,
+        'showing_to' => $showing_to,
+        'total_pages' => $total_pages,
+        'page' => $page
+    ]);
+    exit;
+}
+include '../includes/footer.php'; ?>
                                         
                                         
                                         
