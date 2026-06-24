@@ -2,10 +2,13 @@
 require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
 require_once '../tcpdf/tcpdf.php';
+require_once __DIR__ . '/traits/ReportHeaderTrait.php';
 
 require_login();
 
 class CommissionPDF extends TCPDF {
+    use ReportHeaderTrait;
+    
     private $current_asset_class = '';
     private $company_name = '';
     private $company_address = '';
@@ -30,34 +33,8 @@ class CommissionPDF extends TCPDF {
     }
     
     public function Header() {
-        $image_file = '../assets/HeaderLogoVfsl.jpg';
-        if (file_exists($image_file)) {
-            $this->Image($image_file, 15, 8, 70, 0, 'JPG', '', 'T', false, 300, '', false, false, 0, false, false, false);
-        }
-        
-        $this->SetY(12);
-        $this->SetFont('helvetica', 'B', 10);
-        $this->Cell(0, 6, $this->company_name, 0, 1, 'C');
-        $this->SetFont('helvetica', '', 7);
-        $this->Cell(0, 4, 'Registered Stockbroker & Investment Advisor', 0, 1, 'C');
-        $this->Cell(0, 4, 'Member of Dar es Salaam Stock Exchange', 0, 1, 'C');
-        
-        if (!empty($this->company_address)) {
-            $this->SetFont('helvetica', '', 6);
-            $this->Cell(0, 3, $this->company_address, 0, 1, 'C');
-        }
-        
-        if (!empty($this->company_phone) || !empty($this->company_email)) {
-            $contact_info = [];
-            if (!empty($this->company_phone)) $contact_info[] = 'Tel: ' . $this->company_phone;
-            if (!empty($this->company_email)) $contact_info[] = 'Email: ' . $this->company_email;
-            $this->Cell(0, 3, implode(' | ', $contact_info), 0, 1, 'C');
-        }
-        
-        $this->Ln(2);
-        $this->SetLineWidth(0.3);
-        $this->Line(15, 38, 282, 38);
-        $this->SetY(42);
+        $this->renderReportHeader();
+        $this->SetY($this->GetY() + 16);
     }
 
     public function Footer() {

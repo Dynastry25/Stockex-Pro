@@ -2,6 +2,7 @@
 // contract_note_pdf.php
 require_once('../tcpdf/tcpdf.php'); // Adjust path as needed
 require_once '../config/config.php';
+require_once __DIR__ . '/traits/ReportHeaderTrait.php';
 require_once '../auth/auth_middleware.php';
 
 require_login();
@@ -310,6 +311,8 @@ if (empty($trades)) {
 
 // Create PDF class with optimized spacing
 class ContractNotePDF extends TCPDF {
+    use ReportHeaderTrait;
+    
     private $watermark_enabled = false;
     private $company_name = '';
     private $total_trades = 0;
@@ -331,46 +334,39 @@ class ContractNotePDF extends TCPDF {
         $this->current_trade = $current;
     }
     
-    // Page header - COMPACT
     public function Header() {
-        // Logo - smaller
-        $image_file = '../assets/HeaderLogoVfsl.jpg';
-        if (file_exists($image_file)) {
-            $this->Image($image_file, 25, 8, 160, 0, 'JPG', '', 'T', false, 300, '', false, false, 0, false, false, false);
-        } else {
-            $this->SetFont('helvetica', 'B', 11);
-            $this->SetXY(25, 8);
-            $this->Cell(160, 5, $this->company_name, 0, 1, 'C');
-            $this->SetFont('helvetica', '', 7);
-            $this->Cell(160, 3, 'Registered Stockbroker', 0, 1, 'C');
-        }
+        $this->renderReportHeader();
         
-        // Line - thin
-        $this->SetLineWidth(0.2);
-        $this->Line(25, 18, 185, 18);
+        $y = $this->GetY();
         
-        // Subtitle - smaller
-        $this->SetFont('helvetica', '', 6);
-        $this->SetXY(25, 19);
-        $this->Cell(160, 3, '(Subject to the Rules and Practice of the Dar es Salaam Stock Exchange)', 0, 1, 'C');
+        $this->SetFont('times', 'I', 7);
+        $this->SetTextColor(4, 45, 146);
+        $this->SetXY(15, $y);
+        $this->Cell(180, 3, '(Subject to the Rules and Practice of the Dar es Salaam Stock Exchange)', 0, 1, 'C');
+        $y += 4;
         
-        // Progress indicator - very small
         if ($this->total_trades > 1) {
-            $this->SetFont('helvetica', '', 5);
+            $this->SetFont('times', '', 6);
             $this->SetTextColor(120, 120, 120);
-            $this->SetXY(25, 22);
+            $this->SetXY(15, $y);
+            $this->Cell(10, 3, 'Trade ' . $this->current_trade . ' of ' . $this->total_trades, 0, 0, 'L');
             $this->SetTextColor(0, 0, 0);
+            $y += 3;
         }
         
-        // Watermark - lighter
         if ($this->watermark_enabled) {
             $this->SetAlpha(0.05);
-            $this->SetFont('helvetica', 'B', 50);
+            $this->SetFont('times', 'B', 50);
             $this->SetTextColor(200, 200, 200);
-            $this->RotatedText(105, 150, $this->company_name, 45);
+            $this->StartTransform();
+            $this->Rotate(45, 105, 150);
+            $this->Text(105, 150, $this->company_name);
+            $this->StopTransform();
             $this->SetAlpha(1);
             $this->SetTextColor(0, 0, 0);
         }
+        
+        $this->SetY($y + 18);
     }
     
     // Page footer - COMPACT

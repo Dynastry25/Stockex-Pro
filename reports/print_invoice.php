@@ -90,26 +90,26 @@ if (!$invoice) {
             </div>
         </div>
         
-        <!-- Added header image display -->
-        <?php if (!empty($invoice['header_image_path']) && file_exists('../' . $invoice['header_image_path'])): ?>
-            <div class="text-center mb-3">
-                <img src="../<?php echo htmlspecialchars($invoice['header_image_path']); ?>" 
-                     alt="Header" class="header-image">
-            </div>
-        <?php endif; ?>
+        <div class="report-header" style="margin-bottom: 15px; font-family: Arial, sans-serif;">
+            <table style="width: 100%; border-collapse: collapse;">
+                <tr>
+                    <td style="width: 80px; vertical-align: middle; text-align: center;">
+                        <img src="../assets/HeaderLogoVfsl.jpg" alt="Victory Financial Services" style="height: 55px; width: auto;">
+                    </td>
+                    <td style="vertical-align: middle; padding-left: 12px;">
+                        <div style="color: #042D92; font-size: 16px; font-weight: bold;">VICTORY FINANCIAL SERVICES LIMITED</div>
+                        <div style="color: #FF0000; font-size: 11px; font-weight: bold; font-style: italic;">Stockbroker/Dealer, Fund Manager &amp; Investment Advisor</div>
+                        <div style="color: #042D92; font-size: 10px; font-weight: bold;">Members of the Dar Es Salaam Stock Exchange</div>
+                        <div style="color: #042D92; font-size: 8px;">House No. 11|Ursino Street|Mikocheni A| P.O Box 8706 - Dar es Salaam</div>
+                        <div style="color: #042D92; font-size: 8px; font-weight: bold;">Mob: +255 752 824 977| Tel: +255 22 211 2691| Email: info@vfsl.co.tz</div>
+                    </td>
+                </tr>
+            </table>
+            <div style="border-top: 2px solid #042D92; border-bottom: 1px solid #FF0000; margin-top: 6px; height: 3px;"></div>
+        </div>
         
         <div class="invoice-header text-center">
-            <!-- Added company logo display -->
-            <?php if (!empty($invoice['logo_path']) && file_exists('../' . $invoice['logo_path'])): ?>
-                <div class="mb-3">
-                    <img src="../<?php echo htmlspecialchars($invoice['logo_path']); ?>" 
-                         alt="Company Logo" class="company-logo">
-                </div>
-            <?php endif; ?>
-            
-            <h2><?php echo htmlspecialchars($invoice['company_name']); ?></h2>
-            <h4 class="text-success"><?php echo htmlspecialchars($invoice['system_name']); ?></h4>
-            <h3 class="mt-3">TRADE INVOICE</h3>
+            <h3 class="mt-2">TRADE INVOICE</h3>
         </div>
         
         <div class="row mb-4">

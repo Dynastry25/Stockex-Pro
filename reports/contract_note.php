@@ -434,12 +434,26 @@ function generateEquityContractNoteHTML($trade, $contract_number, $order_number,
     <div class="contract-note" style="font-family: Arial, sans-serif; font-size: 11px; line-height: 1.3; max-width: 800px; margin: 0 auto; background: white; padding: 20px;">
        
 
-   <div style="text-align: center; margin-bottom: 20px; border-bottom: 1px solid #000; padding-bottom: 10px;">
-            <img src="../assets/HeaderLogoVfsl.jpg" alt="Victory Financial Services" style="height: 80px; width: auto; display: block; margin: 0 auto;">
+   <div class="report-header" style="margin-bottom: 15px; font-family: Arial, sans-serif;">
+            <table style="width: 100%; border-collapse: collapse;">
+                <tr>
+                    <td style="width: 80px; vertical-align: middle; text-align: center;">
+                        <img src="../assets/HeaderLogoVfsl.jpg" alt="Victory Financial Services" style="height: 55px; width: auto;">
+                    </td>
+                    <td style="vertical-align: middle; padding-left: 12px;">
+                        <div style="color: #042D92; font-size: 16px; font-weight: bold;">VICTORY FINANCIAL SERVICES LIMITED</div>
+                        <div style="color: #FF0000; font-size: 11px; font-weight: bold; font-style: italic;">Stockbroker/Dealer, Fund Manager &amp; Investment Advisor</div>
+                        <div style="color: #042D92; font-size: 10px; font-weight: bold;">Members of the Dar Es Salaam Stock Exchange</div>
+                        <div style="color: #042D92; font-size: 8px;">House No. 11|Ursino Street|Mikocheni A| P.O Box 8706 - Dar es Salaam</div>
+                        <div style="color: #042D92; font-size: 8px; font-weight: bold;">Mob: +255 752 824 977| Tel: +255 22 211 2691| Email: info@vfsl.co.tz</div>
+                    </td>
+                </tr>
+            </table>
+            <div style="border-top: 2px solid #042D92; border-bottom: 1px solid #FF0000; margin-top: 6px; height: 3px;"></div>
         </div>
-
-        <div style="text-align: center; margin-bottom: 20px;">
-            <p style="margin: 5px 0 0 0; font-size: 10px;">( Subject to the Rules and Practice of the Dar es salaam Stock Exchange )</p>
+        
+        <div style="text-align: center; margin-bottom: 15px;">
+            <p style="margin: 3px 0 0 0; font-size: 10px; color: #042D92; font-style: italic;">( Subject to the Rules and Practice of the Dar es Salaam Stock Exchange )</p>
         </div>
         
         <div style="display: flex; justify-content: space-between; margin-bottom: 15px; font-size: 10px;">

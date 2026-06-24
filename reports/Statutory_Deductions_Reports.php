@@ -11,40 +11,21 @@ session_start();
 // Include configuration
 require_once __DIR__ . '/../config/config.php';
         require_once('../tcpdf/tcpdf.php');
+        require_once __DIR__ . '/traits/ReportHeaderTrait.php';
 
 // Custom PDF class with header and footer
 class StatutoryDeductionsPDF extends TCPDF {
+    use ReportHeaderTrait;
+    
     private $company_name = '';
-    private $header_image_path = '';
     
     public function setCompanyInfo($company_name) {
         $this->company_name = $company_name;
-        $this->header_image_path = __DIR__ . '/../assets/HeaderLogoVfsl.jpg';
     }
     
-    
-    // Page header
     public function Header() {
-        // Header image
-        if (file_exists($this->header_image_path)) {
-            $this->Image($this->header_image_path, 15, 8, 40, 0, 'JPG', '', 'T', false, 300, '', false, false, 0, false, false, false);
-        }
-        
-        // Set font
-        $this->SetFont('times', 'B', 12);
-        
-    
-        // Company subtitle
-   //     $this->SetFont('times', '', 10);
-   //     $this->Cell(0, 5, 'Stock Broker / Dealer & Investment Advisor', 0, 1, 'C');
-   //     $this->Cell(0, 5, 'Member of Dar es Salaam Stock Exchange', 0, 1, 'C');
-        
-        // Separator line
-        $this->SetY(28);
-        $this->Line(15, $this->GetY(), 195, $this->GetY());
-        
-        // Space after header
-        $this->SetY(32);
+        $this->renderReportHeader();
+        $this->SetY($this->GetY() + 16);
     }
     
     // Page footer

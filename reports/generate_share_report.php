@@ -260,38 +260,49 @@ function generateTransactionSummaryReport($db, $filters) {
         $pdf->SetFont('helvetica', '', 8);
     }
     
-    // Add company header
-    $pdf->SetFont('helvetica', 'B', 14);
-    $pdf->Cell(0, 6, strtoupper($company_name), 0, 1, 'C');
-    $pdf->SetFont('helvetica', '', 10);
-    $pdf->Cell(0, 5, 'Stock Broker / Dealer & Investment Advisor', 0, 1, 'C');
-    $pdf->Cell(0, 5, 'Member of ' . $company_exchange, 0, 1, 'C');
-    
-    // Add address and contact info from database
-    $pdf->SetFont('helvetica', '', 7);
-    if (!empty($company_address)) {
-        $pdf->Cell(0, 4, $company_address, 0, 1, 'C');
+    // VFSL Report Header
+    $margins = $pdf->getMargins();
+    $lm = $margins['left'];
+    $pw = $pdf->getPageWidth();
+    $lineRight = $pw - $margins['right'];
+
+    $logo_file = __DIR__ . '/../assets/HeaderLogoVfsl.jpg';
+    if (file_exists($logo_file)) {
+        $pdf->Image($logo_file, $lm + 2, 5, 18, 0, '', '', 'T', false, 300);
     }
-    
-    // Build contact info string
+    $pdf->SetFont('times', 'B', 12);
+    $pdf->SetTextColor(4, 45, 146);
+    $pdf->SetXY($lm, 5);
+    $pdf->Cell(0, 5, strtoupper($company_name), 0, 1, 'C');
+    $pdf->SetFont('times', 'BI', 9);
+    $pdf->SetTextColor(255, 0, 0);
+    $pdf->SetX($lm);
+    $pdf->Cell(0, 4, 'Stockbroker/Dealer, Fund Manager & Investment Advisor', 0, 1, 'C');
+    $pdf->SetFont('times', 'B', 8);
+    $pdf->SetTextColor(4, 45, 146);
+    $pdf->SetX($lm);
+    $pdf->Cell(0, 4, 'Members of the ' . $company_exchange, 0, 1, 'C');
+    $pdf->SetFont('times', '', 7);
+    $pdf->SetTextColor(4, 45, 146);
+    $pdf->SetX($lm);
+    $pdf->Cell(0, 3, $company_address, 0, 1, 'C');
     $contact_info = '';
-    if (!empty($company_phone)) {
-        $contact_info .= 'Tel: ' . $company_phone;
-    }
-    if (!empty($company_mobile)) {
-        if (!empty($contact_info)) $contact_info .= ' ';
-        $contact_info .= 'Mob: ' . $company_mobile;
-    }
-    if (!empty($company_email)) {
-        if (!empty($contact_info)) $contact_info .= ' ';
-        $contact_info .= 'Email: ' . $company_email;
-    }
-    
-    if (!empty($contact_info)) {
-        $pdf->Cell(0, 4, $contact_info, 0, 1, 'C');
-    }
-    
-    $pdf->Ln(3);
+    if (!empty($company_mobile)) $contact_info .= 'Mob: ' . $company_mobile;
+    if (!empty($company_phone)) $contact_info .= '| Tel: ' . $company_phone;
+    if (!empty($company_email)) $contact_info .= '| Email: ' . $company_email;
+    $pdf->SetFont('times', 'B', 7);
+    $pdf->SetTextColor(4, 45, 146);
+    $pdf->SetX($lm);
+    $pdf->Cell(0, 3, $contact_info, 0, 1, 'C');
+    $lineY = $pdf->GetY() + 2;
+    $pdf->SetLineWidth(0.5);
+    $pdf->SetDrawColor(4, 45, 146);
+    $pdf->Line($lm, $lineY, $lineRight, $lineY);
+    $pdf->SetLineWidth(0.3);
+    $pdf->SetDrawColor(255, 0, 0);
+    $pdf->Line($lm, $lineY + 0.8, $lineRight, $lineY + 0.8);
+    $pdf->SetTextColor(0, 0, 0);
+    $pdf->SetY($lineY + 14);
     
     // Report title and date
     $pdf->SetFont('helvetica', 'B', 11);
