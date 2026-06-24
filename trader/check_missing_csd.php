@@ -60,8 +60,26 @@ function isCompliantTradeReference($reference) {
     return preg_match('/^[0-9]+$/', $reference);
 }
 
+// Count non-compliant trades for pagination
+function countNonCompliantTrades($db) {
+    $sql = "
+        SELECT COUNT(*) as total
+        FROM trades t
+        WHERE 
+            (t.csd_reference IS NULL OR t.csd_reference = '')
+            AND (
+                t.trade_reference REGEXP '[A-Za-z]' 
+                OR t.trade_reference LIKE 'T%'
+            )
+    ";
+    
+    $stmt = $db->prepare($sql);
+    $stmt->execute();
+    return (int) $stmt->fetch(PDO::FETCH_ASSOC)['total'];
+}
+
 // Get trades with non-compliant trade references (contains letters or starts with T)
-function getNonCompliantTrades($db) {
+function getNonCompliantTrades($db, $limit = 50, $offset = 0) {
     $sql = "
         SELECT 
             t.id,
@@ -83,11 +101,11 @@ function getNonCompliantTrades($db) {
         WHERE 
             (t.csd_reference IS NULL OR t.csd_reference = '')
             AND (
-                -- Non-compliant: contains letters OR starts with T
                 t.trade_reference REGEXP '[A-Za-z]' 
                 OR t.trade_reference LIKE 'T%'
             )
         ORDER BY t.trade_date DESC, t.created_at DESC
+        LIMIT " . (int) $limit . " OFFSET " . (int) $offset . "
     ";
     
     $stmt = $db->prepare($sql);
@@ -275,8 +293,43 @@ function generateCompliantReference($trade) {
     return $date_part . $random_part;
 }
 
-// Get non-compliant trades
-$trades = getNonCompliantTrades($db);
+// Pagination setup
+$allowed_page_sizes = [10, 25, 50, 100, 500];
+$default_per_page = 50;
+$per_page = isset($_GET['per_page']) ? (int) $_GET['per_page'] : $default_per_page;
+if (!in_array($per_page, $allowed_page_sizes, true)) {
+    $per_page = $default_per_page;
+}
+
+$page = isset($_GET['page']) ? max(1, (int) $_GET['page']) : 1;
+
+$total_trades = countNonCompliantTrades($db);
+
+$total_pages = max(1, (int) ceil($total_trades / $per_page));
+if ($page > $total_pages) {
+    $page = $total_pages;
+}
+
+$offset = ($page - 1) * $per_page;
+$showing_from = $total_trades > 0 ? $offset + 1 : 0;
+$showing_to = min($offset + $per_page, $total_trades);
+
+// Get non-compliant trades for current page
+$trades = getNonCompliantTrades($db, $per_page, $offset);
+
+// Build pagination URL
+function buildPaginationUrl($overrides = []) {
+    $query = $_GET;
+    foreach ($overrides as $key => $value) {
+        if ($value === null || $value === '') {
+            unset($query[$key]);
+            continue;
+        }
+        $query[$key] = $value;
+    }
+    $queryString = http_build_query($query);
+    return $queryString ? '?' . $queryString : '?';
+}
 
 // Generate suggestions for each trade
 $suggestions = [];
@@ -571,7 +624,7 @@ include '../includes/header.php';
     <div class="row mb-4">
         <div class="col-md-4">
             <div class="stats-card">
-                <div class="stats-number"><?php echo count($trades); ?></div>
+                <div class="stats-number"><?php echo $total_trades; ?></div>
                 <div class="stats-label">Non-Compliant Trades</div>
             </div>
         </div>
@@ -686,7 +739,7 @@ include '../includes/header.php';
                 <i class="bi bi-exclamation-triangle-fill text-warning me-2"></i>
                 <strong>Non-Compliant Trades (Need CSD Reference)</strong>
             </div>
-            <span class="badge bg-warning rounded-pill"><?php echo count($trades); ?> non-compliant trades</span>
+            <span class="badge bg-warning rounded-pill"><?php echo $total_trades; ?> non-compliant trades</span>
         </div>
         
         <div class="card-body p-0">
@@ -792,6 +845,62 @@ include '../includes/header.php';
                             <?php endforeach; ?>
                         </tbody>
                     </table>
+                </div>
+                <!-- Pagination -->
+                <div class="p-3 border-top">
+                    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                        <div>
+                            <small class="text-muted">
+                                Showing <?php echo number_format($showing_from); ?> to <?php echo number_format($showing_to); ?> of <?php echo number_format($total_trades); ?> trades
+                            </small>
+                            <div class="mt-1">
+                                <select class="form-select form-select-sm d-inline-block w-auto" onchange="window.location.href=this.value">
+                                    <?php foreach ($allowed_page_sizes as $size): ?>
+                                        <option value="<?php echo buildPaginationUrl(['per_page' => $size, 'page' => 1]); ?>" <?php echo $size === $per_page ? 'selected' : ''; ?>><?php echo $size; ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <small class="text-muted">per page</small>
+                            </div>
+                        </div>
+                        <?php if ($total_pages > 1): ?>
+                            <nav>
+                                <ul class="pagination pagination-sm mb-0">
+                                    <?php $previous_disabled = $page <= 1; ?>
+                                    <li class="page-item <?php echo $previous_disabled ? 'disabled' : ''; ?>">
+                                        <a class="page-link" href="<?php echo $previous_disabled ? '#' : buildPaginationUrl(['page' => $page - 1]); ?>">
+                                            <span aria-hidden="true">&laquo;</span>
+                                        </a>
+                                    </li>
+                                    <?php
+                                    $start_page = max(1, $page - 2);
+                                    $end_page = min($total_pages, $page + 2);
+                                    if ($start_page > 1):
+                                    ?>
+                                        <li class="page-item"><a class="page-link" href="<?php echo buildPaginationUrl(['page' => 1]); ?>">1</a></li>
+                                        <?php if ($start_page > 2): ?>
+                                            <li class="page-item disabled"><span class="page-link">...</span></li>
+                                        <?php endif; ?>
+                                    <?php endif; ?>
+                                    <?php for ($p = $start_page; $p <= $end_page; $p++): ?>
+                                        <li class="page-item <?php echo $p === $page ? 'active' : ''; ?>">
+                                            <a class="page-link" href="<?php echo buildPaginationUrl(['page' => $p]); ?>"><?php echo $p; ?></a>
+                                        </li>
+                                    <?php endfor; ?>
+                                    <?php if ($end_page < $total_pages): ?>
+                                        <?php if ($end_page < $total_pages - 1): ?>
+                                            <li class="page-item disabled"><span class="page-link">...</span></li>
+                                        <?php endif; ?>
+                                        <li class="page-item"><a class="page-link" href="<?php echo buildPaginationUrl(['page' => $total_pages]); ?>"><?php echo $total_pages; ?></a></li>
+                                    <?php endif; ?>
+                                    <li class="page-item <?php echo $page >= $total_pages ? 'disabled' : ''; ?>">
+                                        <a class="page-link" href="<?php echo $page >= $total_pages ? '#' : buildPaginationUrl(['page' => $page + 1]); ?>">
+                                            <span aria-hidden="true">&raquo;</span>
+                                        </a>
+                                    </li>
+                                </ul>
+                            </nav>
+                        <?php endif; ?>
+                    </div>
                 </div>
             <?php endif; ?>
         </div>
