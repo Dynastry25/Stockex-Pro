@@ -34,34 +34,55 @@ include '../includes/header.php';
                     </div>
                 </div>
             </div>
-            <div class="col-md-4 text-end">
-                <div class="d-flex flex-column align-items-end">
-                    <span class="text-muted small">Active queue</span>
-                    <span class="badge bg-danger fs-6 px-3 py-2" id="ticket-count">0</span>
-                </div>
-            </div>
         </div>
     </div>
 </div>
 
 <div class="container-fluid">
     <div class="card dashboard-card border-0 shadow-sm">
-        <div class="card-header bg-white border-0 py-4 d-flex justify-content-between align-items-center">
-            <div>
-                <h5 class="mb-1 fw-bold">Active Tickets</h5>
-                <p class="mb-0 text-muted small">New, viewed, and in-progress AI tickets are refreshed automatically.</p>
+        <div class="card-header bg-white border-0 pt-4 pb-0 px-4">
+            <ul class="nav nav-tabs card-header-tabs" id="ticketTabs" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="active-tab" data-bs-toggle="tab" data-bs-target="#active-tickets" type="button" role="tab">
+                        <i class="bi bi-lightning-fill me-1"></i>Active Tickets
+                        <span class="badge bg-danger ms-1" id="active-count">0</span>
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="historical-tab" data-bs-toggle="tab" data-bs-target="#historical-tickets" type="button" role="tab">
+                        <i class="bi bi-archive me-1"></i>Historical Issues
+                        <span class="badge bg-secondary ms-1" id="historical-count">0</span>
+                    </button>
+                </li>
+            </ul>
+            <div class="d-flex justify-content-between align-items-center pb-3 pt-2">
+                <p class="mb-0 text-muted small">AI-generated alerts and operational tickets for the trading team.</p>
+                <button type="button" id="soundToggle" class="btn btn-sm btn-outline-secondary">
+                    <i class="bi bi-volume-up"></i>
+                </button>
             </div>
-            <button type="button" id="soundToggle" class="btn btn-sm btn-outline-secondary">
-                <i class="bi bi-volume-up"></i>
-            </button>
         </div>
         <div class="card-body p-0">
-            <div id="tickets-container">
-                <div class="text-center py-5">
-                    <div class="spinner-border text-primary" role="status">
-                        <span class="visually-hidden">Loading tickets...</span>
+            <div class="tab-content">
+                <div class="tab-pane fade show active" id="active-tickets" role="tabpanel">
+                    <div id="tickets-container">
+                        <div class="text-center py-5">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading tickets...</span>
+                            </div>
+                            <p class="text-muted mt-3 mb-0">Loading tickets...</p>
+                        </div>
                     </div>
-                    <p class="text-muted mt-3 mb-0">Loading tickets...</p>
+                </div>
+                <div class="tab-pane fade" id="historical-tickets" role="tabpanel">
+                    <div id="historical-container">
+                        <div class="text-center py-5">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading historical tickets...</span>
+                            </div>
+                            <p class="text-muted mt-3 mb-0">Loading historical tickets...</p>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -125,11 +146,14 @@ const TICKET_CONFIG = {
     pollInterval: 10000,
     soundEnabled: true,
     lastCheckTime: null,
-    playedTicketIds: new Set()
+    playedTicketIds: new Set(),
+    allTickets: [],
+    activeTickets: [],
+    historicalTickets: []
 };
 
 const ticketAudio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBjGM0fPTgjMGHm7A7+OZURE' +
-    'OVq3n77RpHhE6ldr54I5DDxRfvOvvpmIaEkSa3/K8ZBoRLYXJ79eKOwcbabzt6JdNDg9RqOPyrGcUDECX3PLBah0Pf5nN8tiKPQcZZ7vt55hMDRBPqdzt7JxPETJWot7wumIZDz+U1fLKdSgHMILM8deKOgcabLvs5ptODg5No+PwtWcUDT+W1/LDcycGLn3J8NmLPgkcZ7rs5pxPDg5Mo+zvm2UXEz2U1/LGeCwGMIXP8duJOwkcZ7rs5ptODg5Mo+zvm2UXEz2U1/LGeCwGMIXP8duJOwkcZ7np5ZdLDAxNpebzr2cVDz+X2fLCbSEGMILL78qELgUW' +
+    'OVq3n77RpHhE6ldr54I5DDxRfvOvvpmIaEkSa3/K8ZBoRLYXJ79eKOwcbabzt6JdNDg9RqOPyrGcUDECX3PLBah0Pf5nN8tiKPQcZZ7vt55hMDRBPqdzt7JxPETJWot7wumIZDz+U1fLKdSgHMILM8deKOgcabLvs5ptODg5No+jwtWcUDT+W1/LDcycGLn3J8NmLPgkcZ7rs5pxPDg5Mo+zvm2UXEz2U1/LGeCwGMIXP8duJOwkcZ7rs5ptODg5Mo+zvm2UXEz2U1/LGeCwGMIXP8duJOwkcZ7np5ZdLDAxNpebzr2cVDz+X2fLCbSEGMILL78qELgUW' +
     'ar7m4JdKCw1OpOLur2YUDz+X2fLCbSEGMILL78qELgUWarvo455LCw5OpePxsGgUDkCZ3PLAaRsPMYHJ7tqIOAcZaLrk55kMDhVQqOPxsGgUDkCZ3PLAaRsPMYHJ7tqIOAcZaLrk55kMDhVQqOPxsGgUDkCZ3PLAaRsPMYHJ7tqIOAcZaLrk55');
 
 async function loadTickets() {
@@ -143,19 +167,32 @@ async function loadTickets() {
             }
         }
 
-        const response = await fetch(`${TICKET_CONFIG.apiEndpoint}?limit=50`);
+        const response = await fetch(`${TICKET_CONFIG.apiEndpoint}?limit=200`);
         const data = await response.json();
 
         if (!data.success || !data.data) {
             throw new Error(data.message || 'Failed to load tickets');
         }
 
-        const activeTickets = (data.data.tickets || []).filter(ticket =>
+        const allTickets = data.data.tickets || [];
+
+        TICKET_CONFIG.allTickets = allTickets;
+        TICKET_CONFIG.activeTickets = allTickets.filter(ticket =>
             ['new', 'viewed', 'in_progress'].includes(ticket.status)
         );
+        TICKET_CONFIG.historicalTickets = allTickets.filter(ticket =>
+            ['resolved', 'closed'].includes(ticket.status)
+        );
 
-        displayTickets(activeTickets);
-        document.getElementById('ticket-count').textContent = activeTickets.length;
+        const activeTab = document.querySelector('#ticketTabs .nav-link.active');
+        if (activeTab && activeTab.id === 'historical-tab') {
+            displayHistoricalTickets(TICKET_CONFIG.historicalTickets);
+        } else {
+            displayActiveTickets(TICKET_CONFIG.activeTickets);
+        }
+
+        document.getElementById('active-count').textContent = TICKET_CONFIG.activeTickets.length;
+        document.getElementById('historical-count').textContent = TICKET_CONFIG.historicalTickets.length;
         TICKET_CONFIG.lastCheckTime = new Date().toISOString();
     } catch (error) {
         console.error('Error loading tickets:', error);
@@ -190,7 +227,7 @@ function checkForNewTickets(newTickets) {
     }
 }
 
-function displayTickets(tickets) {
+function displayActiveTickets(tickets) {
     const container = document.getElementById('tickets-container');
 
     if (tickets.length === 0) {
@@ -263,6 +300,67 @@ function displayTickets(tickets) {
                                 <i class="bi bi-hourglass-split me-1"></i>In Progress
                             </button>
                         ` : ''}
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function displayHistoricalTickets(tickets) {
+    const container = document.getElementById('historical-container');
+
+    if (tickets.length === 0) {
+        container.innerHTML = `
+            <div class="text-center py-5">
+                <i class="bi bi-archive text-secondary" style="font-size: 3rem;"></i>
+                <h5 class="mt-3 text-muted">No historical issues</h5>
+                <p class="text-muted mb-0">Resolved and closed tickets will appear here for reference.</p>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = tickets.map(ticket => {
+        const priorityColors = {
+            critical: 'danger',
+            high: 'warning',
+            medium: 'info',
+            low: 'success'
+        };
+
+        const color = priorityColors[ticket.priority] || 'secondary';
+        const resolvedLabel = ticket.status === 'resolved' ? 'RESOLVED' : 'CLOSED';
+        const resolvedBadge = ticket.status === 'resolved' ? 'bg-success' : 'bg-dark';
+
+        return `
+            <div class="ticket-item border-bottom p-4 ticket-priority-${ticket.priority}">
+                <div class="row align-items-center g-3">
+                    <div class="col-lg-8">
+                        <div class="d-flex align-items-start">
+                            <div class="me-3 text-secondary">
+                                <i class="bi bi-check-circle" style="font-size: 1.5rem;"></i>
+                            </div>
+                            <div class="flex-grow-1">
+                                <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                                    <h6 class="mb-0 fw-bold">${escapeHtml(ticket.title)}</h6>
+                                    <span class="badge ${resolvedBadge}">${resolvedLabel}</span>
+                                    <span class="badge bg-${color}">${String(ticket.priority || '').toUpperCase()}</span>
+                                </div>
+                                <p class="mb-2 text-muted">${escapeHtml(ticket.description)}</p>
+                                <div class="d-flex flex-wrap align-items-center gap-3 small text-muted">
+                                    <span><i class="bi bi-ticket-detailed me-1"></i>${escapeHtml(ticket.ticket_number)}</span>
+                                    ${ticket.category ? `<span><i class="bi bi-tag me-1"></i>${escapeHtml(ticket.category)}</span>` : ''}
+                                    ${ticket.resolved_at ? `<span><i class="bi bi-check-circle me-1"></i>Resolved ${formatTime(ticket.resolved_at)}</span>` : ''}
+                                    <span><i class="bi bi-clock me-1"></i>Created ${formatTime(ticket.created_at)}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-lg-4 text-lg-end">
+                        <span class="text-muted small">
+                            <i class="bi bi-check2-all"></i> ${resolvedLabel.toLowerCase()}
+                        </span>
                     </div>
                 </div>
             </div>
@@ -360,6 +458,17 @@ document.addEventListener('DOMContentLoaded', function() {
             showToast('success', `Notification sound ${TICKET_CONFIG.soundEnabled ? 'enabled' : 'disabled'}`);
         });
     }
+
+    // Tab switching - display correct tickets without re-fetching
+    document.querySelectorAll('#ticketTabs .nav-link').forEach(tab => {
+        tab.addEventListener('click', function() {
+            if (this.id === 'historical-tab') {
+                displayHistoricalTickets(TICKET_CONFIG.historicalTickets);
+            } else {
+                displayActiveTickets(TICKET_CONFIG.activeTickets);
+            }
+        });
+    });
 
     if ('Notification' in window && Notification.permission === 'default') {
         Notification.requestPermission();
