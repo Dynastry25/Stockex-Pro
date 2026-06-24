@@ -5,8 +5,10 @@ require_finance_officer();
 
 // Include TCPDF library
 require_once('../tcpdf/tcpdf.php');
+require_once __DIR__ . '/../reports/traits/ReportHeaderTrait.php';
 
 class ReceiptPDF extends TCPDF {
+    use ReportHeaderTrait;
     
     private $company_data;
     
@@ -15,65 +17,8 @@ class ReceiptPDF extends TCPDF {
         $this->company_data = $company_data;
     }
     
-    // Header
     public function Header() {
-        // Set background color for header
-        $this->SetFillColor(255, 255, 255);
-        $this->Rect(0, 0, 210, 40, 'F');
-        
-        $company_name = $this->company_data['company_name'] ?? 'Add Company Name';
-        $business_type = $this->company_data['business_type'] ?? 'Stock Broker / Dealer & Investment Advisor';
-        $exchange = $this->company_data['exchange'] ?? 'Member of Dar es Salaam Stock Exchange';
-        $address = $this->company_data['address'] ?? 'P.O BOX ...... DAR ES SALAAM';
-        $phone = $this->company_data['phone'] ?? '+255 22 111111111';
-        $mobile = $this->company_data['mobile'] ?? '+255 111 111111';
-        $email = $this->company_data['email'] ?? 'info@broker.co.tz';
-        
-        // Add company logo if exists
-        $logo_path = $this->company_data['logo_path'] ?? '../assets/images/company_logo.png';
-        if (file_exists($logo_path) && !empty($this->company_data['logo_path'])) {
-            $this->Image($logo_path, 15, 8, 25, 25, 'PNG', '', 'T', false, 300, '', false, false, 0, false, false, false);
-            $text_start_x = 45;
-        } else {
-            $text_start_x = 15;
-        }
-        
-        // Add header image if exists
-        $header_path = $this->company_data['header_image_path'] ?? '';
-        if (file_exists($header_path) && !empty($this->company_data['header_image_path'])) {
-            $this->Image($header_path, 120, 8, 80, 25, '', '', 'T', false, 300, '', false, false, 0, false, false, false);
-        }
-        
-        // Company information
-        $this->SetFont('helvetica', 'B', 14);
-        $this->SetTextColor(0, 0, 128); // Navy blue
-        $this->SetXY($text_start_x, 8);
-        $this->Cell(0, 6, strtoupper($company_name), 0, 1, 'L');
-        
-        $this->SetFont('helvetica', 'B', 10);
-        $this->SetTextColor(0, 0, 0);
-        $this->SetX($text_start_x);
-        $this->Cell(0, 5, $business_type, 0, 1, 'L');
-        
-        $this->SetFont('helvetica', '', 9);
-        $this->SetX($text_start_x);
-        $this->Cell(0, 5, $exchange, 0, 1, 'L');
-        
-        $this->SetFont('helvetica', '', 8);
-        $this->SetX($text_start_x);
-        $this->Cell(0, 4, $address, 0, 1, 'L');
-        
-        $this->SetX($text_start_x);
-        $this->Cell(0, 4, 'Tel: ' . $phone . ' | Mob: ' . $mobile . ' | Email: ' . $email, 0, 1, 'L');
-        
-        // Decorative line
-        $this->SetLineWidth(0.5);
-        $this->SetDrawColor(0, 0, 128);
-        $this->Line(15, 38, 195, 38);
-        
-        $this->SetLineWidth(0.2);
-        $this->SetDrawColor(200, 200, 200);
-        $this->Line(15, 39, 195, 39);
+        $this->renderReportHeader();
     }
 
     // Footer

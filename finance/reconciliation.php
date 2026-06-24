@@ -13,6 +13,13 @@ $end_date = date('Y-m-t', strtotime($start_date));
 $selected_bank_id = isset($_GET['bank_account']) ? $_GET['bank_account'] : null;
 $is_cash_selected = ($selected_bank_id === 'cash');
 
+// Pagination configuration
+$per_page = isset($_GET['per_page']) ? (int)$_GET['per_page'] : 50;
+if ($per_page < 0) $per_page = 50;
+$show_all = ($per_page === 0);
+$page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+if ($page < 1) $page = 1;
+
 // Get company info for currency
 $company_stmt = $db->prepare("SELECT * FROM companies WHERE status = 'active' ORDER BY id ASC LIMIT 1");
 $company_stmt->execute();
@@ -303,6 +310,32 @@ foreach ($all_transactions as $transaction) {
     } else {
         $uncleared_transactions++;
     }
+}
+
+$total_transaction_count = count($all_transactions);
+$total_pages = $per_page > 0 ? (int)ceil($total_transaction_count / $per_page) : 1;
+if ($total_pages < 1) $total_pages = 1;
+if ($page > $total_pages) $page = $total_pages;
+$offset = $show_all ? 0 : ($page - 1) * $per_page;
+
+// Calculate starting balance for this page
+$page_starting_balance = $opening_balance;
+for ($i = 0; $i < $offset && $i < count($all_transactions); $i++) {
+    $t = $all_transactions[$i];
+    if ($t['source_type'] === 'receipt') {
+        $page_starting_balance += $t['debit_amount'];
+    } elseif ($t['source_type'] === 'payment') {
+        $page_starting_balance -= $t['credit_amount'];
+    } else {
+        $page_starting_balance += $t['debit_amount'] - $t['credit_amount'];
+    }
+}
+
+// Get only current page transactions for display
+if ($show_all) {
+    $display_transactions = $all_transactions;
+} else {
+    $display_transactions = array_slice($all_transactions, $offset, $per_page);
 }
 
 // Calculate GL total movement for the period
@@ -655,18 +688,28 @@ include '../includes/header.php';
                         <?php endforeach; ?>
                     </select>
                 </div>
-                <div class="col-md-3">
+                <div class="col-md-2">
                     <label for="month" class="form-label">Month</label>
                     <input type="month" class="form-control" id="month" name="month" 
                            value="<?php echo $month; ?>" required>
                 </div>
-                <div class="col-md-3">
-                    <button type="submit" class="btn btn-primary">
-                        <i class="bi bi-search"></i> Load Transactions
+                <div class="col-md-2">
+                    <label for="per_page" class="form-label">Per Page</label>
+                    <select class="form-control" id="per_page" name="per_page" onchange="this.form.submit()">
+                        <option value="20" <?php echo $per_page == 20 ? 'selected' : ''; ?>>20</option>
+                        <option value="50" <?php echo $per_page == 50 ? 'selected' : ''; ?>>50</option>
+                        <option value="100" <?php echo $per_page == 100 ? 'selected' : ''; ?>>100</option>
+                        <option value="200" <?php echo $per_page == 200 ? 'selected' : ''; ?>>200</option>
+                        <option value="0" <?php echo $per_page == 0 ? 'selected' : ''; ?>>All</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <button type="submit" class="btn btn-primary" style="margin-top: 24px;">
+                        <i class="bi bi-search"></i> Load
                     </button>
                 </div>
                 <div class="col-md-2 text-end">
-                    <button type="button" class="btn btn-outline-secondary" onclick="exportToCSV()">
+                    <button type="button" class="btn btn-outline-secondary" onclick="exportToCSV()" style="margin-top: 24px;">
                         <i class="bi bi-download"></i> Export
                     </button>
                 </div>
@@ -729,11 +772,11 @@ include '../includes/header.php';
                                 <h6 class="mb-2">Transaction Summary</h6>
                                 <p class="mb-1">
                                     <strong>Total Transactions:</strong> 
-                                    <?php echo count($all_transactions); ?>
+                                    <?php echo $total_transaction_count; ?>
                                 </p>
                                 <p class="mb-1">
                                     <strong>With Reference:</strong> 
-                                    <?php echo $cleared_transactions; ?> / <?php echo count($all_transactions); ?>
+                                    <?php echo $cleared_transactions; ?> / <?php echo $total_transaction_count; ?>
                                 </p>
                                 <p class="mb-0">
                                     <strong>Data Sources:</strong> 
@@ -921,8 +964,7 @@ include '../includes/header.php';
                         </div>
                         <div class="progress mb-3">
                             <?php 
-                            $total_trans = count($all_transactions);
-                            $cleared_percentage = $total_trans > 0 ? ($cleared_transactions / $total_trans) * 100 : 0;
+                            $cleared_percentage = $total_transaction_count > 0 ? ($cleared_transactions / $total_transaction_count) * 100 : 0;
                             ?>
                             <div class="progress-bar" style="width: <?php echo $cleared_percentage; ?>%"></div>
                         </div>
@@ -945,15 +987,50 @@ include '../includes/header.php';
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h6 class="mb-0">
                     <i class="bi bi-list-ul"></i> All Transactions - <?php echo date('F Y', strtotime($start_date)); ?>
-                    <span class="badge bg-secondary ms-2"><?php echo count($all_transactions); ?> records</span>
+                    <span class="badge bg-secondary ms-2"><?php echo $total_transaction_count; ?> records</span>
+                    <?php 
+                    $start_record = $show_all ? 1 : $offset + 1;
+                    $end_record = $show_all ? $total_transaction_count : min($offset + $per_page, $total_transaction_count);
+                    if ($total_transaction_count > 0): ?>
+                        <small class="text-muted ms-2">
+                            (Showing <?php echo $start_record; ?>-<?php echo $end_record; ?>)
+                        </small>
+                    <?php endif; ?>
                 </h6>
-                <div>
+                <div class="d-flex align-items-center gap-2">
+                    <?php if ($total_pages > 1): ?>
+                        <nav aria-label="Page navigation" class="me-2">
+                            <ul class="pagination pagination-sm mb-0">
+                                <li class="page-item <?php echo $page <= 1 ? 'disabled' : ''; ?>">
+                                    <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => 1])); ?>">&laquo;</a>
+                                </li>
+                                <li class="page-item <?php echo $page <= 1 ? 'disabled' : ''; ?>">
+                                    <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => max(1, $page - 1)])); ?>">&lsaquo;</a>
+                                </li>
+                                <?php 
+                                $start_p = max(1, $page - 2);
+                                $end_p = min($total_pages, $page + 2);
+                                for ($i = $start_p; $i <= $end_p; $i++): 
+                                ?>
+                                    <li class="page-item <?php echo $i == $page ? 'active' : ''; ?>">
+                                        <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => $i])); ?>"><?php echo $i; ?></a>
+                                    </li>
+                                <?php endfor; ?>
+                                <li class="page-item <?php echo $page >= $total_pages ? 'disabled' : ''; ?>">
+                                    <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => min($total_pages, $page + 1)])); ?>">&rsaquo;</a>
+                                </li>
+                                <li class="page-item <?php echo $page >= $total_pages ? 'disabled' : ''; ?>">
+                                    <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => $total_pages])); ?>">&raquo;</a>
+                                </li>
+                            </ul>
+                        </nav>
+                    <?php endif; ?>
                     <span class="badge bg-success">Deposit/In</span>
                     <span class="badge bg-danger ms-2">Withdrawal/Out</span>
                 </div>
             </div>
             <div class="card-body">
-                <?php if (empty($all_transactions)): ?>
+                <?php if (empty($display_transactions)): ?>
                     <div class="alert alert-info">
                         <i class="bi bi-info-circle"></i> No transactions found for the selected account and month.
                     </div>
@@ -975,8 +1052,8 @@ include '../includes/header.php';
                             </thead>
                             <tbody>
                                 <?php 
-                                $running_balance = $opening_balance;
-                                foreach ($all_transactions as $transaction): 
+                                $running_balance = $page_starting_balance;
+                                foreach ($display_transactions as $transaction): 
                                     // Determine transaction type and amount
                                     if ($transaction['source_type'] === 'receipt') {
                                         $amount = $transaction['debit_amount'];
@@ -1087,6 +1164,39 @@ include '../includes/header.php';
                             </tfoot>
                         </table>
                     </div>
+                    <?php if ($total_pages > 1): ?>
+                    <div class="d-flex justify-content-between align-items-center px-3 py-2 border-top">
+                        <small class="text-muted">
+                            Showing page <?php echo $page; ?> of <?php echo $total_pages; ?> 
+                            (<?php echo count($display_transactions); ?> of <?php echo $total_transaction_count; ?> transactions)
+                        </small>
+                        <nav aria-label="Page navigation">
+                            <ul class="pagination pagination-sm mb-0">
+                                <li class="page-item <?php echo $page <= 1 ? 'disabled' : ''; ?>">
+                                    <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => 1])); ?>">&laquo;&laquo;</a>
+                                </li>
+                                <li class="page-item <?php echo $page <= 1 ? 'disabled' : ''; ?>">
+                                    <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => max(1, $page - 1)])); ?>">&laquo;</a>
+                                </li>
+                                <?php 
+                                $start_pg = max(1, $page - 2);
+                                $end_pg = min($total_pages, $page + 2);
+                                for ($i = $start_pg; $i <= $end_pg; $i++): 
+                                ?>
+                                    <li class="page-item <?php echo $i == $page ? 'active' : ''; ?>">
+                                        <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => $i])); ?>"><?php echo $i; ?></a>
+                                    </li>
+                                <?php endfor; ?>
+                                <li class="page-item <?php echo $page >= $total_pages ? 'disabled' : ''; ?>">
+                                    <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => min($total_pages, $page + 1)])); ?>">&raquo;</a>
+                                </li>
+                                <li class="page-item <?php echo $page >= $total_pages ? 'disabled' : ''; ?>">
+                                    <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => $total_pages])); ?>">&raquo;&raquo;</a>
+                                </li>
+                            </ul>
+                        </nav>
+                    </div>
+                    <?php endif; ?>
                 <?php endif; ?>
             </div>
         </div>

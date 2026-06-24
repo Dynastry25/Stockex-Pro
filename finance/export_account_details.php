@@ -580,15 +580,15 @@ function exportToExcel($company, $account_info, $entries, $sub_accounts, $third_
         </tr>
         <tr>
             <td><strong>Total Debit Amount:</strong></td>
-            <td class='debit'>" . number_format($total_debit, 2) . " " . htmlspecialchars($company['currency']) . "</td>
+            <td class='debit'>" . number_format($total_debit, 2) . "</td>
         </tr>
         <tr>
             <td><strong>Total Credit Amount:</strong></td>
-            <td class='credit'>" . number_format($total_credit, 2) . " " . htmlspecialchars($company['currency']) . "</td>
+            <td class='credit'>" . number_format($total_credit, 2) . "</td>
         </tr>
         <tr class='total'>
             <td><strong>Net Balance:</strong></td>
-            <td><strong>" . number_format(abs($net_balance), 2) . " " . htmlspecialchars($company['currency']) . " (" . ($net_balance >= 0 ? 'Debit' : 'Credit') . ")</strong></td>
+            <td><strong>" . number_format(abs($net_balance), 2) . " (" . ($net_balance >= 0 ? 'Debit' : 'Credit') . ")</strong></td>
         </tr>
     </table>";
     echo "</div>";
@@ -743,9 +743,9 @@ function exportToCSV($company, $account_info, $entries, $sub_accounts, $third_le
     fputcsv($output, ['Total Debit Transactions:', count(array_filter($entries, function($e) { return $e['debit_amount'] > 0; }))]);
     fputcsv($output, ['Total Credit Transactions:', count(array_filter($entries, function($e) { return $e['credit_amount'] > 0; }))]);
     fputcsv($output, ['Total Transactions:', count($entries)]);
-    fputcsv($output, ['Total Debit Amount:', number_format($total_debit, 2) . ' ' . $company['currency']]);
-    fputcsv($output, ['Total Credit Amount:', number_format($total_credit, 2) . ' ' . $company['currency']]);
-    fputcsv($output, ['Net Balance:', number_format(abs($net_balance), 2) . ' ' . $company['currency'] . ' (' . ($net_balance >= 0 ? 'Debit' : 'Credit') . ')']);
+    fputcsv($output, ['Total Debit Amount:', number_format($total_debit, 2)]);
+    fputcsv($output, ['Total Credit Amount:', number_format($total_credit, 2)]);
+    fputcsv($output, ['Net Balance:', number_format(abs($net_balance), 2) . ' (' . ($net_balance >= 0 ? 'Debit' : 'Credit') . ')']);
     fputcsv($output, []);
     
     // Third Level Breakdown

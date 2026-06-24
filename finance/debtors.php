@@ -626,6 +626,99 @@ if (isset($_GET['export']) && $_GET['export'] == 'excel') {
     exit;
 }
 
+// Handle single entity Excel export
+if (isset($_GET['export']) && $_GET['export'] == 'single_excel') {
+    $entity_type = isset($_GET['entity_type']) ? $_GET['entity_type'] : null;
+    $entity_id = isset($_GET['entity_id']) ? $_GET['entity_id'] : null;
+    
+    if (!$entity_type || !$entity_id) {
+        die('Entity type and ID required');
+    }
+    
+    $result = getAllBalances($db, $entity_type, date('Y-m-d'), null, null, null, 0);
+    $all_data = $result['data'];
+    
+    // Find specific entity
+    $entity_data = null;
+    foreach ($all_data as $data) {
+        if ($data['entity_info']['type'] === $entity_type && (string)$data['entity_info']['id'] === (string)$entity_id) {
+            $entity_data = $data;
+            break;
+        }
+    }
+    
+    if (!$entity_data) {
+        die('Entity not found');
+    }
+    
+    $entity_info = $entity_data['entity_info'];
+    $transactions = $entity_data['transactions'];
+    $totals = $entity_data['totals'];
+    
+    header('Content-Type: application/vnd.ms-excel');
+    header('Content-Disposition: attachment; filename="gl_' . $entity_type . '_' . $entity_id . '_' . date('Ymd_His') . '.xls"');
+    header('Pragma: no-cache');
+    header('Expires: 0');
+    
+    echo "\xEF\xBB\xBF";
+    echo '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
+    echo '<head><meta charset="UTF-8">';
+    echo '<style>';
+    echo 'td { mso-number-format:\@; }';
+    echo '.header { font-weight: bold; background-color: #f2f2f2; }';
+    echo '.debit { color: #c00000; }';
+    echo '.credit { color: #00b050; }';
+    echo '.total { font-weight: bold; background-color: #e6f3ff; }';
+    echo '</style></head><body>';
+    
+    echo '<table border="1" cellpadding="3" cellspacing="0">';
+    echo '<tr><td colspan="6" class="header" style="text-align: center; font-size: 14px;">GENERAL LEDGER</td></tr>';
+    echo '<tr><td colspan="6"><strong>Entity:</strong> ' . htmlspecialchars($entity_info['name']) . ' (' . ucfirst($entity_type) . ')</td></tr>';
+    echo '<tr><td colspan="6"><strong>Code:</strong> ' . htmlspecialchars($entity_info['code']) . '</td></tr>';
+    echo '<tr><td colspan="6"><strong>Generated:</strong> ' . date('d/m/Y H:i:s') . '</td></tr>';
+    echo '<tr><td colspan="6"></td></tr>';
+    
+    echo '<tr class="header">';
+    echo '<td>Date</td>';
+    echo '<td>Reference</td>';
+    echo '<td>Description</td>';
+    echo '<td>Debit (TZS)</td>';
+    echo '<td>Credit (TZS)</td>';
+    echo '<td>Balance (TZS)</td>';
+    echo '</tr>';
+    
+    foreach ($transactions as $t) {
+        $is_debit = ($entity_type === 'bank_account') ? ($t['amount'] > 0) : ($t['amount'] < 0);
+        $debit = $is_debit ? abs($t['amount']) : 0;
+        $credit = $is_debit ? 0 : abs($t['amount']);
+        
+        echo '<tr>';
+        echo '<td>' . $t['date'] . '</td>';
+        echo '<td>' . htmlspecialchars($t['reference']) . '</td>';
+        echo '<td>' . htmlspecialchars($t['description']) . '</td>';
+        echo '<td class="debit">' . number_format($debit, 2) . '</td>';
+        echo '<td class="credit">' . number_format($credit, 2) . '</td>';
+        echo '<td>' . number_format($t['running_balance'], 2) . '</td>';
+        echo '</tr>';
+    }
+    
+    echo '<tr class="total">';
+    echo '<td colspan="3">TOTALS:</td>';
+    $total_debit = 0; $total_credit = 0;
+    foreach ($transactions as $t) {
+        $is_debit = ($entity_type === 'bank_account') ? ($t['amount'] > 0) : ($t['amount'] < 0);
+        if ($is_debit) $total_debit += abs($t['amount']);
+        else $total_credit += abs($t['amount']);
+    }
+    echo '<td class="debit">' . number_format($total_debit, 2) . '</td>';
+    echo '<td class="credit">' . number_format($total_credit, 2) . '</td>';
+    echo '<td>' . number_format(end($transactions)['running_balance'] ?? 0, 2) . '</td>';
+    echo '</tr>';
+    
+    echo '</table></body></html>';
+    exit;
+}
+
 // Handle PDF export
 if (isset($_GET['export']) && $_GET['export'] == 'pdf') {
     $entity_type = isset($_GET['entity_type']) ? $_GET['entity_type'] : null;
@@ -1597,7 +1690,12 @@ include '../includes/header.php';
                                                 <code><?php echo htmlspecialchars($entity_info['code']); ?></code>
                                             </td>
                                             <td>
-                                                <strong><?php echo htmlspecialchars($entity_info['name']); ?></strong>
+                                                <a href="#" class="view-transactions-link text-decoration-none"
+                                                   data-entity-type="<?php echo $entity_info['type']; ?>"
+                                                   data-entity-id="<?php echo $entity_info['id']; ?>"
+                                                   data-entity-name="<?php echo htmlspecialchars($entity_info['name']); ?>">
+                                                    <strong><?php echo htmlspecialchars($entity_info['name']); ?></strong>
+                                                </a>
                                                 <?php if ($entity_info['type'] == 'client' && isset($entity_info['details']['client_type'])): ?>
                                                     <br><small class="text-muted"><?php echo htmlspecialchars($entity_info['details']['client_type']); ?></small>
                                                 <?php endif; ?>
@@ -1791,15 +1889,14 @@ include '../includes/header.php';
                 </div>
                 <div class="table-responsive">
                     <table class="table table-sm table-hover" id="transactionTable">
-                        <thead>
+                        <thead class="table-light">
                             <tr>
                                 <th>Date</th>
-                                <th>Type</th>
                                 <th>Reference</th>
                                 <th>Description</th>
-                                <th>Bank Account</th>
-                                <th>Amount</th>
-                                <th>Running Balance</th>
+                                <th>Debit (TZS)</th>
+                                <th>Credit (TZS)</th>
+                                <th>Balance (TZS)</th>
                             </tr>
                         </thead>
                         <tbody></tbody>
@@ -1808,6 +1905,9 @@ include '../includes/header.php';
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <a id="exportGlExcelBtn" class="btn btn-success" href="#">
+                    <i class="bi bi-file-excel me-1"></i>Export GL to Excel
+                </a>
                 <button type="button" class="btn btn-primary" onclick="printTransactionHistory()">
                     <i class="bi bi-printer me-1"></i>Print
                 </button>
@@ -1959,24 +2059,91 @@ document.addEventListener('DOMContentLoaded', function() {
                 
                 transactions.forEach(transaction => {
                     const row = document.createElement('tr');
-                    const amountClass = transaction.amount > 0 ? 'transaction-inflow' : 'transaction-outflow';
+                    const isDebit = (entityInfo.type === 'bank_account') ? (transaction.amount > 0) : (transaction.amount < 0);
+                    const debit = isDebit ? Math.abs(transaction.amount) : 0;
+                    const credit = !isDebit ? Math.abs(transaction.amount) : 0;
                     const balanceClass = transaction.running_balance >= 0 ? 'text-success' : 'text-danger';
-                    const typeBadge = transaction.type === 'payment' ? 'bg-danger' : 'bg-success';
-                    const typeText = transaction.type === 'payment' ? 
-                        (entityInfo.type === 'bank_account' ? 'OUTFLOW' : 'PAYMENT') : 
-                        (entityInfo.type === 'bank_account' ? 'INFLOW' : 'RECEIPT');
                     
                     row.innerHTML = `
                         <td>${formatDate(transaction.date)}</td>
-                        <td><span class="badge ${typeBadge}">${typeText}</span></td>
                         <td><code>${transaction.reference}</code></td>
                         <td>${transaction.description}</td>
-                        <td>${transaction.bank_account || 'N/A'}</td>
-                        <td class="${amountClass} fw-bold">${formatCurrency(transaction.amount, transaction.currency)}</td>
-                        <td class="${balanceClass} fw-bold">${formatCurrency(transaction.running_balance, transaction.currency)}</td>
+                        <td class="text-danger fw-bold">${debit > 0 ? formatCurrency(debit, transaction.currency) : '-'}</td>
+                        <td class="text-success fw-bold">${credit > 0 ? formatCurrency(credit, transaction.currency) : '-'}</td>
+                        <td class="${balanceClass} fw-bold">${formatCurrency(Math.abs(transaction.running_balance), transaction.currency)}</td>
                     `;
                     tbody.appendChild(row);
                 });
+                
+                const exportBtn = document.getElementById('exportGlExcelBtn');
+                exportBtn.href = '?export=single_excel&entity_type=' + entityType + '&entity_id=' + entityId;
+                
+                const modal = new bootstrap.Modal(document.getElementById('transactionModal'));
+                modal.show();
+            }
+        });
+    });
+    
+    // Click on entity name to view transactions
+    document.querySelectorAll('.view-transactions-link').forEach(link => {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            const entityType = this.getAttribute('data-entity-type');
+            const entityId = this.getAttribute('data-entity-id');
+            const entityName = this.getAttribute('data-entity-name');
+            
+            const entityData = <?php echo json_encode($all_data); ?>.find(e => 
+                e.entity_info.type === entityType && e.entity_info.id.toString() === entityId
+            );
+            
+            if (entityData) {
+                const entityInfo = entityData.entity_info;
+                const transactions = entityData.transactions;
+                const totals = entityData.totals;
+                
+                document.getElementById('entityNameHeader').textContent = entityInfo.name;
+                document.getElementById('entityCodeHeader').textContent = entityInfo.type.charAt(0).toUpperCase() + entityInfo.type.slice(1) + ' - ' + entityInfo.code;
+                
+                if (entityInfo.type === 'bank_account') {
+                    document.getElementById('runningBalance').textContent = 
+                        'Current Balance: ' + formatCurrency(totals.net_balance);
+                    document.getElementById('runningBalance').className = 
+                        'fw-bold fs-5 ' + (totals.net_balance >= 0 ? 'text-success' : 'text-danger');
+                } else {
+                    document.getElementById('runningBalance').textContent = 
+                        totals.net_balance > 0 ? 
+                            'Credit: ' + formatCurrency(totals.net_balance) : 
+                        totals.net_balance < 0 ? 
+                            'Debit: ' + formatCurrency(Math.abs(totals.net_balance)) : 
+                            'Settled';
+                    document.getElementById('runningBalance').className = 
+                        'fw-bold fs-5 ' + (totals.net_balance > 0 ? 'text-success' : 
+                                          totals.net_balance < 0 ? 'text-danger' : 'text-muted');
+                }
+                
+                const tbody = document.querySelector('#transactionTable tbody');
+                tbody.innerHTML = '';
+                
+                transactions.forEach(transaction => {
+                    const row = document.createElement('tr');
+                    const isDebit = (entityInfo.type === 'bank_account') ? (transaction.amount > 0) : (transaction.amount < 0);
+                    const debit = isDebit ? Math.abs(transaction.amount) : 0;
+                    const credit = !isDebit ? Math.abs(transaction.amount) : 0;
+                    const balanceClass = transaction.running_balance >= 0 ? 'text-success' : 'text-danger';
+                    
+                    row.innerHTML = `
+                        <td>${formatDate(transaction.date)}</td>
+                        <td><code>${transaction.reference}</code></td>
+                        <td>${transaction.description}</td>
+                        <td class="text-danger fw-bold">${debit > 0 ? formatCurrency(debit, transaction.currency) : '-'}</td>
+                        <td class="text-success fw-bold">${credit > 0 ? formatCurrency(credit, transaction.currency) : '-'}</td>
+                        <td class="${balanceClass} fw-bold">${formatCurrency(Math.abs(transaction.running_balance), transaction.currency)}</td>
+                    `;
+                    tbody.appendChild(row);
+                });
+                
+                const exportBtn = document.getElementById('exportGlExcelBtn');
+                exportBtn.href = '?export=single_excel&entity_type=' + entityType + '&entity_id=' + entityId;
                 
                 const modal = new bootstrap.Modal(document.getElementById('transactionModal'));
                 modal.show();

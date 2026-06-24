@@ -174,8 +174,11 @@ if ($export_type === 'excel') {
 
     // PDF export using TCPDF
     require_once '../tcpdf/tcpdf.php';
+    require_once __DIR__ . '/../reports/traits/ReportHeaderTrait.php';
 
     class JournalEntriesPDF extends TCPDF {
+        use ReportHeaderTrait;
+        
         private $company;
         private $start_date;
         private $end_date;
@@ -188,16 +191,7 @@ if ($export_type === 'excel') {
         }
 
         public function Header() {
-            $this->SetFont('helvetica', 'B', 16);
-            $this->Cell(0, 15, 'Journal Entries Report', 0, false, 'C', 0, '', 0, false, 'M', 'M');
-            $this->Ln(10);
-            $this->SetFont('helvetica', '', 10);
-            $this->Cell(0, 10, 'Company: ' . htmlspecialchars((string)($this->company['company_name'] ?? 'NEOVAM LTD')), 0, false, 'L', 0, '', 0, false, 'M', 'M');
-            $this->Ln(5);
-            $this->Cell(0, 10, 'Period: ' . ($this->start_date && $this->end_date ? htmlspecialchars($this->start_date . ' to ' . $this->end_date) : 'All Dates'), 0, false, 'L', 0, '', 0, false, 'M', 'M');
-            $this->Ln(5);
-            $this->Cell(0, 10, 'Generated: ' . date('Y-m-d H:i:s'), 0, false, 'L', 0, '', 0, false, 'M', 'M');
-            $this->Ln(10);
+            $this->renderReportHeader();
         }
 
         public function Footer() {
