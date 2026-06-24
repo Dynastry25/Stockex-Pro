@@ -5,6 +5,7 @@ ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 
 require_once '../config/config.php';
+require_once '../config/email.php';
 require_once '../auth/auth_middleware.php';
 require_once '../tcpdf/tcpdf.php';
 
@@ -60,28 +61,8 @@ function sendMarketingEmail($to_email, $to_name, $subject, $html_content, $plain
     try {
         error_log("=== STARTING MARKETING EMAIL SEND FOR: $to_email ===");
         
-        // SMTP Configuration
-        $mail->isSMTP();
-        $mail->Host = 'mail.neovam.com';
-        $mail->SMTPAuth = true;
-        $mail->Username = 'info@neovam.com';
-        $mail->Password = 'Ernestmswima@12';
-        $mail->SMTPSecure = PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
-        $mail->Port = 587;
-        $mail->Timeout = 30;
-        $mail->SMTPOptions = array(
-            'ssl' => array(
-                'verify_peer' => false,
-                'verify_peer_name' => false,
-                'allow_self_signed' => true
-            )
-        );
-        
-        // Enable verbose debugging
-        $mail->SMTPDebug = 2;
-        $mail->Debugoutput = function($str, $level) {
-            error_log("PHPMailer debug level $level: $str");
-        };
+        // Apply centralized SMTP + DKIM configuration
+        configureMailer($mail);
         
         // Sender & recipient
         $mail->setFrom($from_email, $company_name);
@@ -91,7 +72,11 @@ function sendMarketingEmail($to_email, $to_name, $subject, $html_content, $plain
         // Email content
         $mail->isHTML(true);
         $mail->Subject = $subject;
-        $mail->CharSet = 'UTF-8';
+        
+        // Bulk mail headers for deliverability
+        $mail->addCustomHeader('Precedence', 'bulk');
+        $mail->addCustomHeader('List-Unsubscribe', '<mailto:' . $from_email . '?subject=unsubscribe>');
+        $mail->addCustomHeader('List-Id', '<' . strtolower(str_replace(' ', '.', $company_name)) . '.local>');
         
         // Create full HTML email with header and footer
         $full_html = '

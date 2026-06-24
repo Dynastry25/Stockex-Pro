@@ -5,6 +5,7 @@ ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 
 require_once '../config/config.php';
+require_once '../config/email.php';
 require_once '../auth/auth_middleware.php';
 require_once '../tcpdf/tcpdf.php';
 
@@ -616,28 +617,8 @@ function sendContractNoteEmail($to_email, $to_name, $subject, $body, $pdf_path, 
     try {
         error_log("=== STARTING EMAIL SEND FOR: $to_email ===");
         
-        // SMTP Configuration
-        $mail->isSMTP();
-        $mail->Host = 'mail.neovam.com';
-        $mail->SMTPAuth = true;
-        $mail->Username = 'info@neovam.com';
-        $mail->Password = 'Ernestmswima@12';
-        $mail->SMTPSecure = PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
-        $mail->Port = 587;
-        $mail->Timeout = 30;
-        $mail->SMTPOptions = array(
-            'ssl' => array(
-                'verify_peer' => false,
-                'verify_peer_name' => false,
-                'allow_self_signed' => true
-            )
-        );
-        
-        // Enable verbose debugging
-        $mail->SMTPDebug = 2;
-        $mail->Debugoutput = function($str, $level) {
-            error_log("PHPMailer debug level $level: $str");
-        };
+        // Apply centralized SMTP + DKIM configuration
+        configureMailer($mail);
         
         // Sender & recipient
         error_log("Setting From: $from_email, $company_name");
@@ -650,7 +631,6 @@ function sendContractNoteEmail($to_email, $to_name, $subject, $body, $pdf_path, 
         // Email content
         $mail->isHTML(true);
         $mail->Subject = $subject;
-        $mail->CharSet = 'UTF-8';
         
         // Create Exodus Securities style HTML email template
         $html_body = '

@@ -2,6 +2,7 @@
 require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
 require_once '../includes/dealing_sheet_helpers.php';
+require_once '../includes/financial_helpers.php';
 
 // Check user permissions - finance, admin, and operations can access
 $user_role = $_SESSION['role'] ?? '';
@@ -38,6 +39,48 @@ function syncSettlementTradeToDealingSheetSafely($db, $tradeId, $user) {
     } catch (Exception $e) {
         error_log('Failed to sync settlement status for trade ' . (int) $tradeId . ': ' . $e->getMessage());
     }
+}
+
+function calculateBankCharge($consideration) {
+    if ($consideration < 100000) {
+        return 0;
+    } elseif ($consideration < 10000000) {
+        return 2000;
+    } elseif ($consideration < 50000000) {
+        return 6000;
+    } else {
+        return 12000;
+    }
+}
+
+function recordBankChargesForTrade($db, $trade_id, $consideration, $trade_date) {
+    $bank_charge = calculateBankCharge($consideration);
+    if ($bank_charge <= 0) {
+        return true;
+    }
+    
+    $cash_account = getAccountIdByCode($db, '1001');
+    $bank_charge_account = getAccountIdByCode($db, '425');
+    
+    if (!$cash_account || !$bank_charge_account) {
+        error_log("Bank charges GL: missing account for trade $trade_id");
+        return false;
+    }
+    
+    $reference_no = 'SETTLE-' . str_pad($trade_id, 6, '0', STR_PAD_LEFT);
+    $description = "Bank charges - Trade #$trade_id (Consideration: " . number_format($consideration, 2) . ")";
+    
+    $entry1 = recordGeneralLedgerEntry($db, $trade_date, $cash_account, $bank_charge, 0,
+        "Bank charges collected - Trade Ref: $reference_no", $reference_no, 'fee');
+    
+    $entry2 = recordGeneralLedgerEntry($db, $trade_date, $bank_charge_account, 0, $bank_charge,
+        "Bank charges income - Trade Ref: $reference_no", $reference_no, 'fee');
+    
+    if ($entry1 && $entry2) {
+        error_log("Bank charges recorded: TZS " . number_format($bank_charge, 2) . " for trade $trade_id");
+        return true;
+    }
+    return false;
 }
 
 // Get company details
@@ -336,6 +379,7 @@ if (isset($_POST['bulk_payment']) && isset($_POST['trade_ids'])) {
                     
                     if ($update_stmt->execute([$user_id, $notes, $trade_id])) {
                         syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
+                        recordBankChargesForTrade($db, $trade_id, $trade['consideration'], $trade['settlement_date'] ?: $trade['trade_date']);
                         // Create payment record in payment book
                         $amount = $trade['consideration'];
                         $description = $narration ?: "Payment for " . $trade['security_id'] . " shares " . ($trade['trade_side'] === 'sell' ? 'sold' : 'purchased') . " - Trade Ref: " . $trade['trade_reference'];
@@ -560,6 +604,7 @@ if (isset($_POST['single_payment']) && isset($_POST['trade_id'])) {
             
             if ($update_stmt->execute([$user_id, $notes, $trade_id])) {
                 syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
+                recordBankChargesForTrade($db, $trade_id, $trade['consideration'], $trade['settlement_date'] ?: $trade['trade_date']);
                 if (!$existing_payment) {
                     // Update payment record in payment book
                     $amount = $trade['consideration'];
@@ -685,6 +730,7 @@ if (isset($_POST['link_trade']) && isset($_POST['trade_id']) && isset($_POST['li
                         
                         if ($update_stmt->execute([$notes, $user_id, $trade_id])) {
                             syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
+                            recordBankChargesForTrade($db, $trade_id, $trade['consideration'], $trade['settlement_date'] ?: $trade['trade_date']);
                             $success_message = "Trade successfully linked! Sale linked to buy trade.";
                         } else {
                             $error_message = "Error updating trade status.";

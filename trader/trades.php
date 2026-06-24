@@ -914,6 +914,13 @@ class ContractNotePDF extends TCPDF {
         }
         $this->Cell(40, 3.5, number_format($fees['csd'], 2), 0, 1, 'R');
         
+        $bank_charge = isset($fees['bank_charge']) ? floatval($fees['bank_charge']) : 0;
+        if ($bank_charge > 0) {
+            $this->Cell(100, 3.5, 'Bank Charges', 0, 0, 'L');
+            $this->Cell(40, 3.5, '', 0, 0, 'L');
+            $this->Cell(40, 3.5, number_format($bank_charge, 2), 0, 1, 'R');
+        }
+        
         $this->Cell(100, 3.5, 'Other Charges', 0, 0, 'L');
         $this->Cell(40, 3.5, '', 0, 0, 'L');
         $this->Cell(40, 3.5, '0.00', 0, 1, 'R');

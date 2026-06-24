@@ -656,6 +656,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
 }
 
+// Fetch uploaded SOR history for display
+$history_per_page = 50;
+$history_page = isset($_GET['hpage']) ? max(1, (int) $_GET['hpage']) : 1;
+$history_offset = ($history_page - 1) * $history_per_page;
+
+$count_stmt = $db->query("SELECT COUNT(*) as total FROM csd_historical_trades");
+$total_history = (int) $count_stmt->fetch()['total'];
+$total_history_pages = max(1, (int) ceil($total_history / $history_per_page));
+if ($history_page > $total_history_pages) {
+    $history_page = $total_history_pages;
+    $history_offset = ($history_page - 1) * $history_per_page;
+}
+
+$history_stmt = $db->prepare("
+    SELECT h.*, u.full_name as uploader_name
+    FROM csd_historical_trades h
+    LEFT JOIN users u ON h.uploaded_by = u.id
+    ORDER BY h.uploaded_at DESC, h.id DESC
+    LIMIT " . (int) $history_per_page . " OFFSET " . (int) $history_offset . "
+");
+$history_stmt->execute();
+$history_records = $history_stmt->fetchAll(PDO::FETCH_ASSOC);
+
 include '../includes/header.php';
 ?>
 
@@ -761,6 +784,93 @@ include '../includes/header.php';
             </div>
         </div>
         <?php endif; ?>
+
+        <!-- Uploaded SOR History -->
+        <div class="card mt-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Uploaded SOR History</h5>
+                <span class="badge bg-secondary rounded-pill"><?php echo number_format($total_history); ?> records</span>
+            </div>
+            <div class="card-body p-0">
+                <?php if (empty($history_records)): ?>
+                    <div class="text-center py-4">
+                        <p class="text-muted mb-0">No SOR history records found. Upload a file to see records here.</p>
+                    </div>
+                <?php else: ?>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>CSD REF</th>
+                                    <th>Client</th>
+                                    <th>SOR Account</th>
+                                    <th>Instrument</th>
+                                    <th>Qty</th>
+                                    <th>Consideration</th>
+                                    <th>Trade Date</th>
+                                    <th>Settlement</th>
+                                    <th>Side</th>
+                                    <th>Uploaded By</th>
+                                    <th>Uploaded At</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($history_records as $record): ?>
+                                <tr>
+                                    <td><code><?php echo htmlspecialchars($record['csd_reference']); ?></code></td>
+                                    <td><small><?php echo htmlspecialchars(substr($record['client_name'], 0, 25)); ?></small></td>
+                                    <td><code><?php echo htmlspecialchars($record['sor_account']); ?></code></td>
+                                    <td><?php echo htmlspecialchars($record['instrument']); ?></td>
+                                    <td class="text-end"><?php echo number_format((float)$record['quantity'], 0); ?></td>
+                                    <td class="text-end"><?php echo number_format((float)$record['consideration'], 2); ?></td>
+                                    <td><?php echo htmlspecialchars($record['trade_date']); ?></td>
+                                    <td><?php echo htmlspecialchars($record['settlement_date'] ?? '-'); ?></td>
+                                    <td>
+                                        <span class="badge <?php echo $record['trade_side'] === 'buy' || $record['trade_side'] === 'transfer_in' ? 'bg-success' : 'bg-danger'; ?>">
+                                            <?php echo htmlspecialchars(str_replace('_', ' ', $record['trade_side'] ?? 'N/A')); ?>
+                                        </span>
+                                    </td>
+                                    <td><small><?php echo htmlspecialchars($record['uploader_name'] ?? 'System'); ?></small></td>
+                                    <td><small><?php echo htmlspecialchars($record['uploaded_at']); ?></small></td>
+                                </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- History Pagination -->
+                    <?php if ($total_history_pages > 1): ?>
+                    <div class="p-2 border-top">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <small class="text-muted">
+                                Page <?php echo $history_page; ?> of <?php echo $total_history_pages; ?>
+                                (<?php echo number_format($total_history); ?> total records)
+                            </small>
+                            <nav>
+                                <ul class="pagination pagination-sm mb-0">
+                                    <li class="page-item <?php echo $history_page <= 1 ? 'disabled' : ''; ?>">
+                                        <a class="page-link" href="?hpage=<?php echo $history_page - 1; ?>">&laquo;</a>
+                                    </li>
+                                    <?php
+                                    $h_start = max(1, $history_page - 2);
+                                    $h_end = min($total_history_pages, $history_page + 2);
+                                    for ($p = $h_start; $p <= $h_end; $p++):
+                                    ?>
+                                        <li class="page-item <?php echo $p === $history_page ? 'active' : ''; ?>">
+                                            <a class="page-link" href="?hpage=<?php echo $p; ?>"><?php echo $p; ?></a>
+                                        </li>
+                                    <?php endfor; ?>
+                                    <li class="page-item <?php echo $history_page >= $total_history_pages ? 'disabled' : ''; ?>">
+                                        <a class="page-link" href="?hpage=<?php echo $history_page + 1; ?>">&raquo;</a>
+                                    </li>
+                                </ul>
+                            </nav>
+                        </div>
+                    </div>
+                    <?php endif; ?>
+                <?php endif; ?>
+            </div>
+        </div>
     </div>
 </div>
 
