@@ -659,6 +659,14 @@ body {
     left: 0;
   }
 
+  .main-content {
+    margin-left: 280px;
+  }
+
+  .professional-navbar {
+    margin-left: 280px;
+  }
+
   .sidebar-overlay {
     display: none;
   }
