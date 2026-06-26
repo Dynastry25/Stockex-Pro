@@ -486,9 +486,9 @@ class FinancialChatbot {
         if ($amount <= 10000000) {
             $brokerage = $amount * ($tier1_rate / 100);
         } elseif ($amount <= 40000000) {
-            $brokerage = $amount * ($tier2_rate / 100);
+            $brokerage = 10000000 * ($tier1_rate / 100) + ($amount - 10000000) * ($tier2_rate / 100);
         } else {
-            $brokerage = $amount * ($tier3_rate / 100);
+            $brokerage = 10000000 * ($tier1_rate / 100) + 30000000 * ($tier2_rate / 100) + ($amount - 40000000) * ($tier3_rate / 100);
         }
         
         $vat = $brokerage * 0.18;

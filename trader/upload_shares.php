@@ -655,9 +655,9 @@ function calculateEquityFees($db, $consideration) {
         if ($consideration <= 10000000) {
             $brokerage = $consideration * ($tier1_rate / 100);
         } elseif ($consideration <= 40000000) {
-            $brokerage = $consideration * ($tier2_rate / 100);
+            $brokerage = 10000000 * ($tier1_rate / 100) + ($consideration - 10000000) * ($tier2_rate / 100);
         } else {
-            $brokerage = $consideration * ($tier3_rate / 100);
+            $brokerage = 10000000 * ($tier1_rate / 100) + 30000000 * ($tier2_rate / 100) + ($consideration - 40000000) * ($tier3_rate / 100);
         }
         
         $fees['brokerage'] = $brokerage;
