@@ -1517,7 +1517,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['upload_trade'])) {
             $error_message = 'Trade reference "' . htmlspecialchars($trade_reference) . '" already exists.';
         } else {
             $stmt_client = $db->prepare("SELECT fee_type, default_brokerage_fee, liberty_mode FROM clients WHERE client_name = ?");
-            $stmt_client->execute([$client_name, $_SESSION['user_id']]);
+            $stmt_client->execute([$client_name]);
             $client = $stmt_client->fetch();
             
             $brokerage_fee_type = 'normal';
