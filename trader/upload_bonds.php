@@ -7,6 +7,7 @@ ob_start();
 
 // Include configuration files
 require_once '../config/config.php';
+require_once '../config/account_mapping.php';
 require_once '../auth/auth_middleware.php';
 
 require_login();
@@ -920,6 +921,87 @@ function recordRegulatoryFeesPayment($db, $payment_date, $fees_paid, $reference_
 }
 
 /**
+ * Record Trade Receivable entry for Victory/B13 qualifying trades
+ */
+function recordTradeReceivableEntry($db, $trade_reference, $consideration, $trade_side, $trade_date, $client_name = '') {
+    try {
+        $entries_created = 0;
+        $receivable_account = getAccountIdByCode($db, TRADE_RECEIVABLE_ACCOUNT_CODE);
+        $cash_account = getAccountIdByCode($db, CASH_AT_BANK_CODE);
+        
+        if ($consideration <= 0) {
+            return true;
+        }
+        
+        if ($trade_side === 'buy') {
+            if (!isGLDuplicateEntry($db, $trade_reference, TRADE_RECEIVABLE_ACCOUNT_CODE, 'Trade receivable - buy')) {
+                if (recordGeneralLedgerEntry($db, $trade_date, $receivable_account, $consideration, 0, "Trade receivable - buy - {$trade_reference}", $trade_reference, 'trade')) {
+                    $entries_created++;
+                }
+            }
+            if (!isGLDuplicateEntry($db, $trade_reference, CASH_AT_BANK_CODE, 'Cash payment for trade')) {
+                if (recordGeneralLedgerEntry($db, $trade_date, $cash_account, 0, $consideration, "Cash payment for trade - {$trade_reference}", $trade_reference, 'trade')) {
+                    $entries_created++;
+                }
+            }
+        } else {
+            if (!isGLDuplicateEntry($db, $trade_reference, CASH_AT_BANK_CODE, 'Cash receipt from trade')) {
+                if (recordGeneralLedgerEntry($db, $trade_date, $cash_account, $consideration, 0, "Cash receipt from trade - {$trade_reference}", $trade_reference, 'trade')) {
+                    $entries_created++;
+                }
+            }
+            if (!isGLDuplicateEntry($db, $trade_reference, TRADE_RECEIVABLE_ACCOUNT_CODE, 'Trade receivable - sell')) {
+                if (recordGeneralLedgerEntry($db, $trade_date, $receivable_account, 0, $consideration, "Trade receivable - sell - {$trade_reference}", $trade_reference, 'trade')) {
+                    $entries_created++;
+                }
+            }
+        }
+        
+        return $entries_created > 0;
+        
+    } catch (Exception $e) {
+        error_log("Error recording trade receivable entry: " . $e->getMessage());
+        return false;
+    }
+}
+
+/**
+ * Post bond charges to payable accounts
+ */
+function postBondChargesToPayables($db, $trade_reference, $fees, $trade_date) {
+    try {
+        $entries_created = 0;
+        
+        $charge_map = [
+            'cmsa' => ['key' => 'cmsa', 'desc' => 'CMSA'],
+            'dse'  => ['key' => 'dse', 'desc' => 'DSE'],
+            'csd'  => ['key' => 'csdr', 'desc' => 'CSDR'],
+        ];
+        
+        foreach ($charge_map as $fee_key => $config) {
+            $amount = $fees[$fee_key] ?? 0;
+            if ($amount <= 0) continue;
+            
+            $account_code = getChargeAccountCode($config['key']);
+            $account_id = getAccountIdByCode($db, $account_code);
+            $desc = $config['desc'] . " fees payable - {$trade_reference}";
+            
+            if (!isGLDuplicateEntry($db, $trade_reference, $account_code, $desc)) {
+                if (recordGeneralLedgerEntry($db, $trade_date, $account_id, 0, $amount, $desc, $trade_reference, 'fee')) {
+                    $entries_created++;
+                }
+            }
+        }
+        
+        return $entries_created;
+        
+    } catch (Exception $e) {
+        error_log("Error posting bond charges to payables: " . $e->getMessage());
+        return 0;
+    }
+}
+
+/**
  * Calculate custodian fees
  */
 function calculateCustodianFees($fees) {
@@ -1558,6 +1640,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $custodian_trades_processed = 0;
                                 $custodian_trades_recorded = 0;
                                 $regulatory_assignments_created = 0;
+                                $victory_b13_receivables_recorded = 0;
                                 $bonds_auto_created = 0;
                                 $csd_references_used = 0;
                                 $generated_references = 0;
@@ -1606,6 +1689,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     
                                     $bond_name_to_use = $bond_details ? $bond_details['bond_name'] : $security_id;
                                     
+                                    // Calculate brokerage fee for commission reporting
+                                    $brokerage_fee_type = 'normal';
+                                    $final_brokerage_fee_amount = 0.00;
+                                    
+                                    if ($consideration > 0) {
+                                        $fee_calc = calculateBondFees($quantity, $price, $consideration);
+                                        $final_brokerage_fee_amount = $fee_calc['brokerage'] ?? 0;
+                                        
+                                        if (!empty($client_cds)) {
+                                            $cf_stmt = $db->prepare("SELECT fee_type, default_brokerage_fee FROM clients WHERE cds_account = ?");
+                                            $cf_stmt->execute([$client_cds]);
+                                            $client_fee = $cf_stmt->fetch(PDO::FETCH_ASSOC);
+                                            if ($client_fee && $client_fee['fee_type'] === 'liberty' && ($client_fee['default_brokerage_fee'] ?: 0) > 0) {
+                                                $brokerage_fee_type = 'liberty';
+                                                $final_brokerage_fee_amount = $consideration * ((float)$client_fee['default_brokerage_fee'] / 100);
+                                            }
+                                        }
+                                    }
+                                    
                                     // Insert trade record (using CSD reference or generated T+5)
                                     $trade_insert_stmt = $db->prepare("
                                         INSERT INTO trades (
@@ -1614,8 +1716,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                             counterparty_name, counterparty_cds_account,
                                             trade_side, quantity, price, consideration,
                                             trade_date, settlement_date, currency, sca_code, status, uploaded_by,
-                                            capacity, broker_name, counterparty_broker
-                                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                            capacity, broker_name, counterparty_broker,
+                                            brokerage_fee_type, final_brokerage_fee
+                                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                     ");
 
                                     $counterparty_name = $mapped_data['counterparty_name'] ?? 'Unknown';
@@ -1645,13 +1748,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         $current_user['id'],
                                         $capacity,
                                         substr($broker_name, 0, 100),
-                                        substr($counterparty_broker, 0, 100)
+                                        substr($counterparty_broker, 0, 100),
+                                        $brokerage_fee_type,
+                                        round($final_brokerage_fee_amount, 2)
                                     ]);
                                     
                                     error_log("Successfully inserted bond trade with reference: {$trade_reference}");
                                     
+                                    // Check if trade qualifies for Trade Receivables (Victory/B13)
+                                    $is_victory_or_b13 = isVictoryOrB13Trade($mapped_data);
+                                    if ($is_victory_or_b13) {
+                                        $match_reason = getVictoryOrB13MatchReason($mapped_data);
+                                        error_log("Victory/B13 bond trade detected for {$trade_reference}: {$match_reason}");
+                                    }
+                                    
                                     // Record company investment if it's a company trade
-                                    if ($is_company_trade && $consideration > 0) {
+                                    if ($is_victory_or_b13 && $consideration > 0) {
+                                        if (recordTradeReceivableEntry($db, $trade_reference, $consideration, $trade_side, $trade_date, $client_name)) {
+                                            $victory_b13_receivables_recorded++;
+                                            error_log("Victory/B13 trade receivable recorded for bond: {$trade_reference}");
+                                        }
+                                    } elseif ($is_company_trade && $consideration > 0) {
                                         if (recordCompanyBondInvestment($db, $trade_reference, $trade_side, $consideration, $client_name, $trade_date)) {
                                             error_log("Company bond investment recorded: {$trade_reference}");
                                         }
@@ -1688,6 +1805,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         if (createBondAccountingEntries($db, $trade_reference, $consideration, $fees, $trade_side, $client_name, $company_name, $trade_date, $is_custodian_trade)) {
                                             $financial_entries_created++;
                                             error_log("Accounting entries created for bond trade: {$trade_reference}");
+                                        }
+                                        
+                                        // Post charges to payable accounts
+                                        $charge_entries = postBondChargesToPayables($db, $trade_reference, $fees, $trade_date);
+                                        if ($charge_entries > 0) {
+                                            error_log("Posted {$charge_entries} charge entries for bond: {$trade_reference}");
                                         }
                                         
                                         // Record custodian trade if applicable
@@ -1758,6 +1881,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                                 $success_message .= " - {$custodian_trades_recorded} recorded in custodian trades";
                                             }
                                         }
+                                    }
+                                    
+                                    if ($victory_b13_receivables_recorded > 0) {
+                                        $success_message .= " <strong>{$victory_b13_receivables_recorded} Victory/B13 trade receivables recorded</strong>.";
                                     }
                                     
                                     if ($regulatory_assignments_created > 0) {

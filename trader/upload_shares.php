@@ -14,6 +14,7 @@ if (!file_exists('../auth/auth_middleware.php')) {
 }
 
 require_once '../config/config.php';
+require_once '../config/account_mapping.php';
 require_once '../auth/auth_middleware.php';
 
 // Check if session is started
@@ -681,28 +682,81 @@ function calculateEquityFees($db, $consideration) {
     }
 }
 
-// Create accounting entries
+// Create accounting entries - posts brokerage, VAT, AND all charges to payable accounts
 function createEquityAccountingEntries($db, $trade_reference, $consideration, $fees, $trade_side, $client_name, $company_name, $trade_date, $is_custodian_trade = false) {
     try {
         $entries_created = 0;
         
-        $cash_account = getAccountIdByCode($db, '1112');
-        $brokerage_income = getAccountIdByCode($db, '411');
-        $vat_payable = getAccountIdByCode($db, '213');
+        $cash_account = getAccountIdByCode($db, CASH_AT_BANK_CODE);
+        $brokerage_income = getAccountIdByCode($db, BROKERAGE_COMMISSION_INCOME_CODE);
+        $vat_payable = getAccountIdByCode($db, VAT_PAYABLE_CODE);
+        
+        $cmsa_payable = getAccountIdByCode($db, getChargeAccountCode('cmsa'));
+        $dse_payable = getAccountIdByCode($db, getChargeAccountCode('dse'));
+        $csdr_payable = getAccountIdByCode($db, getChargeAccountCode('csdr'));
+        $vrf_payable = getAccountIdByCode($db, getChargeAccountCode('vrf'));
         
         $brokerage_fee = $fees['brokerage'] ?? 0;
         $vat_fee = $fees['vat'] ?? 0;
-        $total_fees = $brokerage_fee + $vat_fee;
+        $cmsa_fee = $fees['cmsa'] ?? 0;
+        $dse_fee = $fees['dse'] ?? 0;
+        $csd_fee = $fees['csd'] ?? 0;
+        $vrf_fee = $fees['vrf'] ?? 0;
+        
+        // Include CSDR from csd key if csdr key is not present
+        $csdr_fee = $fees['csdr'] ?? $csd_fee;
+        
+        // Total amount to debit cash = all fees collected
+        $total_fees = $brokerage_fee + $vat_fee + $cmsa_fee + $dse_fee + $csdr_fee + $vrf_fee;
         
         if ($total_fees > 0) {
-            if (recordGeneralLedgerEntry($db, $trade_date, $cash_account, $total_fees, 0, "Equity brokerage + VAT received - {$trade_reference}", $trade_reference, 'fee')) {
-                $entries_created++;
+            // Debit Cash for total fees collected
+            if (!isGLDuplicateEntry($db, $trade_reference, CASH_AT_BANK_CODE, 'Total equity fees')) {
+                if (recordGeneralLedgerEntry($db, $trade_date, $cash_account, $total_fees, 0, "Total equity fees received - {$trade_reference} - {$client_name}", $trade_reference, 'fee')) {
+                    $entries_created++;
+                }
             }
-            if (recordGeneralLedgerEntry($db, $trade_date, $brokerage_income, 0, $brokerage_fee, "Equity brokerage income - {$trade_reference}", $trade_reference, 'fee')) {
-                $entries_created++;
+            
+            // Credit Brokerage Income
+            if ($brokerage_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, BROKERAGE_COMMISSION_INCOME_CODE, 'Equity brokerage income')) {
+                if (recordGeneralLedgerEntry($db, $trade_date, $brokerage_income, 0, $brokerage_fee, "Equity brokerage income - {$trade_reference}", $trade_reference, 'fee')) {
+                    $entries_created++;
+                }
             }
-            if ($vat_fee > 0 && recordGeneralLedgerEntry($db, $trade_date, $vat_payable, 0, $vat_fee, "VAT on equity brokerage - {$trade_reference}", $trade_reference, 'fee')) {
-                $entries_created++;
+            
+            // Credit VAT Payable
+            if ($vat_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, VAT_PAYABLE_CODE, 'VAT on equity brokerage')) {
+                if (recordGeneralLedgerEntry($db, $trade_date, $vat_payable, 0, $vat_fee, "VAT on equity brokerage - {$trade_reference}", $trade_reference, 'fee')) {
+                    $entries_created++;
+                }
+            }
+            
+            // Credit CMSA Fees Payable
+            if ($cmsa_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, getChargeAccountCode('cmsa'), 'CMSA fees payable')) {
+                if (recordGeneralLedgerEntry($db, $trade_date, $cmsa_payable, 0, $cmsa_fee, "CMSA fees payable - {$trade_reference}", $trade_reference, 'fee')) {
+                    $entries_created++;
+                }
+            }
+            
+            // Credit DSE Fees Payable
+            if ($dse_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, getChargeAccountCode('dse'), 'DSE fees payable')) {
+                if (recordGeneralLedgerEntry($db, $trade_date, $dse_payable, 0, $dse_fee, "DSE fees payable - {$trade_reference}", $trade_reference, 'fee')) {
+                    $entries_created++;
+                }
+            }
+            
+            // Credit CSDR Fees Payable
+            if ($csdr_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, getChargeAccountCode('csdr'), 'CSDR fees payable')) {
+                if (recordGeneralLedgerEntry($db, $trade_date, $csdr_payable, 0, $csdr_fee, "CSDR fees payable - {$trade_reference}", $trade_reference, 'fee')) {
+                    $entries_created++;
+                }
+            }
+            
+            // Credit VRF Fees Payable
+            if ($vrf_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, getChargeAccountCode('vrf'), 'VRF fees payable')) {
+                if (recordGeneralLedgerEntry($db, $trade_date, $vrf_payable, 0, $vrf_fee, "VRF fees payable - {$trade_reference}", $trade_reference, 'fee')) {
+                    $entries_created++;
+                }
             }
         }
         
@@ -710,6 +764,51 @@ function createEquityAccountingEntries($db, $trade_reference, $consideration, $f
         
     } catch (Exception $e) {
         error_log("Error creating equity accounting entries: " . $e->getMessage());
+        return false;
+    }
+}
+
+// Record Trade Receivable entry for Victory/B13 qualifying trades
+function recordTradeReceivableEntry($db, $trade_reference, $consideration, $trade_side, $trade_date, $client_name = '') {
+    try {
+        $entries_created = 0;
+        $receivable_account = getAccountIdByCode($db, TRADE_RECEIVABLE_ACCOUNT_CODE);
+        $cash_account = getAccountIdByCode($db, CASH_AT_BANK_CODE);
+        
+        if ($consideration <= 0) {
+            return true;
+        }
+        
+        if ($trade_side === 'buy') {
+            // Buy: Debit Trade Receivables (asset increases), Credit Cash (asset decreases)
+            if (!isGLDuplicateEntry($db, $trade_reference, TRADE_RECEIVABLE_ACCOUNT_CODE, 'Trade receivable - buy')) {
+                if (recordGeneralLedgerEntry($db, $trade_date, $receivable_account, $consideration, 0, "Trade receivable - buy - {$trade_reference}", $trade_reference, 'trade')) {
+                    $entries_created++;
+                }
+            }
+            if (!isGLDuplicateEntry($db, $trade_reference, CASH_AT_BANK_CODE, 'Cash payment for trade')) {
+                if (recordGeneralLedgerEntry($db, $trade_date, $cash_account, 0, $consideration, "Cash payment for trade - {$trade_reference}", $trade_reference, 'trade')) {
+                    $entries_created++;
+                }
+            }
+        } else {
+            // Sell: Debit Cash (asset increases), Credit Trade Receivables (asset decreases)
+            if (!isGLDuplicateEntry($db, $trade_reference, CASH_AT_BANK_CODE, 'Cash receipt from trade')) {
+                if (recordGeneralLedgerEntry($db, $trade_date, $cash_account, $consideration, 0, "Cash receipt from trade - {$trade_reference}", $trade_reference, 'trade')) {
+                    $entries_created++;
+                }
+            }
+            if (!isGLDuplicateEntry($db, $trade_reference, TRADE_RECEIVABLE_ACCOUNT_CODE, 'Trade receivable - sell')) {
+                if (recordGeneralLedgerEntry($db, $trade_date, $receivable_account, 0, $consideration, "Trade receivable - sell - {$trade_reference}", $trade_reference, 'trade')) {
+                    $entries_created++;
+                }
+            }
+        }
+        
+        return $entries_created > 0;
+        
+    } catch (Exception $e) {
+        error_log("Error recording trade receivable entry: " . $e->getMessage());
         return false;
     }
 }
@@ -1043,6 +1142,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $custodian_trades_processed = 0;
                                 $custodian_trades_recorded = 0;
                                 $company_investments_recorded = 0;
+                                $victory_b13_receivables_recorded = 0;
                                 $etf_trades_recorded = 0;
                                 $regulatory_assignments_created = 0;
                                 $csd_references_used = 0;
@@ -1093,6 +1193,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     
                                     $asset_class = $is_etf ? 'Exchange Traded Funds' : 'equity';
                                     
+                                    // Calculate brokerage fee for commission reporting
+                                    $brokerage_fee_type = 'normal';
+                                    $final_brokerage_fee_amount = 0.00;
+                                    
+                                    if ($consideration > 0) {
+                                        $fee_calc = calculateEquityFees($db, $consideration);
+                                        $final_brokerage_fee_amount = $fee_calc['brokerage'] ?? 0;
+                                        
+                                        if (!empty($client_cds)) {
+                                            $cf_stmt = $db->prepare("SELECT fee_type, default_brokerage_fee FROM clients WHERE cds_account = ?");
+                                            $cf_stmt->execute([$client_cds]);
+                                            $client_fee = $cf_stmt->fetch(PDO::FETCH_ASSOC);
+                                            if ($client_fee && $client_fee['fee_type'] === 'liberty' && ($client_fee['default_brokerage_fee'] ?: 0) > 0) {
+                                                $brokerage_fee_type = 'liberty';
+                                                $final_brokerage_fee_amount = $consideration * ((float)$client_fee['default_brokerage_fee'] / 100);
+                                            }
+                                        }
+                                    }
+                                    
                                     // Check if trade already exists by exchange reference (double-check)
                                     $check_exchange_stmt = $db->prepare("SELECT COUNT(*) as count FROM trades WHERE exchange_reference = ?");
                                     $check_exchange_stmt->execute([$exchange_reference]);
@@ -1118,7 +1237,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                             $consideration, $trade_date, $settlement_date, 'TZS', substr($sca_code, 0, 20),
                                             'active', $current_user['id'], $mapped_data['capacity'] ?? 'principal',
                                             substr($mapped_data['broker_name'] ?? '', 0, 100), substr($mapped_data['counterparty_broker'] ?? '', 0, 100),
-                                            'normal', 0.00,
+                                            $brokerage_fee_type, round($final_brokerage_fee_amount, 2),
                                             $exchange_reference,
                                             $mapped_data['time_executed'] ?? null,
                                             $mapped_data['origin'] ?? null
@@ -1153,7 +1272,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         if (recordETFTrade($db, $etf_trade_data)) $etf_trades_recorded++;
                                     }
                                     
-                                    if ($is_company_trade && $consideration > 0) {
+                                    // Check if trade qualifies for Trade Receivables (Victory/B13)
+                                    $is_victory_or_b13 = isVictoryOrB13Trade($mapped_data);
+                                    if ($is_victory_or_b13) {
+                                        $match_reason = getVictoryOrB13MatchReason($mapped_data);
+                                        error_log("Victory/B13 trade detected for {$trade_reference}: {$match_reason}");
+                                    }
+                                    
+                                    if ($is_victory_or_b13 && $consideration > 0) {
+                                        // Victory/B13 trades: record Trade Receivable (1121) instead of Equity Investment (1253)
+                                        if (recordTradeReceivableEntry($db, $trade_reference, $consideration, $trade_side, $trade_date, $client_name)) {
+                                            $victory_b13_receivables_recorded++;
+                                        }
+                                    } elseif ($is_company_trade && $consideration > 0) {
                                         if (recordCompanyEquityInvestment($db, $trade_reference, $consideration, $trade_side, $trade_date)) {
                                             $company_investments_recorded++;
                                         }
@@ -1216,6 +1347,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     if ($etf_trades_recorded > 0) $success_message .= " ({$etf_trades_recorded} ETF trades)";
                                     if ($csd_references_used > 0) $success_message .= " <strong>{$csd_references_used} CSD references used</strong>";
                                     if ($financial_entries_created > 0) $success_message .= ". Created financial entries for {$financial_entries_created} trades";
+                                    if ($victory_b13_receivables_recorded > 0) $success_message .= ". <strong>{$victory_b13_receivables_recorded} Victory/B13 trade receivables recorded</strong>";
                                     if ($regulatory_assignments_created > 0) $success_message .= ". <strong>{$regulatory_assignments_created} regulatory fee assignments created</strong>";
                                     
                                     if ($duplicates_skipped > 0) {

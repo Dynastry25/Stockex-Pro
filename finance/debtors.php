@@ -211,7 +211,7 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
         ];
     }
     
-    if (!$entity_type || $entity_type === 'bank_account') {
+    if (!$entity_type || $entity_type === 'bank_account' || $entity_type === 'chart_account') {
         $entity_queries[] = [
             'type' => 'bank_account',
             'query' => "SELECT id, account_name as name, account_number as code, bank_name, currency, current_balance FROM banks_accounts WHERE status = 'active' AND is_active = 1",
@@ -289,17 +289,79 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
             $payments_stmt->execute($payments_params);
             $payments = $payments_stmt->fetchAll();
             
-            // Calculate totals
-            $total_receipts = array_sum(array_column($receipts, 'amount'));
-            $total_payments = array_sum(array_column($payments, 'amount'));
+            // Get GL entries for this entity
+            $gl_entries = [];
+            try {
+                if ($entity_type === 'chart_account') {
+                    $gl_query = "SELECT gl.transaction_date, gl.description, gl.reference_no,
+                                 gl.debit_amount, gl.credit_amount, gl.account_code,
+                                 coa.account_name
+                                 FROM general_ledger gl
+                                 LEFT JOIN chart_of_accounts coa ON gl.account_code = coa.account_code
+                                 WHERE gl.account_code = ?";
+                    $gl_params = [$entity_id];
+                    if ($start_date && $end_date) {
+                        $gl_query .= " AND gl.transaction_date BETWEEN ? AND ?";
+                        $gl_params[] = $start_date;
+                        $gl_params[] = $end_date;
+                    } elseif ($as_of_date) {
+                        $gl_query .= " AND gl.transaction_date <= ?";
+                        $gl_params[] = $as_of_date;
+                    }
+                    $gl_query .= " ORDER BY gl.transaction_date ASC";
+                    $gl_stmt = $db->prepare($gl_query);
+                    $gl_stmt->execute($gl_params);
+                    $gl_entries = $gl_stmt->fetchAll();
+                } elseif ($entity_type === 'client') {
+                    $cds = $entity['cds_account'] ?? '';
+                    $name = $entity['name'] ?? '';
+                    if (!empty($cds) || !empty($name)) {
+                        $trade_stmt = $db->prepare("SELECT trade_reference FROM trades WHERE client_cds_account = ? OR client_name = ?");
+                        $trade_stmt->execute([$cds, $name]);
+                        $trade_refs = $trade_stmt->fetchAll(PDO::FETCH_COLUMN);
+                        if (!empty($trade_refs)) {
+                            $placeholders = implode(',', array_fill(0, count($trade_refs), '?'));
+                            $gl_query = "SELECT gl.transaction_date, gl.description, gl.reference_no,
+                                         gl.debit_amount, gl.credit_amount, gl.account_code,
+                                         coa.account_name
+                                         FROM general_ledger gl
+                                         LEFT JOIN chart_of_accounts coa ON gl.account_code = coa.account_code
+                                         WHERE gl.reference_no IN ($placeholders)
+                                         ORDER BY gl.transaction_date ASC";
+                            $gl_stmt = $db->prepare($gl_query);
+                            $gl_stmt->execute($trade_refs);
+                            $gl_entries = $gl_stmt->fetchAll();
+                        }
+                    }
+                }
+            } catch (Exception $e) {
+                error_log("Error getting GL entries: " . $e->getMessage());
+            }
             
-            // For bank accounts, receipts are inflows and payments are outflows
+            // Add GL debits to receipts total, GL credits to payments total
+            $gl_receipts_total = 0;
+            $gl_payments_total = 0;
+            foreach ($gl_entries as $gl) {
+                if ((float)$gl['debit_amount'] > 0) {
+                    $gl_receipts_total += (float)$gl['debit_amount'];
+                }
+                if ((float)$gl['credit_amount'] > 0) {
+                    $gl_payments_total += (float)$gl['credit_amount'];
+                }
+            }
+            
+            // Calculate totals
+            $total_receipts = array_sum(array_column($receipts, 'amount')) + $gl_receipts_total;
+            $total_payments = array_sum(array_column($payments, 'amount')) + $gl_payments_total;
+            
+            // For bank accounts, use current_balance as authoritative (receipts/payments are supplementary)
             // For other entities, receipts are money we received (entity owes us), payments are money we paid (we owe entity)
             if ($entity_type === 'bank_account') {
-                $net_balance = $total_receipts - $total_payments; // Inflows minus outflows
+                $current_balance = (float)($entity['current_balance'] ?? 0);
+                $net_balance = $current_balance;
                 $balance_status = $net_balance >= 0 ? 'Positive Balance' : 'Negative Balance';
-                $debit_balance = $net_balance < 0 ? abs($net_balance) : 0; // Negative balance
-                $credit_balance = $net_balance > 0 ? $net_balance : 0; // Positive balance
+                $debit_balance = $net_balance < 0 ? abs($net_balance) : 0;
+                $credit_balance = $net_balance > 0 ? $net_balance : 0;
             } else {
                 $net_balance = $total_payments - $total_receipts; // Payments minus receipts
                 $balance_status = $net_balance > 0 ? 'Credit Balance (We Owe)' : 
@@ -332,6 +394,26 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
                     'amount' => $entity_type === 'bank_account' ? -$payment['amount'] : $payment['amount'],
                     'currency' => $payment['currency'],
                     'bank_account' => $payment['bank_account'],
+                    'running_balance' => 0
+                ];
+            }
+            
+            // Add GL entries as transactions
+            foreach ($gl_entries as $gl) {
+                $gl_amount = 0;
+                if ((float)$gl['debit_amount'] > 0) {
+                    $gl_amount = $entity_type === 'bank_account' ? (float)$gl['debit_amount'] : -(float)$gl['debit_amount'];
+                } elseif ((float)$gl['credit_amount'] > 0) {
+                    $gl_amount = $entity_type === 'bank_account' ? -(float)$gl['credit_amount'] : (float)$gl['credit_amount'];
+                }
+                $transactions[] = [
+                    'date' => $gl['transaction_date'],
+                    'type' => 'gl_entry',
+                    'description' => $gl['description'],
+                    'reference' => $gl['reference_no'],
+                    'amount' => $gl_amount,
+                    'currency' => 'TZS',
+                    'bank_account' => $gl['account_code'] . ($gl['account_name'] ? ' - ' . $gl['account_name'] : ''),
                     'running_balance' => 0
                 ];
             }
@@ -595,7 +677,8 @@ function exportToExcel($data, $entity_type = null, $as_of_date = null, $start_da
             echo '<td>' . ucfirst($entity_info['type']) . '</td>';
             echo '<td>' . htmlspecialchars($entity_info['name']) . '</td>';
             echo '<td class="date">' . $transaction['date'] . '</td>';
-            echo '<td>' . ucfirst($transaction['type']) . '</td>';
+            $type_label = $transaction['type'] === 'gl_entry' ? 'GL Entry' : ucfirst($transaction['type']);
+            echo '<td>' . $type_label . '</td>';
             echo '<td>' . htmlspecialchars($transaction['reference']) . '</td>';
             echo '<td>' . htmlspecialchars($transaction['description']) . '</td>';
             echo '<td>' . ($transaction['bank_account'] ?: 'N/A') . '</td>';
@@ -887,6 +970,7 @@ $start_date = isset($_GET['start_date']) ? $_GET['start_date'] : null;
 $end_date = isset($_GET['end_date']) ? $_GET['end_date'] : null;
 $balance_status = isset($_GET['balance_status']) ? $_GET['balance_status'] : 'all';
 $aging_filter = isset($_GET['aging_filter']) ? $_GET['aging_filter'] : 'all';
+$hide_zero = isset($_GET['hide_zero']) ? (int)$_GET['hide_zero'] : 1;
 
 // Validate dates
 if (!validateDate($as_of_date)) $as_of_date = date('Y-m-d');
@@ -1894,6 +1978,7 @@ include '../includes/header.php';
                                 <th>Date</th>
                                 <th>Reference</th>
                                 <th>Description</th>
+                                <th>Account</th>
                                 <th>Debit (TZS)</th>
                                 <th>Credit (TZS)</th>
                                 <th>Balance (TZS)</th>
@@ -2068,6 +2153,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         <td>${formatDate(transaction.date)}</td>
                         <td><code>${transaction.reference}</code></td>
                         <td>${transaction.description}</td>
+                        <td><code class="small">${transaction.bank_account || '-'}</code></td>
                         <td class="text-danger fw-bold">${debit > 0 ? formatCurrency(debit, transaction.currency) : '-'}</td>
                         <td class="text-success fw-bold">${credit > 0 ? formatCurrency(credit, transaction.currency) : '-'}</td>
                         <td class="${balanceClass} fw-bold">${formatCurrency(Math.abs(transaction.running_balance), transaction.currency)}</td>
@@ -2135,6 +2221,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         <td>${formatDate(transaction.date)}</td>
                         <td><code>${transaction.reference}</code></td>
                         <td>${transaction.description}</td>
+                        <td><code class="small">${transaction.bank_account || '-'}</code></td>
                         <td class="text-danger fw-bold">${debit > 0 ? formatCurrency(debit, transaction.currency) : '-'}</td>
                         <td class="text-success fw-bold">${credit > 0 ? formatCurrency(credit, transaction.currency) : '-'}</td>
                         <td class="${balanceClass} fw-bold">${formatCurrency(Math.abs(transaction.running_balance), transaction.currency)}</td>

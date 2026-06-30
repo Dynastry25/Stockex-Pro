@@ -94,7 +94,16 @@ function getDefaultAccountId($account_code) {
         '7006' => 34, // Office Supplies
         '7007' => 35, // Bank Charges
         '7008' => 36, // Audit & Legal Fees
-        '7009' => 37  // Depreciation Expense
+        '7009' => 37, // Depreciation Expense
+        // New account codes from the migrated COA
+        '1112' => 38, // Cash at Bank
+        '1121' => 39, // Trade Receivables
+        '411'  => 40, // Brokerage Commission Income
+        '213'  => 41, // VAT Payable
+        '2111' => 42, // CMSA Fees Payable
+        '2112' => 43, // DSE Fees Payable
+        '2113' => 44, // CSDR Fees Payable
+        '2114' => 45, // Value Retention Fees Payable (VRF)
     ];
     
     return $default_mapping[$account_code] ?? 1; // Default to Cash
@@ -200,12 +209,12 @@ function createBondAccountingEntries($db, $trade_reference, $consideration, $fee
     try {
         $entries_created = 0;
         
-        $cash_account = getAccountIdByCode($db, '1001');
-        $brokerage_income = getAccountIdByCode($db, '6001');
-        $vat_payable = getAccountIdByCode($db, '3007');
-        $cmsa_payable = getAccountIdByCode($db, '3008');
-        $csd_payable = getAccountIdByCode($db, '3009');
-        $dse_payable = getAccountIdByCode($db, '3010');
+        $cash_account = getAccountIdByCode($db, CASH_AT_BANK_CODE);
+        $brokerage_income = getAccountIdByCode($db, BROKERAGE_COMMISSION_INCOME_CODE);
+        $vat_payable = getAccountIdByCode($db, VAT_PAYABLE_CODE);
+        $cmsa_payable = getAccountIdByCode($db, getChargeAccountCode('cmsa'));
+        $csd_payable = getAccountIdByCode($db, getChargeAccountCode('csdr'));
+        $dse_payable = getAccountIdByCode($db, getChargeAccountCode('dse'));
         
         $brokerage_fee = $fees['brokerage'] ?? 0;
         $vat_fee = $fees['vat'] ?? 0;
@@ -358,13 +367,13 @@ function createEquityAccountingEntries($db, $trade_reference, $consideration, $f
     try {
         $entries_created = 0;
         
-        $cash_account = getAccountIdByCode($db, '1001');
-        $brokerage_income = getAccountIdByCode($db, '6001');
-        $vat_payable = getAccountIdByCode($db, '3007');
-        $cmsa_payable = getAccountIdByCode($db, '3008');
-        $csd_payable = getAccountIdByCode($db, '3009');
-        $dse_payable = getAccountIdByCode($db, '3010');
-        // Note: VRF uses the same account as DSE or create separate account if needed
+        $cash_account = getAccountIdByCode($db, CASH_AT_BANK_CODE);
+        $brokerage_income = getAccountIdByCode($db, BROKERAGE_COMMISSION_INCOME_CODE);
+        $vat_payable = getAccountIdByCode($db, VAT_PAYABLE_CODE);
+        $cmsa_payable = getAccountIdByCode($db, getChargeAccountCode('cmsa'));
+        $csd_payable = getAccountIdByCode($db, getChargeAccountCode('csdr'));
+        $dse_payable = getAccountIdByCode($db, getChargeAccountCode('dse'));
+        $vrf_payable = getAccountIdByCode($db, getChargeAccountCode('vrf'));
         
         $brokerage_fee = $fees['brokerage'] ?? 0;
         $vat_fee = $fees['vat'] ?? 0;
@@ -450,11 +459,10 @@ function createEquityAccountingEntries($db, $trade_reference, $consideration, $f
                 }
             }
             
-            // Entry 7: Credit VRF Fees (if separate account exists, otherwise include in DSE)
+            // Entry 7: Credit VRF Fees Payable (separate account)
             if ($vrf_fee > 0) {
-                // Use DSE account for VRF if no separate account, or create separate VRF account
                 $entry7 = recordGeneralLedgerEntry(
-                    $db, $trade_date, $dse_payable, // Using DSE account for VRF
+                    $db, $trade_date, $vrf_payable,
                     0, $vrf_fee,
                     "VRF fees payable - {$trade_reference}",
                     $trade_reference, 'fee'
