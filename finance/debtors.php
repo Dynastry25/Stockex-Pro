@@ -1774,10 +1774,9 @@ include '../includes/header.php';
                                                 <code><?php echo htmlspecialchars($entity_info['code']); ?></code>
                                             </td>
                                             <td>
-                                                <a href="#" class="view-transactions-link text-decoration-none"
-                                                   data-entity-type="<?php echo $entity_info['type']; ?>"
-                                                   data-entity-id="<?php echo $entity_info['id']; ?>"
-                                                   data-entity-name="<?php echo htmlspecialchars($entity_info['name']); ?>">
+                                                <a href="entity_ledger.php?type=<?php echo urlencode($entity_info['type']); ?>&id=<?php echo urlencode($entity_info['id']); ?>"
+                                                   class="text-decoration-none"
+                                                   title="View full ledger for <?php echo htmlspecialchars($entity_info['name']); ?>">
                                                     <strong><?php echo htmlspecialchars($entity_info['name']); ?></strong>
                                                 </a>
                                                 <?php if ($entity_info['type'] == 'client' && isset($entity_info['details']['client_type'])): ?>

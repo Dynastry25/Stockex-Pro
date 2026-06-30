@@ -214,6 +214,7 @@ function createJournalEntry($db, $data) {
         
         $account_id = $account_info['id'];
         $account_name = $account_info['account_name'];
+        $normal_balance = $account_info['normal_balance'] ?? 'debit';
         
         // Get current user info
         $current_user = $_SESSION['username'] ?? 'system';
@@ -255,6 +256,41 @@ function createJournalEntry($db, $data) {
         ]);
         
         $journal_id = $db->lastInsertId();
+        
+        // Also insert into general_ledger for visibility in financial reports
+        $gl_stmt = $db->prepare("
+            INSERT INTO general_ledger (
+                journal_id, transaction_date, account_id, account_code, account_name,
+                debit_amount, credit_amount, running_balance, balance_type,
+                description, reference_no, reference_type,
+                entity_id, entity_name, entity_type,
+                currency, fiscal_year, fiscal_period,
+                is_reconciled, reconciliation_id, status, notes,
+                created_by, created_by_username
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0.00, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, 'active', NULL, ?, ?)
+        ");
+        
+        $gl_stmt->execute([
+            $journal_id,
+            $data['transaction_date'],
+            $account_id,
+            $data['account_code'],
+            $account_name,
+            $data['debit_amount'],
+            $data['credit_amount'],
+            $normal_balance,
+            $data['description'],
+            $data['reference_no'],
+            $data['reference_type'],
+            $data['entity_id'] ?? null,
+            $data['entity_name'] ?? null,
+            $data['entity_type'] ?? null,
+            $data['currency'],
+            $fiscal_year,
+            $fiscal_period,
+            $user_id,
+            $current_user
+        ]);
         
         return $journal_id;
         
@@ -1102,28 +1138,39 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                                 
                                 // 2. Credit Control Account or Income Account
                                 if ($account_of === 'O') {
-                                    // For nominal clients, credit income account
-                                    $income_account = getAppropriateAccountLevel($db, 'income');
-                                    if ($income_account) {
-                                        $income_journal_data = [
-                                            'transaction_date' => $receipt_date,
-                                            'reference_no' => $receipt_no,
-                                            'reference_type' => 'receipt',
-                                            'description' => "Income: $narration",
-                                            'account_code' => $income_account['account_code'],
-                                            'debit_amount' => 0,
-                                            'credit_amount' => $amount,
-                                            'currency' => $currency,
-                                            'entity_id' => $entity_id,
-                                            'entity_name' => $name,
-                                            'entity_type' => $entity_type,
-                                            'bank_account_id' => $ac_debit,
-                                            'bank_name' => $bank_name,
-                                            'bank_account_number' => $bank_account_number
-                                        ];
-                                        
-                                        createJournalEntry($db, $income_journal_data);
+                                    // For nominal clients, use the selected chart_of_accounts account code directly
+                                    $income_account_code = $entity_id;
+                                    
+                                    // Verify the account exists in chart_of_accounts
+                                    $acct_stmt = $db->prepare("SELECT account_code, account_name FROM chart_of_accounts WHERE account_code = ? AND is_active = 1 LIMIT 1");
+                                    $acct_stmt->execute([$income_account_code]);
+                                    $account_info = $acct_stmt->fetch();
+                                    
+                                    if ($account_info) {
+                                        $income_account_code = $account_info['account_code'];
+                                        $income_account_name = $account_info['account_name'];
+                                    } else {
+                                        error_log("WARNING: Nominal client account code '$income_account_code' not found in chart_of_accounts");
                                     }
+                                    
+                                    $income_journal_data = [
+                                        'transaction_date' => $receipt_date,
+                                        'reference_no' => $receipt_no,
+                                        'reference_type' => 'receipt',
+                                        'description' => "Income: $narration",
+                                        'account_code' => $income_account_code,
+                                        'debit_amount' => 0,
+                                        'credit_amount' => $amount,
+                                        'currency' => $currency,
+                                        'entity_id' => $entity_id,
+                                        'entity_name' => $name,
+                                        'entity_type' => $entity_type,
+                                        'bank_account_id' => $ac_debit,
+                                        'bank_name' => $bank_name,
+                                        'bank_account_number' => $bank_account_number
+                                    ];
+                                    
+                                    createJournalEntry($db, $income_journal_data);
                                 } else {
                                     // For other entities, credit their control account
                                     $control_journal_data = [
