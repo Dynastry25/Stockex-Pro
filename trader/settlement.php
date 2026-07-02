@@ -43,7 +43,7 @@ function syncSettlementTradeToDealingSheetSafely($db, $tradeId, $user) {
 
 function calculateBankCharge($consideration) {
     if ($consideration < 100000) {
-        return 0;
+        return 250;
     } elseif ($consideration < 10000000) {
         return 2000;
     } elseif ($consideration < 50000000) {
