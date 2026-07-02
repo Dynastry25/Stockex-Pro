@@ -1840,7 +1840,7 @@ function calculateEquityFeesForReport($consideration) {
     // Calculate tiered brokerage
     if ($consideration <= 10000000) {
         $brokerage = $consideration * (1.7 / 100);
-    } elseif ($consideration <= 40000000) {
+    } elseif ($consideration <= 50000000) {
         $brokerage = $consideration * (1.5 / 100);
     } else {
         $brokerage = $consideration * (0.8 / 100);

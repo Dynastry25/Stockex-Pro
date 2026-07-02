@@ -476,7 +476,7 @@ if (!function_exists('dealingSheetEnsureSchema')) {
                 $remaining -= $tier1;
             }
 
-            $tier2 = min(max($remaining, 0), 30000000);
+            $tier2 = min(max($remaining, 0), 40000000);
             if ($tier2 > 0) {
                 $fees['brokerage'] += $tier2 * (1.5 / 100);
                 $remaining -= $tier2;

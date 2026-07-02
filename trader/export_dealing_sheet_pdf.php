@@ -118,7 +118,7 @@ function calculateFees($asset_class, $consideration, $quantity, $price) {
         if ($consideration <= 10000000) {
             $fees['brokerage'] = $consideration * (1.70 / 100);
             $fees['tier_details'][] = ['fee' => $fees['brokerage'], 'label' => 'Up to 10M @ 1.7000%'];
-        } elseif ($consideration <= 40000000) {
+        } elseif ($consideration <= 50000000) {
             $tier1 = 10000000 * (1.70 / 100);
             $tier2 = ($consideration - 10000000) * (1.50 / 100);
             $fees['brokerage'] = $tier1 + $tier2;
@@ -126,12 +126,12 @@ function calculateFees($asset_class, $consideration, $quantity, $price) {
             $fees['tier_details'][] = ['fee' => $tier2, 'label' => 'Next ' . number_format(($consideration - 10000000)/1000000, 1) . 'M @ 1.5000%'];
         } else {
             $tier1 = 10000000 * (1.70 / 100);
-            $tier2 = 30000000 * (1.50 / 100);
-            $tier3 = ($consideration - 40000000) * (0.80 / 100);
+            $tier2 = 40000000 * (1.50 / 100);
+            $tier3 = ($consideration - 50000000) * (0.80 / 100);
             $fees['brokerage'] = $tier1 + $tier2 + $tier3;
             $fees['tier_details'][] = ['fee' => $tier1, 'label' => 'First 10M @ 1.7000%'];
-            $fees['tier_details'][] = ['fee' => $tier2, 'label' => 'Next 30M @ 1.5000%'];
-            $fees['tier_details'][] = ['fee' => $tier3, 'label' => 'Excess ' . number_format(($consideration - 40000000)/1000000, 1) . 'M @ 0.8000%'];
+            $fees['tier_details'][] = ['fee' => $tier2, 'label' => 'Next 40M @ 1.5000%'];
+            $fees['tier_details'][] = ['fee' => $tier3, 'label' => 'Excess ' . number_format(($consideration - 50000000)/1000000, 1) . 'M @ 0.8000%'];
         }
         
         $fees['vat'] = $fees['brokerage'] * 0.18;

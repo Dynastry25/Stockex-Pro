@@ -416,7 +416,7 @@ function calculateDealingSheetFees($asset_class, $consideration, $quantity, $pri
                 'label' => 'Up to 10M @ 1.7000%'
             ];
             $total_brokerage = $brokerage_fee;
-        } elseif ($consideration <= 40000000) {
+        } elseif ($consideration <= 50000000) {
             $tier1_fee = 10000000 * (1.7000 / 100);
             $tier2_fee = ($consideration - 10000000) * (1.5000 / 100);
             $fees['tier_details'][] = [
@@ -430,19 +430,19 @@ function calculateDealingSheetFees($asset_class, $consideration, $quantity, $pri
             $total_brokerage = $tier1_fee + $tier2_fee;
         } else {
             $tier1_fee = 10000000 * (1.7000 / 100);
-            $tier2_fee = 30000000 * (1.5000 / 100);
-            $tier3_fee = ($consideration - 40000000) * (0.8000 / 100);
+            $tier2_fee = 40000000 * (1.5000 / 100);
+            $tier3_fee = ($consideration - 50000000) * (0.8000 / 100);
             $fees['tier_details'][] = [
                 'fee' => $tier1_fee,
                 'label' => 'First 10M @ 1.7000%'
             ];
             $fees['tier_details'][] = [
                 'fee' => $tier2_fee,
-                'label' => 'Next 30M @ 1.5000%'
+                'label' => 'Next 40M @ 1.5000%'
             ];
             $fees['tier_details'][] = [
                 'fee' => $tier3_fee,
-                'label' => 'Excess ' . number_format(($consideration - 40000000)/1000000, 1) . 'M @ 0.8000%'
+                'label' => 'Excess ' . number_format(($consideration - 50000000)/1000000, 1) . 'M @ 0.8000%'
             ];
             $total_brokerage = $tier1_fee + $tier2_fee + $tier3_fee;
         }

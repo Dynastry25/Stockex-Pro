@@ -214,10 +214,10 @@ function calculateBondBrokerageWithLibertyReplaceAll($face_value, $liberty_rate)
 function calculateEquityBrokerageFee($consideration, $tier1_rate = 1.7, $tier2_rate = 1.5, $tier3_rate = 0.8) {
     if ($consideration <= 10000000) {
         return $consideration * ($tier1_rate / 100);
-    } elseif ($consideration <= 40000000) {
+    } elseif ($consideration <= 50000000) {
         return 10000000 * ($tier1_rate / 100) + ($consideration - 10000000) * ($tier2_rate / 100);
     } else {
-        return 10000000 * ($tier1_rate / 100) + 30000000 * ($tier2_rate / 100) + ($consideration - 40000000) * ($tier3_rate / 100);
+        return 10000000 * ($tier1_rate / 100) + 40000000 * ($tier2_rate / 100) + ($consideration - 50000000) * ($tier3_rate / 100);
     }
 }
 
@@ -507,7 +507,7 @@ function calculateEquityFeesForContract($db, $consideration, $effective_rate = n
                 'fee' => $fees['brokerage'],
                 'label' => 'Up to 10M @ ' . number_format($rate1, 4) . '%'
             ];
-        } elseif ($consideration <= 40000000) {
+        } elseif ($consideration <= 50000000) {
             $tier1 = 10000000 * ($rate1 / 100);
             $tier2 = ($consideration - 10000000) * ($rate2 / 100);
             $fees['brokerage'] = $tier1 + $tier2;
@@ -526,8 +526,8 @@ function calculateEquityFeesForContract($db, $consideration, $effective_rate = n
             ];
         } else {
             $tier1 = 10000000 * ($rate1 / 100);
-            $tier2 = 30000000 * ($rate2 / 100);
-            $tier3 = ($consideration - 40000000) * ($rate3 / 100);
+            $tier2 = 40000000 * ($rate2 / 100);
+            $tier3 = ($consideration - 50000000) * ($rate3 / 100);
             $fees['brokerage'] = $tier1 + $tier2 + $tier3;
 
             $fees['tier_details'][] = [
@@ -537,16 +537,16 @@ function calculateEquityFeesForContract($db, $consideration, $effective_rate = n
                 'label' => 'First 10M @ ' . number_format($rate1, 4) . '%'
             ];
             $fees['tier_details'][] = [
-                'amount' => 30000000,
+                'amount' => 40000000,
                 'rate' => $rate2,
                 'fee' => $tier2,
-                'label' => 'Next 30M @ ' . number_format($rate2, 4) . '%'
+                'label' => 'Next 40M @ ' . number_format($rate2, 4) . '%'
             ];
             $fees['tier_details'][] = [
-                'amount' => $consideration - 40000000,
+                'amount' => $consideration - 50000000,
                 'rate' => $rate3,
                 'fee' => $tier3,
-                'label' => 'Excess ' . number_format(($consideration - 40000000)/1000000, 1) . 'M @ ' . number_format($rate3, 4) . '%'
+                'label' => 'Excess ' . number_format(($consideration - 50000000)/1000000, 1) . 'M @ ' . number_format($rate3, 4) . '%'
             ];
         }
     }
@@ -1575,10 +1575,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['upload_trade'])) {
 
                     if ($consideration <= 10000000) {
                         $final_brokerage_fee = $consideration * ($rate1 / 100);
-                    } elseif ($consideration <= 40000000) {
+                    } elseif ($consideration <= 50000000) {
                         $final_brokerage_fee = 10000000 * ($rate1 / 100) + ($consideration - 10000000) * ($rate2 / 100);
                     } else {
-                        $final_brokerage_fee = 10000000 * ($rate1 / 100) + 30000000 * ($rate2 / 100) + ($consideration - 40000000) * ($rate3 / 100);
+                        $final_brokerage_fee = 10000000 * ($rate1 / 100) + 40000000 * ($rate2 / 100) + ($consideration - 50000000) * ($rate3 / 100);
                     }
                 }
             }

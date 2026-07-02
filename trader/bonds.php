@@ -592,7 +592,7 @@ function getEquityBrokerageRate($db, $consideration, &$tier_details = []) {
             'label' => 'Up to 10M @ ' . number_format($rate, 4) . '%'
         ];
         return $rate;
-    } elseif ($consideration <= 40000000) {
+    } elseif ($consideration <= 50000000) {
         $config1 = getFeeConfiguration($db, 'BROKERAGE_TIER1', 'EQUITY');
         $rate1 = $config1['rate_percentage'] ?? 1.7000;
         $config2 = getFeeConfiguration($db, 'BROKERAGE_TIER2', 'EQUITY');
@@ -623,8 +623,8 @@ function getEquityBrokerageRate($db, $consideration, &$tier_details = []) {
         $rate3 = $config3['rate_percentage'] ?? 0.8000;
         
         $tier1_amount = 10000000;
-        $tier2_amount = 30000000; // 40M - 10M
-        $tier3_amount = $consideration - 40000000;
+        $tier2_amount = 40000000; // 50M - 10M
+        $tier3_amount = $consideration - 50000000;
         
         $tier_details[] = [
             'amount' => $tier1_amount,
@@ -636,7 +636,7 @@ function getEquityBrokerageRate($db, $consideration, &$tier_details = []) {
             'amount' => $tier2_amount,
             'rate' => $rate2,
             'fee' => $tier2_amount * ($rate2 / 100),
-            'label' => 'Next 30M @ ' . number_format($rate2, 4) . '%'
+            'label' => 'Next 40M @ ' . number_format($rate2, 4) . '%'
         ];
         $tier_details[] = [
             'amount' => $tier3_amount,

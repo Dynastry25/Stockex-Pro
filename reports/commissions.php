@@ -179,18 +179,18 @@ function calculateEquityCommission($consideration, $rate, $is_liberty = false, $
         if ($liberty_mode === 'tier_override') {
             $liberty_rate_decimal = $rate / 100;
             
-            if ($consideration <= 10000000) {
-                return $consideration * (1.7 / 100);
-            } elseif ($consideration <= 40000000) {
-                $first_tier = 10000000 * (1.7 / 100);
-                $excess = ($consideration - 10000000) * $liberty_rate_decimal;
-                return $first_tier + $excess;
-            } else {
-                $first_tier = 10000000 * (1.7 / 100);
-                $second_tier = 30000000 * (1.5 / 100);
-                $excess = ($consideration - 40000000) * $liberty_rate_decimal;
-                return $first_tier + $second_tier + $excess;
-            }
+        if ($consideration <= 10000000) {
+            return $consideration * (1.7 / 100);
+        } elseif ($consideration <= 50000000) {
+            $first_tier = 10000000 * (1.7 / 100);
+            $excess = ($consideration - 10000000) * $liberty_rate_decimal;
+            return $first_tier + $excess;
+        } else {
+            $first_tier = 10000000 * (1.7 / 100);
+            $second_tier = 40000000 * (1.5 / 100);
+            $excess = ($consideration - 50000000) * $liberty_rate_decimal;
+            return $first_tier + $second_tier + $excess;
+        }
         } else {
             return $consideration * ($rate / 100);
         }
@@ -207,7 +207,7 @@ function calculateTieredBrokerage($consideration, &$tier_details = []) {
     $tier1_rate = 1.7 / 100;
     $tier1_limit = 10000000;
     $tier2_rate = 1.5 / 100;
-    $tier2_limit = 40000000;
+    $tier2_limit = 50000000;
     $tier3_rate = 0.8 / 100;
     
     if ($consideration <= $tier1_limit) {
@@ -256,7 +256,7 @@ function calculateTieredBrokerage($consideration, &$tier_details = []) {
             'amount' => $tier2_amount,
             'rate' => 1.5,
             'fee' => $tier2_fee,
-            'label' => 'Next 30M @ 1.5%'
+            'label' => 'Next 40M @ 1.5%'
         ];
         $tier_details[] = [
             'amount' => $tier3_amount,

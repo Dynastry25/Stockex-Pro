@@ -507,7 +507,7 @@ function calculateFees($db, $asset_class, $consideration, $quantity, $price) {
                 'label' => 'Up to 10M @ ' . number_format($rate, 4) . '%'
             ];
             $total_brokerage = $brokerage_fee;
-        } elseif ($consideration <= 40000000) {
+        } elseif ($consideration <= 50000000) {
             $rate1 = 1.7000;
             $rate2 = 1.5000;
             
@@ -537,7 +537,7 @@ function calculateFees($db, $asset_class, $consideration, $quantity, $price) {
             
             $tier1_amount = 10000000;
             $tier2_amount = 40000000;
-            $tier3_amount = $consideration - 40000000;
+            $tier3_amount = $consideration - 50000000;
             
             $tier1_fee = $tier1_amount * ($rate1 / 100);
             $tier2_fee = $tier2_amount * ($rate2 / 100);
@@ -553,7 +553,7 @@ function calculateFees($db, $asset_class, $consideration, $quantity, $price) {
                 'amount' => $tier2_amount,
                 'rate' => $rate2,
                 'fee' => $tier2_fee,
-                'label' => 'Next 30M @ ' . number_format($rate2, 4) . '%'
+                'label' => 'Next 40M @ ' . number_format($rate2, 4) . '%'
             ];
             $fees['tier_details'][] = [
                 'amount' => $tier3_amount,

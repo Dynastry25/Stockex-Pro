@@ -84,7 +84,7 @@ function calculateEquityStandard($consideration) {
     $rate2 = 1.5;
     $rate3 = 0.8;
     $limit1 = 10000000;
-    $limit2 = 40000000;
+    $limit2 = 50000000;
     
     if ($consideration <= $limit1) {
         return $consideration * ($rate1 / 100);
@@ -501,7 +501,7 @@ if ($trade && $trade['client_cds_account']) {
 $is_bond = ($trade['asset_class'] === 'bond' || $trade['asset_class'] === 'treasury_bond');
 $fee_calculation_note = $is_bond ? 
     'Bond: Face Value tiered (First 100M at 0.063132%, excess at 0.035%)' : 
-    'Equity: Consideration tiered (First 10M at 1.7%, Next 30M at 1.5%, Excess at 0.8%)';
+    'Equity: Consideration tiered (First 10M at 1.7%, Next 40M at 1.5%, Excess at 0.8%)';
 
 $page_title = 'View Trade: ' . htmlspecialchars($trade['trade_reference']);
 include '../includes/header.php';
@@ -1040,7 +1040,7 @@ function previewFee() {
         } else {
             if (feeType === 'normal' || mode === 'standard') {
                 calculatedFee = calculateEquityStandardJS(consideration);
-                calculationNote = 'Equity STANDARD: First 10M at 1.7%, Next 30M at 1.5%, Excess at 0.8%';
+                calculationNote = 'Equity STANDARD: First 10M at 1.7%, Next 40M at 1.5%, Excess at 0.8%';
             } else if (mode === 'replace_all') {
                 calculatedFee = calculateEquityReplaceAllJS(consideration, rate);
                 calculationNote = 'Equity REPLACE ALL: Full liberty rate on entire consideration';
