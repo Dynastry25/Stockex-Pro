@@ -50,6 +50,7 @@ $regulatory_assignments_created = 0;
 $csd_references_used = 0;
 $duplicates_skipped = 0;
 $duplicate_references = [];
+$client_trades_skipped = 0; // NEW: Track skipped client trades
 
 // Get company details
 function getCompanyDetails($db) {
@@ -573,18 +574,6 @@ function isCustodianTrade($sca_code, $company_code) {
     return !empty($sca_code) && $sca_code !== $company_code;
 }
 
-// Get account ID by account code
-function getAccountIdByCode($db, $account_code) {
-    try {
-        $stmt = $db->prepare("SELECT id FROM chart_of_accounts WHERE account_code = ? AND is_active = 1");
-        $stmt->execute([$account_code]);
-        $account = $stmt->fetch(PDO::FETCH_ASSOC);
-        return $account ? $account['id'] : 1;
-    } catch (Exception $e) {
-        return 1;
-    }
-}
-
 // Simple general ledger entry function
 function recordGeneralLedgerEntry($db, $transaction_date, $account_id, $debit, $credit, $description, $reference_no, $reference_type = 'trade') {
     try {
@@ -682,19 +671,22 @@ function calculateEquityFees($db, $consideration) {
     }
 }
 
-// Create accounting entries - posts brokerage, VAT, AND all charges to payable accounts
+// =====================================================
+// UPDATED: Create accounting entries - NO CASH AT BANK
+// Uses: 411 (Brokerage Income), 213 (VAT), 2111 (CMSA), 
+// 2112 (DSE), 2113 (CSDR), 2114 (VRF)
+// =====================================================
 function createEquityAccountingEntries($db, $trade_reference, $consideration, $fees, $trade_side, $client_name, $company_name, $trade_date, $is_custodian_trade = false) {
     try {
         $entries_created = 0;
         
-        $cash_account = getAccountIdByCode($db, CASH_AT_BANK_CODE);
-        $brokerage_income = getAccountIdByCode($db, BROKERAGE_COMMISSION_INCOME_CODE);
-        $vat_payable = getAccountIdByCode($db, VAT_PAYABLE_CODE);
-        
-        $cmsa_payable = getAccountIdByCode($db, getChargeAccountCode('cmsa'));
-        $dse_payable = getAccountIdByCode($db, getChargeAccountCode('dse'));
-        $csdr_payable = getAccountIdByCode($db, getChargeAccountCode('csdr'));
-        $vrf_payable = getAccountIdByCode($db, getChargeAccountCode('vrf'));
+        // Get account IDs using constants from account_mapping.php
+        $brokerage_income = getAccountIdByCode($db, BROKERAGE_COMMISSION_INCOME_CODE);  // 411
+        $vat_payable = getAccountIdByCode($db, VAT_PAYABLE_CODE);                        // 213
+        $cmsa_payable = getAccountIdByCode($db, CMSA_PAYABLE_CODE);                      // 2111
+        $dse_payable = getAccountIdByCode($db, DSE_PAYABLE_CODE);                        // 2112
+        $csdr_payable = getAccountIdByCode($db, CSDR_PAYABLE_CODE);                      // 2113
+        $vrf_payable = getAccountIdByCode($db, VRF_PAYABLE_CODE);                        // 2114
         
         $brokerage_fee = $fees['brokerage'] ?? 0;
         $vat_fee = $fees['vat'] ?? 0;
@@ -703,60 +695,59 @@ function createEquityAccountingEntries($db, $trade_reference, $consideration, $f
         $csd_fee = $fees['csd'] ?? 0;
         $vrf_fee = $fees['vrf'] ?? 0;
         
-        // Include CSDR from csd key if csdr key is not present
+        // CSDR fee uses the csd value
         $csdr_fee = $fees['csdr'] ?? $csd_fee;
         
-        // Total amount to debit cash = all fees collected
-        $total_fees = $brokerage_fee + $vat_fee + $cmsa_fee + $dse_fee + $csdr_fee + $vrf_fee;
+        // =====================================================
+        // NO CASH AT BANK ENTRIES - Fees are directly credited
+        // to their respective payable/income accounts
+        // =====================================================
         
-        if ($total_fees > 0) {
-            // Debit Cash for total fees collected
-            if (!isGLDuplicateEntry($db, $trade_reference, CASH_AT_BANK_CODE, 'Total equity fees')) {
-                if (recordGeneralLedgerEntry($db, $trade_date, $cash_account, $total_fees, 0, "Total equity fees received - {$trade_reference} - {$client_name}", $trade_reference, 'fee')) {
-                    $entries_created++;
-                }
+        // 1. Credit Brokerage Income (411)
+        if ($brokerage_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, BROKERAGE_COMMISSION_INCOME_CODE, 'Equity brokerage income')) {
+            if (recordGeneralLedgerEntry($db, $trade_date, $brokerage_income, 0, $brokerage_fee, 
+                "Equity brokerage income - {$trade_reference} - {$client_name}", $trade_reference, 'fee')) {
+                $entries_created++;
             }
-            
-            // Credit Brokerage Income
-            if ($brokerage_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, BROKERAGE_COMMISSION_INCOME_CODE, 'Equity brokerage income')) {
-                if (recordGeneralLedgerEntry($db, $trade_date, $brokerage_income, 0, $brokerage_fee, "Equity brokerage income - {$trade_reference}", $trade_reference, 'fee')) {
-                    $entries_created++;
-                }
+        }
+        
+        // 2. Credit VAT Payable (213)
+        if ($vat_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, VAT_PAYABLE_CODE, 'VAT on equity brokerage')) {
+            if (recordGeneralLedgerEntry($db, $trade_date, $vat_payable, 0, $vat_fee, 
+                "VAT on equity brokerage - {$trade_reference}", $trade_reference, 'fee')) {
+                $entries_created++;
             }
-            
-            // Credit VAT Payable
-            if ($vat_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, VAT_PAYABLE_CODE, 'VAT on equity brokerage')) {
-                if (recordGeneralLedgerEntry($db, $trade_date, $vat_payable, 0, $vat_fee, "VAT on equity brokerage - {$trade_reference}", $trade_reference, 'fee')) {
-                    $entries_created++;
-                }
+        }
+        
+        // 3. Credit CMSA Payable (2111)
+        if ($cmsa_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, CMSA_PAYABLE_CODE, 'CMSA fees payable')) {
+            if (recordGeneralLedgerEntry($db, $trade_date, $cmsa_payable, 0, $cmsa_fee, 
+                "CMSA fees payable - {$trade_reference}", $trade_reference, 'fee')) {
+                $entries_created++;
             }
-            
-            // Credit CMSA Fees Payable
-            if ($cmsa_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, getChargeAccountCode('cmsa'), 'CMSA fees payable')) {
-                if (recordGeneralLedgerEntry($db, $trade_date, $cmsa_payable, 0, $cmsa_fee, "CMSA fees payable - {$trade_reference}", $trade_reference, 'fee')) {
-                    $entries_created++;
-                }
+        }
+        
+        // 4. Credit DSE Payable (2112)
+        if ($dse_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, DSE_PAYABLE_CODE, 'DSE fees payable')) {
+            if (recordGeneralLedgerEntry($db, $trade_date, $dse_payable, 0, $dse_fee, 
+                "DSE fees payable - {$trade_reference}", $trade_reference, 'fee')) {
+                $entries_created++;
             }
-            
-            // Credit DSE Fees Payable
-            if ($dse_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, getChargeAccountCode('dse'), 'DSE fees payable')) {
-                if (recordGeneralLedgerEntry($db, $trade_date, $dse_payable, 0, $dse_fee, "DSE fees payable - {$trade_reference}", $trade_reference, 'fee')) {
-                    $entries_created++;
-                }
+        }
+        
+        // 5. Credit CSDR Payable (2113)
+        if ($csdr_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, CSDR_PAYABLE_CODE, 'CSDR fees payable')) {
+            if (recordGeneralLedgerEntry($db, $trade_date, $csdr_payable, 0, $csdr_fee, 
+                "CSDR fees payable - {$trade_reference}", $trade_reference, 'fee')) {
+                $entries_created++;
             }
-            
-            // Credit CSDR Fees Payable
-            if ($csdr_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, getChargeAccountCode('csdr'), 'CSDR fees payable')) {
-                if (recordGeneralLedgerEntry($db, $trade_date, $csdr_payable, 0, $csdr_fee, "CSDR fees payable - {$trade_reference}", $trade_reference, 'fee')) {
-                    $entries_created++;
-                }
-            }
-            
-            // Credit VRF Fees Payable
-            if ($vrf_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, getChargeAccountCode('vrf'), 'VRF fees payable')) {
-                if (recordGeneralLedgerEntry($db, $trade_date, $vrf_payable, 0, $vrf_fee, "VRF fees payable - {$trade_reference}", $trade_reference, 'fee')) {
-                    $entries_created++;
-                }
+        }
+        
+        // 6. Credit VRF Payable (2114)
+        if ($vrf_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, VRF_PAYABLE_CODE, 'VRF fees payable')) {
+            if (recordGeneralLedgerEntry($db, $trade_date, $vrf_payable, 0, $vrf_fee, 
+                "VRF fees payable - {$trade_reference}", $trade_reference, 'fee')) {
+                $entries_created++;
             }
         }
         
@@ -768,38 +759,34 @@ function createEquityAccountingEntries($db, $trade_reference, $consideration, $f
     }
 }
 
-// Record Trade Receivable entry for Victory/B13 qualifying trades
+// =====================================================
+// UPDATED: Record Company trades to Marketable Securities (1151)
+// Client trades are SKIPPED - will be entered manually via receipts
+// NO CASH AT BANK
+// =====================================================
 function recordTradeReceivableEntry($db, $trade_reference, $consideration, $trade_side, $trade_date, $client_name = '') {
     try {
         $entries_created = 0;
-        $receivable_account = getAccountIdByCode($db, TRADE_RECEIVABLE_ACCOUNT_CODE);
-        $cash_account = getAccountIdByCode($db, CASH_AT_BANK_CODE);
+        // Use Marketable Securities - Equities (1151)
+        $marketable_securities_account = getAccountIdByCode($db, MARKETABLE_SECURITIES_EQUITIES_CODE);
         
         if ($consideration <= 0) {
             return true;
         }
         
         if ($trade_side === 'buy') {
-            // Buy: Debit Trade Receivables (asset increases), Credit Cash (asset decreases)
-            if (!isGLDuplicateEntry($db, $trade_reference, TRADE_RECEIVABLE_ACCOUNT_CODE, 'Trade receivable - buy')) {
-                if (recordGeneralLedgerEntry($db, $trade_date, $receivable_account, $consideration, 0, "Trade receivable - buy - {$trade_reference}", $trade_reference, 'trade')) {
-                    $entries_created++;
-                }
-            }
-            if (!isGLDuplicateEntry($db, $trade_reference, CASH_AT_BANK_CODE, 'Cash payment for trade')) {
-                if (recordGeneralLedgerEntry($db, $trade_date, $cash_account, 0, $consideration, "Cash payment for trade - {$trade_reference}", $trade_reference, 'trade')) {
+            // Buy: Debit Marketable Securities (1151)
+            if (!isGLDuplicateEntry($db, $trade_reference, MARKETABLE_SECURITIES_EQUITIES_CODE, 'Marketable Securities - Equity purchase')) {
+                if (recordGeneralLedgerEntry($db, $trade_date, $marketable_securities_account, $consideration, 0, 
+                    "Marketable Securities - Equity purchase - {$trade_reference} - {$client_name}", $trade_reference, 'trade')) {
                     $entries_created++;
                 }
             }
         } else {
-            // Sell: Debit Cash (asset increases), Credit Trade Receivables (asset decreases)
-            if (!isGLDuplicateEntry($db, $trade_reference, CASH_AT_BANK_CODE, 'Cash receipt from trade')) {
-                if (recordGeneralLedgerEntry($db, $trade_date, $cash_account, $consideration, 0, "Cash receipt from trade - {$trade_reference}", $trade_reference, 'trade')) {
-                    $entries_created++;
-                }
-            }
-            if (!isGLDuplicateEntry($db, $trade_reference, TRADE_RECEIVABLE_ACCOUNT_CODE, 'Trade receivable - sell')) {
-                if (recordGeneralLedgerEntry($db, $trade_date, $receivable_account, 0, $consideration, "Trade receivable - sell - {$trade_reference}", $trade_reference, 'trade')) {
+            // Sell: Credit Marketable Securities (1151)
+            if (!isGLDuplicateEntry($db, $trade_reference, MARKETABLE_SECURITIES_EQUITIES_CODE, 'Marketable Securities - Equity sale')) {
+                if (recordGeneralLedgerEntry($db, $trade_date, $marketable_securities_account, 0, $consideration, 
+                    "Marketable Securities - Equity sale - {$trade_reference} - {$client_name}", $trade_reference, 'trade')) {
                     $entries_created++;
                 }
             }
@@ -808,7 +795,7 @@ function recordTradeReceivableEntry($db, $trade_reference, $consideration, $trad
         return $entries_created > 0;
         
     } catch (Exception $e) {
-        error_log("Error recording trade receivable entry: " . $e->getMessage());
+        error_log("Error recording marketable securities entry: " . $e->getMessage());
         return false;
     }
 }
@@ -849,21 +836,36 @@ function recordRegulatoryFeeAssignment($db, $trade_reference, $fees, $client_nam
     }
 }
 
-// Record company investment
+// =====================================================
+// UPDATED: Record company investment to Marketable Securities
+// Uses: 1151 - Marketable Securities - Equities
+// NO CASH AT BANK
+// =====================================================
 function recordCompanyEquityInvestment($db, $trade_reference, $consideration, $trade_side, $trade_date) {
     try {
-        $investment_account = getAccountIdByCode($db, '1253');
-        $cash_account = getAccountIdByCode($db, '1112');
+        $entries_created = 0;
+        // Use Marketable Securities - Equities (1151)
+        $investment_account = getAccountIdByCode($db, MARKETABLE_SECURITIES_EQUITIES_CODE);
         
         if ($trade_side === 'buy') {
-            recordGeneralLedgerEntry($db, $trade_date, $investment_account, $consideration, 0, "Company equity purchase - {$trade_reference}", $trade_reference, 'company_investment');
-            recordGeneralLedgerEntry($db, $trade_date, $cash_account, 0, $consideration, "Cash paid for company equity - {$trade_reference}", $trade_reference, 'company_investment');
+            // Buy: Debit Marketable Securities (1151)
+            if (!isGLDuplicateEntry($db, $trade_reference, MARKETABLE_SECURITIES_EQUITIES_CODE, 'Marketable Securities - Equity purchase')) {
+                if (recordGeneralLedgerEntry($db, $trade_date, $investment_account, $consideration, 0, 
+                    "Marketable Securities - Equity purchase - {$trade_reference}", $trade_reference, 'company_investment')) {
+                    $entries_created++;
+                }
+            }
         } else {
-            recordGeneralLedgerEntry($db, $trade_date, $cash_account, $consideration, 0, "Cash from company equity sale - {$trade_reference}", $trade_reference, 'company_investment');
-            recordGeneralLedgerEntry($db, $trade_date, $investment_account, 0, $consideration, "Company equity sold - {$trade_reference}", $trade_reference, 'company_investment');
+            // Sell: Credit Marketable Securities (1151)
+            if (!isGLDuplicateEntry($db, $trade_reference, MARKETABLE_SECURITIES_EQUITIES_CODE, 'Marketable Securities - Equity sale')) {
+                if (recordGeneralLedgerEntry($db, $trade_date, $investment_account, 0, $consideration, 
+                    "Marketable Securities - Equity sale - {$trade_reference}", $trade_reference, 'company_investment')) {
+                    $entries_created++;
+                }
+            }
         }
         
-        return true;
+        return $entries_created > 0;
         
     } catch (Exception $e) {
         error_log("Error recording company equity investment: " . $e->getMessage());
@@ -1148,6 +1150,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $csd_references_used = 0;
                                 $duplicates_skipped = 0;
                                 $duplicate_references = [];
+                                $client_trades_skipped = 0; // NEW: Track skipped client trades
                                 
                                 foreach ($preview_data as $preview_row) {
                                     // Check if this is a duplicate
@@ -1272,24 +1275,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         if (recordETFTrade($db, $etf_trade_data)) $etf_trades_recorded++;
                                     }
                                     
-                                    // Check if trade qualifies for Trade Receivables (Victory/B13)
-                                    $is_victory_or_b13 = isVictoryOrB13Trade($mapped_data);
-                                    if ($is_victory_or_b13) {
-                                        $match_reason = getVictoryOrB13MatchReason($mapped_data);
-                                        error_log("Victory/B13 trade detected for {$trade_reference}: {$match_reason}");
+                                    // =====================================================
+                                    // UPDATED: ONLY Company trades go to Marketable Securities (1151)
+                                    // Client trades are SKIPPED - will be entered manually via receipts
+                                    // =====================================================
+                                    if ($consideration > 0) {
+                                        if ($is_company_trade) {
+                                            // Company trades: record to Marketable Securities (1151)
+                                            if (recordCompanyEquityInvestment($db, $trade_reference, $consideration, $trade_side, $trade_date)) {
+                                                $company_investments_recorded++;
+                                                error_log("Company equity recorded to Marketable Securities (1151): {$trade_reference}");
+                                            }
+                                        } else {
+                                            // Client trades: SKIP - will be entered manually via receipts
+                                            $client_trades_skipped++;
+                                            error_log("Client trade skipped (manual receipt entry needed): {$trade_reference} - {$client_name}");
+                                        }
                                     }
                                     
-                                    if ($is_victory_or_b13 && $consideration > 0) {
-                                        // Victory/B13 trades: record Trade Receivable (1121) instead of Equity Investment (1253)
-                                        if (recordTradeReceivableEntry($db, $trade_reference, $consideration, $trade_side, $trade_date, $client_name)) {
-                                            $victory_b13_receivables_recorded++;
-                                        }
-                                    } elseif ($is_company_trade && $consideration > 0) {
-                                        if (recordCompanyEquityInvestment($db, $trade_reference, $consideration, $trade_side, $trade_date)) {
-                                            $company_investments_recorded++;
-                                        }
-                                    }
-                                    
+                                    // Fees are still recorded for ALL trades (both company and client)
                                     if ($consideration > 0) {
                                         $fees = calculateEquityFees($db, $consideration);
                                         
@@ -1342,13 +1346,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 
                                 $db->commit();
                                 
-                                if ($processed > 0 || $duplicates_skipped > 0) {
+                                if ($processed > 0 || $duplicates_skipped > 0 || $client_trades_skipped > 0) {
                                     $success_message = "Successfully processed {$processed} trades";
                                     if ($etf_trades_recorded > 0) $success_message .= " ({$etf_trades_recorded} ETF trades)";
                                     if ($csd_references_used > 0) $success_message .= " <strong>{$csd_references_used} CSD references used</strong>";
                                     if ($financial_entries_created > 0) $success_message .= ". Created financial entries for {$financial_entries_created} trades";
-                                    if ($victory_b13_receivables_recorded > 0) $success_message .= ". <strong>{$victory_b13_receivables_recorded} Victory/B13 trade receivables recorded</strong>";
+                                    if ($company_investments_recorded > 0) $success_message .= ". <strong>{$company_investments_recorded} company trades recorded to Marketable Securities (1151)</strong>";
                                     if ($regulatory_assignments_created > 0) $success_message .= ". <strong>{$regulatory_assignments_created} regulatory fee assignments created</strong>";
+                                    
+                                    // NEW: Show client trades skipped message
+                                    if ($client_trades_skipped > 0) {
+                                        $success_message .= "<br><div class='alert alert-info mt-2'><i class='bi bi-info-circle'></i> <strong>{$client_trades_skipped} client trades were SKIPPED</strong> (will be entered manually via receipts).";
+                                        $success_message .= "<br><small>Only company trades are recorded to Marketable Securities (1151). Client trades require manual receipt entry.</small></div>";
+                                    }
                                     
                                     if ($duplicates_skipped > 0) {
                                         $success_message .= "<br><div class='alert alert-warning mt-2'><i class='bi bi-exclamation-triangle'></i> <strong>{$duplicates_skipped} duplicate trades were skipped</strong> because their Exchange References already exist in the system.";
@@ -1362,8 +1372,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         $success_message .= "</div>";
                                     }
                                     
-                                    $success_message .= "<br><small><strong>Date Extraction:</strong> Trade dates and settlement dates were extracted from your CSV file - NOT today's date.</small>";
-                                    $success_message .= "<br><small><strong>Unique Identifier:</strong> Exchange Reference is used to prevent duplicate uploads.</small>";
                                     $preview_data = [];
                                 }
                                 
@@ -1420,6 +1428,9 @@ include '../includes/header.php';
             <p class="text-warning small">
                 <i class="bi bi-exclamation-triangle"></i> <strong>Duplicate Detection:</strong> If you upload a file with trades that already exist (matching Exchange Reference), they will be <strong>SKIPPED</strong> and you will be alerted with the count and list of skipped references.
             </p>
+            <p class="text-info small">
+                <i class="bi bi-info-circle"></i> <strong>Accounting Changes:</strong> <strong>ONLY Company trades</strong> post to <strong>Marketable Securities - Equities (1151)</strong>. Client trades are <strong>SKIPPED</strong> for manual receipt entry. <strong>No Cash at Bank entries</strong> are created for trades or fees.
+            </p>
         </div>
     </div>
 
@@ -1449,8 +1460,7 @@ include '../includes/header.php';
                         <input type="file" class="form-control" id="share_file" name="share_file" accept=".csv, .txt" required>
                         <div class="form-text">
                             <strong>IMPORTANT:</strong> Only rows with <strong>"Asset Class = Equity"</strong> or <strong>"Asset Class = Exchange Traded Funds"</strong> will be processed<br>
-                           
-                     
+                            <strong>ACCOUNT UPDATE:</strong> <strong>ONLY Company trades</strong> post to <strong>Marketable Securities - Equities (1151)</strong>. Client trades are <strong>SKIPPED</strong> for manual receipt entry.
                         </div>
                     </div>
                     <button type="submit" class="btn btn-primary" id="uploadButton">
@@ -1557,7 +1567,19 @@ include '../includes/header.php';
                             <li><strong>Tier 2 (10M-40M)</strong>: 1.5%</li>
                             <li><strong>Tier 3 (>40M)</strong>: 0.8%</li>
                             <li><strong>VAT</strong>: 18% on brokerage</li>
-                            <li><strong>VRF Fee</strong>: 0.0025% (NEW)</li>
+                            <li><strong>VRF Fee</strong>: 0.0025%</li>
+                        </ul>
+                        <hr>
+                        <small class="text-muted"><strong>ACCOUNT MAPPING (No Cash):</strong></small>
+                        <ul class="mb-0">
+                            <li><strong>Company Trades</strong>: Marketable Securities - Equities (1151)</li>
+                            <li><strong>Client Trades</strong>: SKIPPED (Manual Receipt Entry)</li>
+                            <li><strong>Brokerage</strong>: 411 (Income)</li>
+                            <li><strong>VAT</strong>: 213 (Liability)</li>
+                            <li><strong>CMSA</strong>: 2111 (Liability)</li>
+                            <li><strong>DSE</strong>: 2112 (Liability)</li>
+                            <li><strong>CSDR</strong>: 2113 (Liability)</li>
+                            <li><strong>VRF</strong>: 2114 (Liability)</li>
                         </ul>
                     </div>
                 </div>
@@ -1568,6 +1590,7 @@ CRDB        Equity         2026/01/05    2026/01/06         1000        5000    
 VERTEX-ETF  Exchange Traded Funds 2026/01/06    2026/01/07         2100        400      Buy         EXCH-002</code></pre>
                     <small class="text-success"><strong>Note:</strong> Exchange Reference must be unique for each trade to prevent duplicates.</small>
                     <small class="text-warning"><strong>Duplicate Alert:</strong> If a trade with the same Exchange Reference already exists, it will be <strong>SKIPPED</strong> and you will be notified.</small>
+                    <small class="text-info"><strong>Account Update:</strong> <strong>ONLY Company trades</strong> post to <strong>Marketable Securities - Equities (1151)</strong>. Client trades are <strong>SKIPPED</strong> for manual receipt entry. No Cash at Bank entries.</small>
                 </div>
             </div>
         </div>
