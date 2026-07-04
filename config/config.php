@@ -13,10 +13,11 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// --- Global Constants ---
-// Use defined constants for values that do not change to improve maintainability.
-// define('BASE_URL', 'https://stockex.neovam.com/');
-define('BASE_URL', 'http://localhost/stockex/');
+// --- Global Constants (override via .env) ---
+require_once __DIR__ . '/env_loader.php';
+define('APP_ENV', env('APP_ENV', 'production'));
+define('APP_DEBUG', env('APP_DEBUG', 'false') === 'true');
+define('BASE_URL', rtrim(env('BASE_URL', env('APP_URL', 'http://145.241.96.142')), '/') . '/');
 define('UPLOAD_PATH', 'uploads/');
 define('MAX_FILE_SIZE', 50 * 1024 * 1024); // 50MB in bytes
 
@@ -39,11 +40,14 @@ require_once 'database.php';
 // Set the default timezone to prevent date/time inconsistencies.
 date_default_timezone_set('UTC');
 
-// Enable detailed error reporting for development.
-// IMPORTANT: These settings MUST be turned OFF in a production environment
-// to prevent sensitive information from being exposed.
-ini_set('display_errors', '1');
-error_reporting(E_ALL);
+// Error reporting controlled by APP_DEBUG env var
+if (APP_DEBUG) {
+    ini_set('display_errors', '1');
+    error_reporting(E_ALL);
+} else {
+    ini_set('display_errors', '0');
+    error_reporting(E_ALL & ~E_DEPRECATED & ~E_STRICT);
+}
 
 // --- Helper Functions ---
 /**

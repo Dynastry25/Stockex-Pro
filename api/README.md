@@ -79,7 +79,7 @@ GET /api/v1/index.php?table=trades&search=apple&status=completed
 
 Database connection is configured in `/config/database.php`:
 - Host: localhost
-- Database: jrozqhmy_stock_exchange_db
+- Database: stockex_exchange_new_db
 - Uses PDO with prepared statements for security
 
 ## 🛡️ Security Features

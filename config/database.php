@@ -2,19 +2,35 @@
 /**
  * Database Configuration
  * Stock Exchange Data Storage System
+ *
+ * Reads credentials from environment variables.
+ * Dev: project-root/.env
+ * Prod: /etc/stockex/stockex.env
  */
 
-class Database {
-    // private $host = 'localhost';
-    // private $db_name = 'jrozqhmy_stock_exchange_db';
-    // private $username = 'jrozqhmy_ernest';
-    // private $password = 'Ernestmswima@123';
-    // private $conn;
+require_once __DIR__ . '/env_loader.php';
 
-    private $host = 'localhost';
-    private $db_name = 'stockex_exchange_new_db';
-    private $username = 'root';
-    private $password = '';
+if (!defined('DB_HOST')) {
+    define('DB_HOST', env('DB_HOST', 'localhost'));
+}
+
+if (!defined('DB_NAME')) {
+    define('DB_NAME', env('DB_NAME', 'stockex_db'));
+}
+
+if (!defined('DB_USERNAME')) {
+    define('DB_USERNAME', env('DB_USERNAME', 'stockex_user'));
+}
+
+if (!defined('DB_PASSWORD')) {
+    define('DB_PASSWORD', env('DB_PASSWORD', ''));
+}
+
+class Database {
+    private $host = DB_HOST;
+    private $db_name = DB_NAME;
+    private $username = DB_USERNAME;
+    private $password = DB_PASSWORD;
     private $conn;
     
     public function getConnection() {
@@ -44,4 +60,3 @@ function getDBConnection() {
     $database = new Database();
     return $database->getConnection();
 }
-?>

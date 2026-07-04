@@ -2,7 +2,7 @@
 -- READY-TO-RUN MIGRATION QUERY
 -- Copy and paste this entire script into phpMyAdmin or MySQL CLI
 -- ========================================================================
--- Database: jrozqhmy_stock_exchange_db
+-- Database: stockex_exchange_new_db
 -- Purpose: Consolidate employees table into users table
 -- 
 -- IMPORTANT: 

@@ -195,7 +195,7 @@ FROM users WHERE salary > 0
 
 1. **Backup your database:**
    ```bash
-   mysqldump -u root -p jrozqhmy_stock_exchange_db > backup_$(date +%Y%m%d_%H%M%S).sql
+   mysqldump -u root -p stockex_exchange_new_db > backup_$(date +%Y%m%d_%H%M%S).sql
    ```
 
 2. **Review the migration script:**
@@ -204,7 +204,7 @@ FROM users WHERE salary > 0
 
 3. **Execute the migration:**
    ```bash
-   mysql -u root -p jrozqhmy_stock_exchange_db < database/MIGRATION_EMPLOYEES_TO_USERS.sql
+   mysql -u root -p stockex_exchange_new_db < database/MIGRATION_EMPLOYEES_TO_USERS.sql
    ```
 
 4. **Verify the migration:**
@@ -242,7 +242,7 @@ After migration, verify these functionality:
 
 If issues arise, restore from backup:
 ```bash
-mysql -u root -p jrozqhmy_stock_exchange_db < backup_YYYYMMDD_HHMMSS.sql
+mysql -u root -p stockex_exchange_new_db < backup_YYYYMMDD_HHMMSS.sql
 ```
 
 ---

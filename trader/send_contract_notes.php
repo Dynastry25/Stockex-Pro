@@ -412,16 +412,18 @@ function testSMTPConnection($debug = false) {
         }
         
         $mail->isSMTP();
-        $mail->Host = 'mail.neovam.com';
+        $mail->Host = SMTP_HOST;
         $mail->SMTPAuth = true;
-        $mail->Username = 'info@neovam.com';
-        $mail->Password = 'Ernestmswima@12';
-        $mail->SMTPSecure = PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
-        $mail->Port = 587;
-        $mail->Timeout = 30;
+        $mail->Username = SMTP_USERNAME;
+        $mail->Password = SMTP_PASSWORD;
+        $mail->SMTPSecure = SMTP_ENCRYPTION === 'ssl'
+            ? PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_SMTPS
+            : PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
+        $mail->Port = SMTP_PORT;
+        $mail->Timeout = SMTP_TIMEOUT;
         
-        $mail->setFrom('info@neovam.com', 'Neovam Test');
-        $mail->addAddress('ernestmswima@gmail.com', 'Ernest Test');
+        $mail->setFrom(SMTP_FROM_EMAIL, SMTP_FROM_NAME);
+        $mail->addAddress(SMTP_USERNAME, 'SMTP Test');
         $mail->Subject = 'SMTP Connection Test';
         $mail->Body = 'SMTP connection test successful!';
         

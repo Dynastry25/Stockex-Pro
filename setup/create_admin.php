@@ -4,12 +4,13 @@
  * Creates or resets the system administrator account
  */
 
-require_once '../config/database.php';
+require_once __DIR__ . '/../config/env_loader.php';
+require_once __DIR__ . '/../config/database.php';
 
-// Admin credentials
-$admin_username = 'admin';
-$admin_email = 'admin@stockexchange.com';
-$admin_password = 'admin123';
+// Admin credentials (override via .env or server env vars)
+$admin_username = env('ADMIN_USERNAME', 'admin');
+$admin_email = env('ADMIN_EMAIL', 'admin@stockexchange.com');
+$admin_password = env('ADMIN_PASSWORD', 'admin123');
 $admin_full_name = 'System Administrator';
 
 try {

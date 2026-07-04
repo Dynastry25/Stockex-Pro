@@ -16,8 +16,21 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files
-.env*
+# Environment files (keep .env.example in git!)
+.env
+*.env
+.env.*
+!.env.example
+
+# database backups / dumps
+*.sql
+!database/*.sql
+finance/backups/
+
+# logs
+/logs/
+error_log
+*.log
 
 # vercel
 .vercel
