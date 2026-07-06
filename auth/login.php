@@ -426,23 +426,7 @@ $page_title = 'Login';
                     </div>
                 </form>
                 
-                <!-- Enhanced admin credentials section with better styling -->
-                <div class="text-center mb-4">
-                    <div class="bg-light rounded-3 p-3 border" style="border-color: #e5e7eb !important;">
-                        <small class="text-muted d-block mb-2">
-                            <i class="bi bi-shield-lock me-1"></i>
-                            <strong>Default Admin Credentials</strong>
-                        </small>
-                        <div class="d-flex justify-content-center gap-3 mb-2">
-                            <span class="badge bg-secondary px-3 py-2">admin</span>
-                            <span class="badge bg-secondary px-3 py-2">admin123</span>
-                        </div>
-                        <a href="../setup/create_admin.php" class="btn btn-sm btn-outline-primary">
-                            <i class="bi bi-arrow-clockwise me-1"></i>
-                            Reset Admin Password
-                        </a>
-                    </div>
-                </div>
+
             </div>
         </div>
     </div>
