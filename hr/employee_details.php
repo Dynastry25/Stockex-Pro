@@ -10,7 +10,7 @@ $employee_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 
 if (!$employee_id) {
     show_alert('Invalid employee ID.', 'danger');
-    redirect('dashboard.php');
+    redirect('hr/dashboard.php');
 }
 
 // Fetch employee details
@@ -33,11 +33,11 @@ try {
 
     if (!$employee) {
         show_alert('Employee not found.', 'danger');
-        redirect('dashboard.php');
+        redirect('hr/dashboard.php');
     }
 } catch (Exception $e) {
     show_alert('Error loading employee details: ' . $e->getMessage(), 'danger');
-    redirect('dashboard.php');
+    redirect('hr/dashboard.php');
 }
 
 $page_title = 'Employee Details - ' . htmlspecialchars($employee['first_name'] . ' ' . $employee['last_name']);

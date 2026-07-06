@@ -354,6 +354,111 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $_SERVER['HTTP_USER_AGENT'] ?? 'Unknown'
             ]);
             
+            // Post payment GL entries when recording in financial system
+            if ($record_in_financial === 'yes') {
+                $created_by_name = $_SESSION['username'] ?? 'finance_officer';
+                
+                // Get account IDs for payable/control accounts
+                $acct_map = [];
+                $stmt = $db->query("SELECT id, account_code FROM chart_of_accounts WHERE account_code IN ('1112','216','2121','2122','2123','2124','2125','2126') AND is_active = 1");
+                while ($r = $stmt->fetch()) {
+                    $acct_map[$r['account_code']] = $r['id'];
+                }
+                
+                $payment_date = date('Y-m-d');
+                $fiscal_year = date('Y');
+                $fiscal_period = (int)date('m');
+                $gl_ref = $payment_no;
+                $gl_desc = "Salary Payment: {$request['request_no']} - {$request['subject']}";
+                
+                // Get the salary calculation breakdown to know how much to debit each payable
+                $calc_stmt = $db->prepare("SELECT calculation_data FROM salary_calculations WHERE payment_request_id = ?");
+                $calc_stmt->execute([$request_id]);
+                $calc_row = $calc_stmt->fetch();
+                
+                if ($calc_row) {
+                    $calc_data = json_decode($calc_row['calculation_data'], true);
+                    $summary = $calc_data['summary'] ?? [];
+                    
+                    $net_salary = (float)($summary['total_net_salary'] ?? 0);
+                    $nssf_total = (float)($summary['total_nssf_employee'] ?? 0) + (float)($summary['total_nssf_employer'] ?? 0);
+                    $sdl_total  = (float)($summary['total_sdl'] ?? 0);
+                    $wcf_total  = (float)($summary['total_wcf'] ?? 0);
+                    $osha_total = (float)($summary['total_osha'] ?? 0);
+                    $hi_total   = (float)($summary['total_nhif'] ?? 0);
+                    $paye_total = (float)($summary['total_paye_tax'] ?? 0);
+                    
+                    // Debit entries to clear each liability
+                    $debit_entries = [
+                        ['account_code' => '216',  'amount' => $net_salary, 'label' => 'Net Salary'],
+                        ['account_code' => '2121', 'amount' => $nssf_total, 'label' => 'NSSF'],
+                        ['account_code' => '2122', 'amount' => $sdl_total,  'label' => 'SDL'],
+                        ['account_code' => '2123', 'amount' => $wcf_total,  'label' => 'WCF'],
+                        ['account_code' => '2124', 'amount' => $osha_total, 'label' => 'OSHA'],
+                        ['account_code' => '2125', 'amount' => $hi_total,   'label' => 'Health Insurance'],
+                        ['account_code' => '2126', 'amount' => $paye_total, 'label' => 'PAYE'],
+                    ];
+                    
+                    foreach ($debit_entries as $entry) {
+                        $amt = $entry['amount'];
+                        if ($amt <= 0) continue;
+                        $code = $entry['account_code'];
+                        $acct_id = $acct_map[$code] ?? null;
+                        if (!$acct_id) continue;
+                        $db->prepare("
+                            INSERT INTO general_ledger (
+                                transaction_date, account_id, account_code, account_name,
+                                debit_amount, credit_amount, running_balance, balance_type,
+                                description, reference_no, reference_type,
+                                currency, fiscal_year, fiscal_period,
+                                status, created_by, created_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, 0, 'debit', ?, ?, 'payment',
+                                      ?, ?, ?, 'active', ?, NOW())
+                        ")->execute([
+                            $payment_date,
+                            $acct_id,
+                            $code,
+                            $entry['label'],
+                            $amt, 0,
+                            "$gl_desc - {$entry['label']}",
+                            $gl_ref,
+                            $request['currency'],
+                            $fiscal_year,
+                            $fiscal_period,
+                            $created_by_name
+                        ]);
+                    }
+                }
+                
+                // Credit Cash at Bank for the full payment amount
+                $bank_gl_code = $bank_account['code'] ?? '1112';
+                $bank_acct_id = $acct_map[$bank_gl_code] ?? null;
+                if ($bank_acct_id) {
+                    $db->prepare("
+                        INSERT INTO general_ledger (
+                            transaction_date, account_id, account_code, account_name,
+                            debit_amount, credit_amount, running_balance, balance_type,
+                            description, reference_no, reference_type,
+                            currency, fiscal_year, fiscal_period,
+                            status, created_by, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, 0, 'credit', ?, ?, 'payment',
+                                  ?, ?, ?, 'active', ?, NOW())
+                    ")->execute([
+                        $payment_date,
+                        $bank_acct_id,
+                        $bank_gl_code,
+                        'Cash at Bank',
+                        0, (float)$request['amount_paid'],
+                        "$gl_desc - Bank Payment",
+                        $gl_ref,
+                        $request['currency'],
+                        $fiscal_year,
+                        $fiscal_period,
+                        $created_by_username
+                    ]);
+                }
+            }
+            
             $db->commit();
             echo json_encode(['success' => true, 'message' => 'Payment approved and created successfully! Payment Number: ' . $payment_no]);
             
@@ -1489,8 +1594,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 const balance = parseFloat(selectedOption.getAttribute('data-balance') || 0);
                 const accountCurrency = selectedOption.getAttribute('data-currency') || '';
                 
-                // Check if currency matches
-                if (accountCurrency !== currency) {
+                // Normalize currency codes (TZS == TSH)
+                const norm = c => c.replace('TZS', 'TSH');
+                if (norm(accountCurrency) !== norm(currency)) {
                     balanceWarning.innerHTML = `<span class="text-warning">
                         <i class="bi bi-exclamation-triangle"></i> 
                         Currency mismatch! Request: ${currency}, Account: ${accountCurrency}

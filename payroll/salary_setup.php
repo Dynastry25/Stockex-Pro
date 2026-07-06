@@ -145,7 +145,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             
             $db->commit();
             $success_message = 'Statutory deductions configured successfully.';
-            redirect('../hr/pay_salary.php');
+            redirect('hr/pay_salary.php');
         }
         
         // === 2. ADD/UPDATE PAYE BRACKET ===
@@ -163,7 +163,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             
             $stmt->execute([$bracket_min, $bracket_max, $tax_rate, $description, $_SESSION['user_id']]);
             $success_message = 'PAYE tax bracket saved successfully.';
-            redirect('../hr/pay_salary.php');
+            redirect('hr/pay_salary.php');
         }
         
         // === 3. DELETE PAYE BRACKET ===
@@ -173,7 +173,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $stmt = $db->prepare("DELETE FROM paye_tax_brackets WHERE id = ?");
             $stmt->execute([$bracket_id]);
             $success_message = 'PAYE tax bracket deleted.';
-            redirect('../hr/pay_salary.php');
+            redirect('hr/pay_salary.php');
         }
         
         // === 4. ADD/UPDATE DEDUCTION EXEMPTION ===
@@ -211,7 +211,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             
             $db->commit();
             $success_message = 'Deduction exemption saved successfully.';
-            redirect('../hr/pay_salary.php');
+            redirect('hr/pay_salary.php');
         }
         
         // === 5. REMOVE DEDUCTION EXEMPTION ===
@@ -225,7 +225,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             ");
             $stmt->execute([$exemption_id]);
             $success_message = 'Exemption removed successfully.';
-            redirect('../hr/pay_salary.php');
+            redirect('hr/pay_salary.php');
         }
         
         // === 6. CALCULATE SALARIES ===
@@ -436,7 +436,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             
             $success_message = 'Salaries calculated successfully. Total Net Pay: ' . 
                              format_payroll_currency($salary_calculation['summary']['total_net_salary']);
-            redirect('../hr/pay_salary.php?section=payment');
+            redirect('hr/pay_salary.php?section=payment');
         }
         
         // === 7. GENERATE PAYMENT REQUEST ===
@@ -583,7 +583,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                                       <strong>Employer Contributions:</strong> " . format_payroll_currency($employer_contributions) . "<br>
                                       <strong>Total Payment:</strong> " . format_payroll_currency($total_payment) . "<br>
                                       <strong>Status:</strong> Sent to CEO for approval";
-                    redirect('../hr/pay_salary.php');
+                    redirect('hr/pay_salary.php');
                     
                 } catch (Exception $e) {
                     $db->rollBack();

@@ -4,7 +4,7 @@ require_once '../auth/auth_middleware.php';
 
 // Allow access to all authenticated users
 if (!isset($_SESSION['user_id'])) {
-    redirect('../auth/login.php');
+    redirect('auth/login.php');
 }
 
 $db = getDBConnection();

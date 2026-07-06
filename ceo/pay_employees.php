@@ -73,7 +73,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     
                     $db->commit();
                     $success_message = 'Salary updated successfully and recorded in history.';
-                    redirect('../ceo/pay_employees.php');
+                    redirect('ceo/pay_employees.php');
                 } else {
                     $error_message = 'User not found.';
                 }
@@ -133,7 +133,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 
                 $db->commit();
                 $success_message = "Incentive added to {$added_count} employees. Waiting for approval.";
-                redirect('../ceo/pay_employees.php');
+                redirect('ceo/pay_employees.php');
                 
             } else {
                 // Apply to specific employee
@@ -174,7 +174,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     if ($stmt->execute([$user_id, $incentive_type, $final_description, $amount, $pay_period_month, $notes, $_SESSION['user_id']])) {
                         $db->commit();
                         $success_message = 'Incentive added successfully. Waiting for approval.';
-                        redirect('../ceo/pay_employees.php');
+                        redirect('ceo/pay_employees.php');
                     } else {
                         $error_message = 'Failed to add incentive.';
                     }
@@ -215,7 +215,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 
                 if ($stmt->execute([$user_id, $description, $amount, $pay_period_month, $notes, $_SESSION['user_id'], $hours, $date, $overtime_rate])) {
                     $success_message = 'Overtime added successfully. Waiting for approval.';
-                    redirect('../ceo/pay_employees.php');
+                    redirect('ceo/pay_employees.php');
                 } else {
                     $error_message = 'Failed to add overtime.';
                 }
@@ -237,7 +237,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 
                 if ($stmt->execute([$overtime_rate, $_SESSION['user_id'], $overtime_rate, $_SESSION['user_id']])) {
                     $success_message = 'Overtime rate updated successfully.';
-                    redirect('../ceo/pay_employees.php');
+                    redirect('ceo/pay_employees.php');
                 } else {
                     $error_message = 'Failed to update overtime rate.';
                 }
@@ -280,7 +280,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     } else {
                         $error_message = 'Incentive not found or already processed.';
                     }
-                    redirect('../ceo/pay_employees.php');
+                    redirect('ceo/pay_employees.php');
                 } else {
                     $error_message = 'Failed to update incentive status.';
                 }
@@ -320,7 +320,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 
                 $db->commit();
                 $success_message = "{$success_count} incentives {$action}d successfully.";
-                redirect('../ceo/pay_employees.php');
+                redirect('ceo/pay_employees.php');
             }
         }
         
@@ -339,7 +339,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 } else {
                     $error_message = 'Incentive not found or already processed.';
                 }
-                redirect('../ceo/pay_employees.php');
+                redirect('ceo/pay_employees.php');
             } else {
                 $error_message = 'Failed to delete incentive.';
             }

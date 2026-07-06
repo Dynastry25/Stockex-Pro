@@ -9,7 +9,7 @@ $current_user_id = $_SESSION['user_id'];
 $current_user_role = $_SESSION['role'];
 
 if ($current_user_role !== 'hr_manager') {
-    header('Location: ../dashboard.php');
+    header('Location: ./dashboard.php');
     exit();
 }
 
@@ -336,7 +336,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 $success_message = 'Salary item added successfully.';
             }
             
-            redirect('../hr/pay_salary.php?section=manage');
+            redirect('hr/pay_salary.php?section=manage');
         }
         
         // === 2. DELETE SALARY ITEM ===
@@ -346,7 +346,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $stmt = $db->prepare("UPDATE salary_items SET is_active = 0 WHERE id = ?");
             $stmt->execute([$item_id]);
             $success_message = 'Salary item deleted successfully.';
-            redirect('../hr/pay_salary.php?section=manage');
+            redirect('hr/pay_salary.php?section=manage');
         }
         
         // === 3. ADD/EDIT STATUTORY RATE ===
@@ -399,7 +399,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             }
             
             $success_message = 'Statutory rate saved successfully.';
-            redirect('../hr/pay_salary.php?section=statutory');
+            redirect('hr/pay_salary.php?section=statutory');
         }
         
         // === 4. CALCULATE SALARIES ===
@@ -550,7 +550,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             
             $success_message = 'Salaries calculated successfully. Total Net Pay: ' . 
                              format_payroll_currency($salary_calculation['summary']['total_net_salary']);
-            redirect('../hr/pay_salary.php?section=payment');
+            redirect('hr/pay_salary.php?section=payment');
         }
         
         // === 5. GENERATE PAYMENT REQUEST (USING TOTAL EMPLOYER COST) ===
@@ -588,7 +588,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             payee_bank_name, payee_branch, payee_account_name,
                             payee_account_no, currency, amount_paid, cheque_no,
                             payment_description, requested_by, status
-                        ) VALUES (?, ?, 'O', ?, ?, ?, ?, ?, ?, 'TZS', ?, ?, ?, ?, 'pending')
+                        ) VALUES (?, ?, 'O', ?, ?, ?, ?, ?, ?, 'TSH', ?, ?, ?, ?, 'pending')
                     ");
                     
                     $subject = "Salary Payment - " . date('F Y', strtotime($pay_period_month . '-01'));
@@ -654,6 +654,41 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     }
                     
                     $db->commit();
+
+                    require_once '../includes/payroll_accounting.php';
+                    
+                    // Post payroll entries to General Ledger
+                    $gl_reference_no = $request_no;
+                    foreach ($salary_calculation['employees'] as $emp) {
+                        $statutory_deductions = [
+                            'nssf'             => $emp['nssf_employee'] ?? 0,
+                            'paye'             => $emp['paye_tax'] ?? 0,
+                            'health_insurance' => $emp['nhif'] ?? 0,
+                        ];
+                        $statutory_employer = [
+                            'nssf'             => $emp['nssf_employer'] ?? 0,
+                            'sdl'              => $emp['sdl'] ?? 0,
+                            'wcf'              => $emp['wcf'] ?? 0,
+                            'osha'             => $emp['osha'] ?? 0,
+                            'health_insurance' => 0,
+                        ];
+                        $result = postPayrollToGL([
+                            'reference_no'         => $gl_reference_no,
+                            'employee_name'        => $emp['employee_name'],
+                            'employee_id'          => $emp['user_id'],
+                            'gross_salary'         => $emp['gross_salary'] ?? 0,
+                            'deductions'           => [],
+                            'statutory_deductions' => $statutory_deductions,
+                            'statutory_employer'   => $statutory_employer,
+                            'net_salary'           => $emp['net_salary'] ?? 0,
+                            'period_start'         => $pay_period_month . '-01',
+                            'period_end'           => date('Y-m-t', strtotime($pay_period_month . '-01')),
+                            'posted_by'            => $current_user_id,
+                        ]);
+                        if (!$result['success']) {
+                            error_log('Payroll GL posting error for employee ' . $emp['employee_name'] . ': ' . ($result['error'] ?? 'unknown'));
+                        }
+                    }
                     
                     // Clear session data
                     unset($_SESSION['salary_calculation']);
@@ -667,7 +702,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                                       - Employer Contributions: " . format_payroll_currency($employer_contributions) . "<br>
                                       <strong>Status:</strong> Sent to CEO for approval";
                     
-                    redirect('../hr/pay_salary.php?section=history');
+                    redirect('hr/pay_salary.php?section=history');
                     
                 } catch (Exception $e) {
                     $db->rollBack();

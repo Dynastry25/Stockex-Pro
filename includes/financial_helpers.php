@@ -104,6 +104,20 @@ function getDefaultAccountId($account_code) {
         '2112' => 43, // DSE Fees Payable
         '2113' => 44, // CSDR Fees Payable
         '2114' => 45, // Value Retention Fees Payable (VRF)
+        '216'  => 46, // Payroll Control
+        '2121' => 47, // NSSF Payable
+        '2122' => 48, // SDL Payable
+        '2123' => 49, // WCF Payable
+        '2124' => 50, // OSHA Payable
+        '2125' => 51, // Health Insurance Payable
+        '2126' => 52, // PAYE Payable
+        '511'  => 53, // Salaries & Wages
+        '512'  => 54, // Staff Benefits
+        '5121' => 55, // NSSF Employer Contribution
+        '5122' => 56, // SDL Expense
+        '5123' => 57, // WCF Expense
+        '5124' => 58, // OSHA Expense
+        '5125' => 59, // Health Insurance Expense
     ];
     
     return $default_mapping[$account_code] ?? 1; // Default to Cash

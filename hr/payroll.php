@@ -8,7 +8,7 @@ $current_user_id = $_SESSION['user_id'];
 $current_user_role = $_SESSION['role'];
 
 if ($current_user_role !== 'hr_manager' && $current_user_role !== 'ceo') {
-    header('Location: ../dashboard.php');
+    header('Location: ./dashboard.php');
     exit();
 }
 
@@ -94,7 +94,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     
                     $db->commit();
                     $success_message = 'Salary updated successfully and recorded in history.';
-                    redirect('../hr/salary_setup.php');
+                    redirect('hr/salary_setup.php');
                 } else {
                     $error_message = 'User not found.';
                 }
@@ -169,7 +169,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     $success_message = "{$added_count} incentives added and auto-approved.";
                 }
                 
-                redirect('../hr/salary_setup.php');
+                redirect('hr/salary_setup.php');
                 
             } else {
                 // Apply to specific employee
@@ -219,7 +219,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             $success_message = 'Incentive added and auto-approved.';
                         }
                         
-                        redirect('../hr/salary_setup.php');
+                        redirect('hr/salary_setup.php');
                     } else {
                         $error_message = 'Failed to add incentive.';
                     }
@@ -262,7 +262,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 if ($stmt->execute([$user_id, $description, $amount, $pay_period_month, $notes, 
                                    $_SESSION['user_id'], $hours, $date, $overtime_rate])) {
                     $success_message = 'Overtime added and auto-approved.';
-                    redirect('../hr/salary_setup.php');
+                    redirect('hr/salary_setup.php');
                 } else {
                     $error_message = 'Failed to add overtime.';
                 }
@@ -284,7 +284,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 
                 if ($stmt->execute([$overtime_rate, $_SESSION['user_id'], $overtime_rate, $_SESSION['user_id']])) {
                     $success_message = 'Overtime rate updated successfully.';
-                    redirect('../hr/salary_setup.php');
+                    redirect('hr/salary_setup.php');
                 } else {
                     $error_message = 'Failed to update overtime rate.';
                 }
@@ -327,7 +327,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     } else {
                         $error_message = 'Bonus not found or already processed.';
                     }
-                    redirect('../hr/salary_setup.php');
+                    redirect('hr/salary_setup.php');
                 } else {
                     $error_message = 'Failed to update bonus status.';
                 }
@@ -367,7 +367,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 
                 $db->commit();
                 $success_message = "{$success_count} bonuses {$action}d successfully.";
-                redirect('../hr/salary_setup.php');
+                redirect('hr/salary_setup.php');
             }
         }
         
@@ -387,7 +387,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 } else {
                     $error_message = 'Bonus not found, already processed, or you don\'t have permission to delete it.';
                 }
-                redirect('../hr/salary_setup.php');
+                redirect('hr/salary_setup.php');
             } else {
                 $error_message = 'Failed to delete bonus.';
             }

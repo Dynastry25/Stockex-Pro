@@ -12,6 +12,51 @@ define('BROKERAGE_COMMISSION_INCOME_CODE', '411');
 define('CASH_AT_BANK_CODE', '1112');
 define('VAT_PAYABLE_CODE', '213');
 
+// --- HR Payroll Account Codes ---
+define('SALARIES_EXPENSE_CODE', '511');
+define('STAFF_BENEFITS_EXPENSE_CODE', '512');
+define('NSSF_EXPENSE_CODE', '5121');
+define('SDL_EXPENSE_CODE', '5122');
+define('WCF_EXPENSE_CODE', '5123');
+define('OSHA_EXPENSE_CODE', '5124');
+define('HI_EXPENSE_CODE', '5125');
+define('PAYROLL_CONTROL_CODE', '216');
+
+// --- HR / Payroll Payable Account Map ---
+function getHrPayableAccountMap() {
+    return [
+        'nssf'             => '2121',
+        'sdl'              => '2122',
+        'wcf'              => '2123',
+        'osha'             => '2124',
+        'health_insurance' => '2125',
+        'paye'             => '2126',
+    ];
+}
+
+// --- HR / Payroll Expense Account Map ---
+function getHrExpenseAccountMap() {
+    return [
+        'nssf'             => NSSF_EXPENSE_CODE,
+        'sdl'              => SDL_EXPENSE_CODE,
+        'wcf'              => WCF_EXPENSE_CODE,
+        'osha'             => OSHA_EXPENSE_CODE,
+        'health_insurance' => HI_EXPENSE_CODE,
+    ];
+}
+
+function getHrPayableAccountCode($statutory_key) {
+    $map = getHrPayableAccountMap();
+    $key = strtolower(trim($statutory_key));
+    return $map[$key] ?? null;
+}
+
+function getHrExpenseAccountCode($statutory_key) {
+    $map = getHrExpenseAccountMap();
+    $key = strtolower(trim($statutory_key));
+    return $map[$key] ?? null;
+}
+
 // --- Charge Payable Account Map ---
 // Maps internal fee keys to account codes
 function getChargePayableAccountMap() {
