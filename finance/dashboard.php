@@ -287,11 +287,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 SET finance_approved_at = NOW(), 
                     finance_approved_by = ?,
                     finance_approval_notes = ?,
-                    status = 'approved_finance',
+                    status = 'paid',
+                    paid_by = ?,
+                    paid_at = NOW(),
                     updated_at = NOW()
                 WHERE id = ? AND status = 'approved_ceo'
             ");
-            $stmt->execute([$user_id, $notes, $request_id]);
+            $stmt->execute([$user_id, $notes, $user_id, $request_id]);
             
             // Create payment record
             $stmt = $db->prepare("
