@@ -25,29 +25,19 @@ $company = dealingSheetGetCompany($db);
 $view = $_GET['view'] ?? 'all';
 
 // ============================================
-// PAYMENT RECEIPT UPLOAD HANDLER
+// PAYMENT RECEIPT UPLOAD HANDLER - MULTI-FILE
 // ============================================
 if (isset($_POST['upload_receipt']) && isset($_POST['sheet_id'])) {
     $sheet_id = (int) $_POST['sheet_id'];
+    $uploaded_files = [];
+    $errors = [];
     
-    // Check if file was uploaded
-    if (isset($_FILES['payment_receipt']) && $_FILES['payment_receipt']['error'] === UPLOAD_ERR_OK) {
-        $file = $_FILES['payment_receipt'];
-        $file_ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+    // Check if files were uploaded
+    if (isset($_FILES['payment_receipts']) && !empty($_FILES['payment_receipts']['name'][0])) {
+        $files = $_FILES['payment_receipts'];
+        $total_files = count($files['name']);
         $allowed_exts = ['jpg', 'jpeg', 'png', 'gif', 'pdf'];
-        
-        if (!in_array($file_ext, $allowed_exts)) {
-            $_SESSION['alert'] = ['Invalid file type. Allowed: JPG, PNG, GIF, PDF', 'danger'];
-            header('Location: dealing_sheet.php?view=' . urlencode($view));
-            exit;
-        }
-        
-        // Check file size (max 5MB)
-        if ($file['size'] > 5 * 1024 * 1024) {
-            $_SESSION['alert'] = ['File size exceeds 5MB limit', 'danger'];
-            header('Location: dealing_sheet.php?view=' . urlencode($view));
-            exit;
-        }
+        $max_size = 5 * 1024 * 1024; // 5MB per file
         
         // Create upload directory if it doesn't exist
         $upload_dir = __DIR__ . '/../uploads/payment_receipts/';
@@ -55,24 +45,56 @@ if (isset($_POST['upload_receipt']) && isset($_POST['sheet_id'])) {
             mkdir($upload_dir, 0777, true);
         }
         
-        // Generate unique filename
-        $filename = 'receipt_' . $sheet_id . '_' . date('Ymd_His') . '.' . $file_ext;
-        $filepath = $upload_dir . $filename;
+        // Get existing receipts
+        $stmt = $db->prepare("SELECT payment_receipt FROM dealing_sheets WHERE id = ?");
+        $stmt->execute([$sheet_id]);
+        $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+        $existing_receipts = !empty($existing['payment_receipt']) ? explode(',', $existing['payment_receipt']) : [];
         
-        // Move uploaded file
-        if (move_uploaded_file($file['tmp_name'], $filepath)) {
-            // Update database with receipt filename
+        for ($i = 0; $i < $total_files; $i++) {
+            if ($files['error'][$i] !== UPLOAD_ERR_OK) {
+                $errors[] = "File '{$files['name'][$i]}' upload error: " . $files['error'][$i];
+                continue;
+            }
+            
+            $file_ext = strtolower(pathinfo($files['name'][$i], PATHINFO_EXTENSION));
+            if (!in_array($file_ext, $allowed_exts)) {
+                $errors[] = "File '{$files['name'][$i]}' - Invalid type. Allowed: JPG, PNG, GIF, PDF";
+                continue;
+            }
+            
+            if ($files['size'][$i] > $max_size) {
+                $errors[] = "File '{$files['name'][$i]}' exceeds 5MB limit";
+                continue;
+            }
+            
+            // Generate unique filename
+            $filename = 'receipt_' . $sheet_id . '_' . date('Ymd_His') . '_' . ($i + 1) . '.' . $file_ext;
+            $filepath = $upload_dir . $filename;
+            
+            if (move_uploaded_file($files['tmp_name'][$i], $filepath)) {
+                $uploaded_files[] = $filename;
+            } else {
+                $errors[] = "Failed to upload file '{$files['name'][$i]}'";
+            }
+        }
+        
+        if (!empty($uploaded_files)) {
+            // Merge with existing receipts
+            $all_receipts = array_merge($existing_receipts, $uploaded_files);
+            $receipts_str = implode(',', $all_receipts);
+            
             $stmt = $db->prepare("UPDATE dealing_sheets SET payment_receipt = ? WHERE id = ?");
-            if ($stmt->execute([$filename, $sheet_id])) {
-                $_SESSION['alert'] = ['Payment receipt uploaded successfully!', 'success'];
+            if ($stmt->execute([$receipts_str, $sheet_id])) {
+                $_SESSION['alert'] = [count($uploaded_files) . ' receipt(s) uploaded successfully!', 'success'];
             } else {
                 $_SESSION['alert'] = ['Failed to update database', 'danger'];
             }
         } else {
-            $_SESSION['alert'] = ['Failed to upload file', 'danger'];
+            $_SESSION['alert'] = ['No files were uploaded successfully. Errors: ' . implode('; ', $errors), 'danger'];
         }
     } else {
-        $_SESSION['alert'] = ['No file selected or upload error', 'danger'];
+        $_SESSION['alert'] = ['No files selected for upload', 'danger'];
     }
     header('Location: dealing_sheet.php?view=' . urlencode($view));
     exit;
@@ -81,25 +103,34 @@ if (isset($_POST['upload_receipt']) && isset($_POST['sheet_id'])) {
 // ============================================
 // DELETE PAYMENT RECEIPT
 // ============================================
-if (isset($_GET['delete_receipt']) && isset($_GET['id'])) {
+if (isset($_GET['delete_receipt']) && isset($_GET['id']) && isset($_GET['file'])) {
     $sheet_id = (int) $_GET['id'];
+    $file_to_delete = $_GET['file'];
     
-    // Get filename from database
+    // Get existing receipts
     $stmt = $db->prepare("SELECT payment_receipt FROM dealing_sheets WHERE id = ?");
     $stmt->execute([$sheet_id]);
     $sheet = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if ($sheet && !empty($sheet['payment_receipt'])) {
-        // Delete file from server
-        $filepath = __DIR__ . '/../uploads/payment_receipts/' . $sheet['payment_receipt'];
-        if (file_exists($filepath)) {
-            unlink($filepath);
-        }
+        $receipts = explode(',', $sheet['payment_receipt']);
         
-        // Update database
-        $stmt = $db->prepare("UPDATE dealing_sheets SET payment_receipt = NULL WHERE id = ?");
-        if ($stmt->execute([$sheet_id])) {
-            $_SESSION['alert'] = ['Payment receipt deleted successfully.', 'success'];
+        // Remove the file from array
+        if (($key = array_search($file_to_delete, $receipts)) !== false) {
+            unset($receipts[$key]);
+            
+            // Delete file from server
+            $filepath = __DIR__ . '/../uploads/payment_receipts/' . $file_to_delete;
+            if (file_exists($filepath)) {
+                unlink($filepath);
+            }
+            
+            // Update database with remaining receipts
+            $receipts_str = !empty($receipts) ? implode(',', $receipts) : null;
+            $stmt = $db->prepare("UPDATE dealing_sheets SET payment_receipt = ? WHERE id = ?");
+            if ($stmt->execute([$receipts_str, $sheet_id])) {
+                $_SESSION['alert'] = ['Receipt deleted successfully.', 'success'];
+            }
         }
     }
     header('Location: dealing_sheet.php?view=' . urlencode($view));
@@ -399,25 +430,35 @@ class DealingSheetPDF extends TCPDF {
         $this->Ln(8);
         
         // ============================================
-        // PAYMENT RECEIPT (if uploaded)
+        // PAYMENT RECEIPTS (Multiple)
         // ============================================
         if (!empty($sheet['payment_receipt'])) {
-            $receipt_path = '../uploads/payment_receipts/' . $sheet['payment_receipt'];
-            if (file_exists($receipt_path)) {
-                $this->SetFont('helvetica', 'B', 10);
-                $this->Cell(0, 6, 'Payment Receipt:', 0, 1, 'L');
-                
-                // Check if it's an image or PDF
-                $ext = strtolower(pathinfo($sheet['payment_receipt'], PATHINFO_EXTENSION));
-                if (in_array($ext, ['jpg', 'jpeg', 'png', 'gif'])) {
-                    // For images, display the image in the PDF
-                    $this->Image($receipt_path, 30, $this->GetY(), 150, 0, '', '', '', false, 300, '', false, false, 0);
-                    $this->Ln(10);
-                } else {
-                    // For PDFs, show a link or note
-                    $this->SetFont('helvetica', 'I', 9);
-                    $this->Cell(0, 6, 'PDF receipt attached (view separately)', 0, 1, 'L');
+            $receipt_files = explode(',', $sheet['payment_receipt']);
+            $has_receipts = false;
+            
+            foreach ($receipt_files as $receipt_file) {
+                $receipt_path = '../uploads/payment_receipts/' . trim($receipt_file);
+                if (file_exists($receipt_path)) {
+                    if (!$has_receipts) {
+                        $this->SetFont('helvetica', 'B', 10);
+                        $this->Cell(0, 6, 'Payment Receipts:', 0, 1, 'L');
+                        $has_receipts = true;
+                    }
+                    
+                    // Check if it's an image or PDF
+                    $ext = strtolower(pathinfo($receipt_file, PATHINFO_EXTENSION));
+                    if (in_array($ext, ['jpg', 'jpeg', 'png', 'gif'])) {
+                        // For images, display the image in the PDF
+                        $this->Image($receipt_path, 30, $this->GetY(), 150, 0, '', '', '', false, 300, '', false, false, 0);
+                        $this->Ln(10);
+                    } else {
+                        // For PDFs, show a link or note
+                        $this->SetFont('helvetica', 'I', 9);
+                        $this->Cell(0, 6, '• PDF receipt attached: ' . htmlspecialchars($receipt_file), 0, 1, 'L');
+                    }
                 }
+            }
+            if ($has_receipts) {
                 $this->Ln(4);
             }
         }
@@ -962,15 +1003,74 @@ include '../includes/header.php';
         padding: 2px 6px;
     }
     .receipt-preview {
-        max-width: 100px;
-        max-height: 60px;
+        max-width: 60px;
+        max-height: 50px;
         object-fit: cover;
         border-radius: 4px;
         cursor: pointer;
+        border: 1px solid #ddd;
+    }
+    .receipt-preview:hover {
+        border-color: #0d6efd;
+        box-shadow: 0 0 5px rgba(13, 110, 253, 0.3);
     }
     .receipt-modal-img {
         max-width: 100%;
         max-height: 80vh;
+    }
+    .receipt-thumbnails {
+        display: flex;
+        gap: 5px;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+    .receipt-thumbnails .badge {
+        cursor: pointer;
+    }
+    .receipt-count {
+        font-size: 0.7rem;
+        background: #0d6efd;
+        color: white;
+        border-radius: 50%;
+        padding: 1px 6px;
+        margin-left: 3px;
+    }
+    .file-input-wrapper {
+        position: relative;
+    }
+    .file-input-wrapper .file-list {
+        margin-top: 10px;
+        max-height: 150px;
+        overflow-y: auto;
+    }
+    .file-input-wrapper .file-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 5px 10px;
+        background: #f8f9fa;
+        border-radius: 4px;
+        margin-bottom: 3px;
+    }
+    .file-input-wrapper .file-item .file-name {
+        font-size: 0.85rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 200px;
+    }
+    .file-input-wrapper .file-item .file-size {
+        font-size: 0.75rem;
+        color: #6c757d;
+    }
+    .file-input-wrapper .file-item .remove-file {
+        cursor: pointer;
+        color: #dc3545;
+        font-weight: bold;
+        padding: 0 5px;
+    }
+    .file-input-wrapper .file-item .remove-file:hover {
+        color: #a71d2a;
     }
 </style>
 
@@ -1069,39 +1169,43 @@ include '../includes/header.php';
     </div>
 </div>
 
-<!-- Receipt Upload Modal -->
+<!-- Receipt Upload Modal - Multi-file -->
 <div class="modal fade" id="receiptModal" tabindex="-1" aria-labelledby="receiptModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-md">
         <div class="modal-content">
             <div class="modal-header bg-success text-white">
-                <h5 class="modal-title"><i class="bi bi-upload me-2"></i>Upload Payment Receipt</h5>
+                <h5 class="modal-title"><i class="bi bi-upload me-2"></i>Upload Payment Receipts</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
-            <form method="POST" enctype="multipart/form-data" action="dealing_sheet.php">
+            <form method="POST" enctype="multipart/form-data" action="dealing_sheet.php" id="receiptUploadForm">
                 <div class="modal-body">
                     <input type="hidden" name="sheet_id" id="receipt_sheet_id" value="">
                     <input type="hidden" name="upload_receipt" value="1">
                     
                     <div class="text-center mb-3">
-                        <div class="receipt-preview-container">
-                            <img id="receipt_preview" src="" alt="Receipt Preview" style="display:none; max-width:100%; max-height:200px; border-radius:8px; border:1px solid #ddd;">
+                        <div class="receipt-preview-container" id="receiptPreviews">
+                            <!-- Previews will be inserted here -->
                         </div>
                     </div>
                     
                     <div class="mb-3">
-                        <label class="form-label fw-semibold">Select Receipt File</label>
-                        <input type="file" class="form-control" name="payment_receipt" id="receipt_file" accept="image/*,.pdf" required>
-                        <div class="form-text">Allowed formats: JPG, PNG, GIF, PDF (Max 5MB)</div>
+                        <label class="form-label fw-semibold">Select Receipt Files</label>
+                        <div class="file-input-wrapper">
+                            <input type="file" class="form-control" name="payment_receipts[]" id="receipt_files" accept="image/*,.pdf" multiple required>
+                            <div class="form-text">Allowed formats: JPG, PNG, GIF, PDF (Max 5MB each)</div>
+                            <div class="file-list" id="fileList"></div>
+                        </div>
                     </div>
                     
                     <div class="alert alert-info">
                         <i class="bi bi-info-circle me-2"></i>
-                        Upload a clear photo or scanned copy of the payment receipt/confirmation.
+                        You can select multiple files at once. Upload clear photos or scanned copies of payment receipts/confirmations.
+                        <br><small class="text-muted">Supported: Images (JPG, PNG, GIF) and PDF documents.</small>
                     </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-success">Upload Receipt</button>
+                    <button type="submit" class="btn btn-success" id="uploadReceiptBtn">Upload Receipts</button>
                 </div>
             </form>
         </div>
@@ -1182,7 +1286,7 @@ include '../includes/header.php';
                             <th class="text-end">Value</th>
                             <th>Date</th>
                             <th>Status</th>
-                            <th>Receipt</th>
+                            <th>Receipts</th>
                             <th class="text-end">Actions</th>
                         </tr>
                     </thead>
@@ -1196,8 +1300,10 @@ include '../includes/header.php';
                                 if ($isOldOrder) $rowClass = 'old-order';
                                 elseif (($sheet['priority'] ?? '') === 'Urgent') $rowClass = 'priority-Urgent';
                                 elseif (($sheet['priority'] ?? '') === 'Most Important') $rowClass = 'priority-Most Important';
+                                
                                 $hasReceipt = !empty($sheet['payment_receipt']);
-                                $receiptPath = $hasReceipt ? '../uploads/payment_receipts/' . $sheet['payment_receipt'] : '';
+                                $receiptFiles = $hasReceipt ? explode(',', $sheet['payment_receipt']) : [];
+                                $receiptCount = count($receiptFiles);
                             ?>
                                 <tr class="<?php echo $rowClass; ?>">
                                     <td><span class="fw-semibold"><?php echo htmlspecialchars($sheet['sheet_reference'] ?? 'N/A'); ?></span></td>
@@ -1219,21 +1325,34 @@ include '../includes/header.php';
                                     </td>
                                     <td>
                                         <?php if ($hasReceipt): ?>
-                                            <?php 
-                                            $ext = strtolower(pathinfo($sheet['payment_receipt'], PATHINFO_EXTENSION));
-                                            $isImage = in_array($ext, ['jpg', 'jpeg', 'png', 'gif']);
-                                            ?>
-                                            <div class="d-flex align-items-center gap-1">
-                                                <?php if ($isImage && file_exists($receiptPath)): ?>
-                                                    <img src="<?php echo $receiptPath; ?>" alt="Receipt" class="receipt-preview" onclick="viewReceipt('<?php echo $receiptPath; ?>')" title="Click to view">
+                                            <div class="receipt-thumbnails">
+                                                <?php 
+                                                $display_count = 0;
+                                                foreach ($receiptFiles as $receiptFile):
+                                                    $receiptFile = trim($receiptFile);
+                                                    if (empty($receiptFile)) continue;
+                                                    $display_count++;
+                                                    $filepath = '../uploads/payment_receipts/' . $receiptFile;
+                                                    $ext = strtolower(pathinfo($receiptFile, PATHINFO_EXTENSION));
+                                                    $isImage = in_array($ext, ['jpg', 'jpeg', 'png', 'gif']);
+                                                    
+                                                    if ($isImage && file_exists($filepath)):
+                                                ?>
+                                                    <img src="<?php echo $filepath; ?>" alt="Receipt" class="receipt-preview" onclick="viewReceipt('<?php echo $filepath; ?>')" title="Click to view">
                                                 <?php else: ?>
-                                                    <span class="badge bg-info receipt-badge">
+                                                    <span class="badge bg-info receipt-badge" onclick="alert('PDF receipt attached')">
                                                         <i class="bi bi-file-pdf"></i> PDF
                                                     </span>
                                                 <?php endif; ?>
-                                                <a href="dealing_sheet.php?delete_receipt=1&id=<?php echo $sheet['id']; ?>&view=<?php echo urlencode($view); ?>" class="text-danger" onclick="return confirm('Delete this receipt?')" title="Delete receipt">
-                                                    <i class="bi bi-x-circle"></i>
-                                                </a>
+                                                <?php endforeach; ?>
+                                                <?php if ($receiptCount > 0): ?>
+                                                    <a href="dealing_sheet.php?delete_receipt=1&id=<?php echo $sheet['id']; ?>&file=<?php echo urlencode($receiptFiles[0]); ?>&view=<?php echo urlencode($view); ?>" class="text-danger" onclick="return confirm('Delete this receipt?')" title="Delete receipt">
+                                                        <i class="bi bi-x-circle"></i>
+                                                    </a>
+                                                    <?php if ($receiptCount > 1): ?>
+                                                        <span class="badge bg-secondary receipt-count">+<?php echo $receiptCount - 1; ?></span>
+                                                    <?php endif; ?>
+                                                <?php endif; ?>
                                             </div>
                                         <?php else: ?>
                                             <button class="btn btn-outline-success btn-sm" onclick="openReceiptUpload(<?php echo $sheet['id']; ?>)">
@@ -1244,7 +1363,7 @@ include '../includes/header.php';
                                     <td class="text-end">
                                         <div class="btn-group btn-group-sm">
                                             <button class="btn btn-outline-primary" onclick='editOrder(<?php echo json_encode($sheet); ?>)'><i class="bi bi-pencil"></i></button>
-                                            <a href="export_dealing_sheet_pdf.php?id=<?php echo $sheet['id']; ?>" target="_blank" class="btn btn-outline-danger btn-sm">
+                                            <a href="dealing_sheet.php?export_pdf=1&id=<?php echo $sheet['id']; ?>" target="_blank" class="btn btn-outline-danger btn-sm">
                                                 <i class="bi bi-file-pdf"></i>
                                             </a>
                                             <button class="btn btn-outline-warning" onclick="confirmAction(<?php echo $sheet['id']; ?>, 'cancel_order')"><i class="bi bi-x-circle"></i></button>
@@ -1264,6 +1383,7 @@ include '../includes/header.php';
 
 <script>
 let securityData = [];
+let selectedFiles = [];
 
 function resetOrderForm() {
     document.getElementById('orderForm').reset();
@@ -1329,11 +1449,13 @@ function confirmAction(id, action) {
     }
 }
 
-// Receipt upload functions
+// Receipt upload functions - Multi-file
 function openReceiptUpload(sheetId) {
     document.getElementById('receipt_sheet_id').value = sheetId;
-    document.getElementById('receipt_file').value = '';
-    document.getElementById('receipt_preview').style.display = 'none';
+    document.getElementById('receipt_files').value = '';
+    document.getElementById('receiptPreviews').innerHTML = '';
+    document.getElementById('fileList').innerHTML = '';
+    selectedFiles = [];
     const modal = new bootstrap.Modal(document.getElementById('receiptModal'));
     modal.show();
 }
@@ -1345,19 +1467,65 @@ function viewReceipt(path) {
     modal.show();
 }
 
-// Receipt file preview
-document.getElementById('receipt_file')?.addEventListener('change', function(e) {
-    const file = this.files[0];
-    if (file) {
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            const img = document.getElementById('receipt_preview');
-            img.src = e.target.result;
-            img.style.display = 'block';
-        };
-        reader.readAsDataURL(file);
+// Multi-file preview
+document.getElementById('receipt_files')?.addEventListener('change', function(e) {
+    const files = this.files;
+    const fileList = document.getElementById('fileList');
+    const previewContainer = document.getElementById('receiptPreviews');
+    
+    fileList.innerHTML = '';
+    previewContainer.innerHTML = '';
+    selectedFiles = [];
+    
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        selectedFiles.push(file);
+        
+        // Add to file list
+        const fileItem = document.createElement('div');
+        fileItem.className = 'file-item';
+        fileItem.innerHTML = `
+            <span class="file-name" title="${file.name}">${file.name}</span>
+            <span class="file-size">${(file.size / 1024).toFixed(1)} KB</span>
+            <span class="remove-file" onclick="removeFile(${i})">&times;</span>
+        `;
+        fileList.appendChild(fileItem);
+        
+        // Preview for images
+        if (file.type.startsWith('image/')) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = document.createElement('img');
+                img.src = e.target.result;
+                img.style.maxWidth = '80px';
+                img.style.maxHeight = '60px';
+                img.style.objectFit = 'cover';
+                img.style.borderRadius = '4px';
+                img.style.margin = '3px';
+                img.style.border = '1px solid #ddd';
+                previewContainer.appendChild(img);
+            };
+            reader.readAsDataURL(file);
+        }
     }
 });
+
+function removeFile(index) {
+    const input = document.getElementById('receipt_files');
+    const dt = new DataTransfer();
+    const files = input.files;
+    
+    for (let i = 0; i < files.length; i++) {
+        if (i !== index) {
+            dt.items.add(files[i]);
+        }
+    }
+    input.files = dt.files;
+    
+    // Refresh the display
+    const event = new Event('change');
+    input.dispatchEvent(event);
+}
 
 // Client search
 document.getElementById('client_search')?.addEventListener('input', function() {
