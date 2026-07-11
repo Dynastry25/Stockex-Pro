@@ -93,6 +93,25 @@ function safe_int_format($value) {
     return number_format((int)$numeric_value);
 }
 
+function getAccountIdByCode($db, $account_code) {
+    try {
+        $stmt = $db->prepare("SELECT id, account_code, account_name FROM chart_of_accounts WHERE account_code = ? AND is_active = 1");
+        $stmt->execute([$account_code]);
+        $account = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if (!$account) {
+            error_log("Account not found for code: $account_code");
+            return null;
+        }
+        
+        return $account['id'];
+        
+    } catch (Exception $e) {
+        error_log("Error getting account ID for code $account_code: " . $e->getMessage());
+        return null;
+    }
+}
+
 // ==================== FILE VALIDATION FUNCTIONS ====================
 
 // Validate uploaded file
