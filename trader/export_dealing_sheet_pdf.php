@@ -504,9 +504,7 @@ if (!empty($sheet['remarks'])) {
 
 // ========== SIGNATURES ==========
 $pdf->SetFont('helvetica', 'B', 9);
-$pdf->Cell(0, 6, 'Dealer Name:', 0, 0);
 $pdf->SetFont('helvetica', '', 9);
-$pdf->Cell(0, 6, $sheet['dealer_name'] ?? $exportedByName, 0, 1);
 $pdf->Ln(4);
 
 $pdf->SetFont('helvetica', 'B', 9);
