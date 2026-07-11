@@ -1,18 +1,18 @@
 <?php
 /**
- * Public Order Entry Form - Standalone page without login
- * Accessible from mobile phones and PCs
+ * Public Order Dashboard - Combined Entry + List View
+ * Based on the working order_entry_public.php
  * 
- * Usage: order_entry_public.php
+ * Usage: order_dashboard_public.php
  */
 
 // Enable error reporting for debugging
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 ini_set('log_errors', 1);
-ini_set('error_log', __DIR__ . '/order_entry_public_errors.log');
+ini_set('error_log', __DIR__ . '/order_dashboard_errors.log');
 
-// Start session for alerts
+// Start session
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -27,7 +27,7 @@ try {
     die("Database connection failed: " . $e->getMessage());
 }
 
-// Get company details for broker code
+// Get company details
 function getCompanyDetails($db) {
     try {
         $stmt = $db->prepare("SELECT company_code, name as company_name FROM companies WHERE is_active = 1 LIMIT 1");
@@ -38,33 +38,25 @@ function getCompanyDetails($db) {
         return ['company_code' => 'B13/C', 'company_name' => 'Victory Financial Services Ltd'];
     }
 }
-
 $company = getCompanyDetails($db);
 
 // ============================================
 // AJAX ENDPOINTS
 // ============================================
-
-// Handle AJAX requests
 if (isset($_GET['ajax_action'])) {
     header('Content-Type: application/json');
     
     if ($_GET['ajax_action'] === 'search_clients') {
         $search = $_GET['search'] ?? '';
-        
         try {
-            // Search in clients table first
             $stmt = $db->prepare("SELECT client_name, cds_account as client_cds_account FROM clients WHERE client_name LIKE ? LIMIT 30");
             $stmt->execute(['%' . $search . '%']);
             $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            
-            // If no results, search in trades table
             if (empty($results)) {
                 $stmt = $db->prepare("SELECT DISTINCT client_name, client_cds_account FROM trades WHERE client_name LIKE ? LIMIT 30");
                 $stmt->execute(['%' . $search . '%']);
                 $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
             }
-            
             echo json_encode($results);
         } catch (Exception $e) {
             echo json_encode([]);
@@ -75,7 +67,6 @@ if (isset($_GET['ajax_action'])) {
     if ($_GET['ajax_action'] === 'get_securities') {
         $asset_class = $_GET['asset_class'] ?? 'equity';
         $search = $_GET['search'] ?? '';
-        
         try {
             if ($asset_class === 'equity') {
                 $sql = "SELECT security_id, stock_name as security_name, company_name, sector FROM equities WHERE status = 'active'";
@@ -90,7 +81,6 @@ if (isset($_GET['ajax_action'])) {
                 if ($search) $sql .= " AND (etf_code LIKE ? OR name LIKE ?)";
                 $sql .= " LIMIT 50";
             }
-            
             $stmt = $db->prepare($sql);
             if ($search) {
                 $searchParam = '%' . $search . '%';
@@ -138,13 +128,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
         $qty = floatval($data['quantity']);
         $price = floatval($data['order_price']);
         $is_bond = ($data['asset_class'] ?? 'equity') === 'bond';
-        
-        if ($is_bond) {
-            // For bonds: Value = (Price% / 100) × Face Value
-            $order_value = ($price / 100) * $qty;
-        } else {
-            $order_value = $qty * $price;
-        }
+        $order_value = $is_bond ? ($price / 100) * $qty : $qty * $price;
         
         // Handle file uploads
         $receipt_files = [];
@@ -156,7 +140,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
             
             $allowed_exts = ['jpg', 'jpeg', 'png', 'gif', 'pdf'];
             $max_size = 5 * 1024 * 1024;
-            
             $files = $_FILES['payment_receipts'];
             $total_files = count($files['name']);
             
@@ -165,16 +148,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
                     $file_ext = strtolower(pathinfo($files['name'][$i], PATHINFO_EXTENSION));
                     if (in_array($file_ext, $allowed_exts) && $files['size'][$i] <= $max_size) {
                         $filename = 'receipt_public_' . date('Ymd_His') . '_' . ($i + 1) . '.' . $file_ext;
-                        $filepath = $upload_dir . $filename;
-                        
-                        if (move_uploaded_file($files['tmp_name'][$i], $filepath)) {
+                        if (move_uploaded_file($files['tmp_name'][$i], $upload_dir . $filename)) {
                             $receipt_files[] = $filename;
                         }
                     }
                 }
             }
         }
-        
         $receipts_str = !empty($receipt_files) ? implode(',', $receipt_files) : null;
         
         // Insert into database
@@ -183,13 +163,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
             order_type, asset_class, quantity, order_price, order_value, order_date, order_time,
             priority, remarks, broker_code, executed_quantity, executed_price,
             trade_date, settlement_date, execution_time, lifecycle_stage, execution_status,
-            recorded_at, created_at, dealer_name, payment_receipt
+            recorded_at, created_at, dealer_name, payment_receipt, payment_status, viewed_count
         ) VALUES (
             :sheet_reference, :client_name, :client_cds_account, :security_id, :security_name,
             :order_type, :asset_class, :quantity, :order_price, :order_value, :order_date, :order_time,
             :priority, :remarks, :broker_code, :executed_quantity, :executed_price,
             :trade_date, :settlement_date, :execution_time, 'order', 'pending',
-            NOW(), NOW(), :dealer_name, :payment_receipt
+            NOW(), NOW(), :dealer_name, :payment_receipt, 'pending', 0
         )";
         
         $stmt = $db->prepare($sql);
@@ -231,6 +211,141 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
 }
 
 // ============================================
+// ACCOUNTANT CONFIRMATION HANDLER
+// ============================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    header('Content-Type: application/json');
+    
+    $action = $_POST['action'];
+    $order_id = (int) $_POST['order_id'];
+    
+    if ($action === 'confirm_payment') {
+        $notes = $_POST['notes'] ?? '';
+        try {
+            $stmt = $db->prepare("
+                UPDATE dealing_sheets 
+                SET payment_status = 'confirmed',
+                    payment_confirmed_by = 'Accountant',
+                    payment_confirmed_at = NOW(),
+                    payment_notes = ?,
+                    viewed_count = viewed_count + 1
+                WHERE id = ? AND is_cancelled = 0
+            ");
+            $stmt->execute([$notes, $order_id]);
+            echo json_encode(['success' => true, 'message' => 'Payment confirmed successfully!']);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        }
+        exit;
+    }
+    
+    if ($action === 'reject_payment') {
+        $reason = $_POST['reason'] ?? '';
+        try {
+            $stmt = $db->prepare("
+                UPDATE dealing_sheets 
+                SET payment_status = 'rejected',
+                    payment_confirmed_by = 'Accountant',
+                    payment_confirmed_at = NOW(),
+                    payment_notes = ?,
+                    viewed_count = viewed_count + 1
+                WHERE id = ? AND is_cancelled = 0
+            ");
+            $stmt->execute([$reason, $order_id]);
+            echo json_encode(['success' => true, 'message' => 'Payment rejected.']);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        }
+        exit;
+    }
+    
+    if ($action === 'cancel_order') {
+        $reason = $_POST['reason'] ?? 'Cancelled by accountant';
+        try {
+            $stmt = $db->prepare("
+                UPDATE dealing_sheets 
+                SET is_cancelled = 1,
+                    cancelled_by = 'Accountant',
+                    cancelled_at = NOW(),
+                    cancellation_reason = ?,
+                    payment_status = 'rejected',
+                    viewed_count = viewed_count + 1
+                WHERE id = ?
+            ");
+            $stmt->execute([$reason, $order_id]);
+            echo json_encode(['success' => true, 'message' => 'Order cancelled.']);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        }
+        exit;
+    }
+}
+
+// ============================================
+// GET ORDERS WITH FILTERS
+// ============================================
+$filter = $_GET['filter'] ?? 'today';
+$search = $_GET['search'] ?? '';
+$date_from = $_GET['date_from'] ?? date('Y-m-d');
+$date_to = $_GET['date_to'] ?? date('Y-m-d');
+
+if ($filter === 'today') {
+    $date_from = date('Y-m-d');
+    $date_to = date('Y-m-d');
+} elseif ($filter === 'week') {
+    $date_from = date('Y-m-d', strtotime('-7 days'));
+    $date_to = date('Y-m-d');
+} elseif ($filter === 'month') {
+    $date_from = date('Y-m-d', strtotime('-30 days'));
+    $date_to = date('Y-m-d');
+}
+
+function getOrders($db, $date_from, $date_to, $search) {
+    $sql = "SELECT * FROM dealing_sheets WHERE DATE(order_date) BETWEEN ? AND ?";
+    $params = [$date_from, $date_to];
+    
+    if (!empty($search)) {
+        $sql .= " AND (client_name LIKE ? OR security_id LIKE ? OR sheet_reference LIKE ?)";
+        $searchParam = '%' . $search . '%';
+        $params[] = $searchParam;
+        $params[] = $searchParam;
+        $params[] = $searchParam;
+    }
+    
+    $sql .= " ORDER BY created_at DESC";
+    
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function getStats($db, $date_from, $date_to) {
+    $sql = "SELECT 
+                COUNT(*) as total,
+                SUM(CASE WHEN payment_status = 'pending' AND is_cancelled = 0 THEN 1 ELSE 0 END) as pending,
+                SUM(CASE WHEN payment_status = 'confirmed' AND is_cancelled = 0 THEN 1 ELSE 0 END) as confirmed,
+                SUM(CASE WHEN payment_status = 'rejected' AND is_cancelled = 0 THEN 1 ELSE 0 END) as rejected,
+                SUM(CASE WHEN is_cancelled = 1 THEN 1 ELSE 0 END) as cancelled
+            FROM dealing_sheets 
+            WHERE DATE(order_date) BETWEEN ? AND ?";
+    
+    $stmt = $db->prepare($sql);
+    $stmt->execute([$date_from, $date_to]);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    return [
+        'total' => $result['total'] ?? 0,
+        'pending' => $result['pending'] ?? 0,
+        'confirmed' => $result['confirmed'] ?? 0,
+        'rejected' => $result['rejected'] ?? 0,
+        'cancelled' => $result['cancelled'] ?? 0
+    ];
+}
+
+$orders = getOrders($db, $date_from, $date_to, $search);
+$stats = getStats($db, $date_from, $date_to);
+
+// ============================================
 // PAGE RENDERING
 // ============================================
 ?>
@@ -239,21 +354,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-    <title>Order Entry Form</title>
-    <!-- Bootstrap CSS -->
+    <title>Order Dashboard</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- Bootstrap Icons -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
     <style>
         :root {
             --primary-color: #1a237e;
             --primary-light: #0d47a1;
-            --success-color: #2e7d32;
             --border-radius: 12px;
-        }
-        
-        * {
-            box-sizing: border-box;
         }
         
         body {
@@ -264,21 +372,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
         }
         
         .container-custom {
-            max-width: 920px;
+            max-width: 1400px;
             margin: 0 auto;
         }
         
         .header-logo {
             background: linear-gradient(135deg, var(--primary-color), var(--primary-light));
             color: white;
-            padding: 20px 25px;
+            padding: 15px 20px;
             border-radius: var(--border-radius);
-            margin-bottom: 20px;
-            text-align: center;
+            margin-bottom: 15px;
         }
         
         .header-logo h1 {
-            font-size: 1.5rem;
+            font-size: 1.3rem;
             font-weight: 700;
             margin: 0;
         }
@@ -288,63 +395,71 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
             font-weight: 300;
         }
         
-        .header-logo .badge-public {
-            background: rgba(255,255,255,0.2);
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            margin-top: 5px;
-            display: inline-block;
+        .stat-card {
+            border-radius: 10px;
+            padding: 12px 15px;
+            color: white;
+            text-align: center;
+            transition: transform 0.2s;
         }
+        
+        .stat-card:hover {
+            transform: translateY(-2px);
+        }
+        
+        .stat-card .number {
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+        
+        .stat-card .label {
+            font-size: 0.7rem;
+            opacity: 0.9;
+        }
+        
+        .stat-card.total { background: linear-gradient(135deg, #1a237e, #0d47a1); }
+        .stat-card.pending { background: linear-gradient(135deg, #f57c00, #e65100); }
+        .stat-card.confirmed { background: linear-gradient(135deg, #2e7d32, #1b5e20); }
+        .stat-card.rejected { background: linear-gradient(135deg, #c62828, #b71c1c); }
+        .stat-card.cancelled { background: linear-gradient(135deg, #455a64, #263238); }
         
         .card {
             border-radius: var(--border-radius);
             box-shadow: 0 4px 20px rgba(0,0,0,0.08);
             border: none;
-            margin-bottom: 20px;
+            margin-bottom: 15px;
             background: white;
         }
         
         .card-header {
             background: transparent;
             border-bottom: 2px solid #f0f0f0;
-            padding: 16px 22px;
+            padding: 12px 18px;
             font-weight: 600;
         }
         
-        .card-header .bi {
-            color: var(--primary-color);
-        }
-        
         .card-body {
-            padding: 22px;
+            padding: 18px;
         }
         
         .form-label {
             font-weight: 600;
-            font-size: 0.85rem;
+            font-size: 0.8rem;
             color: #333;
-            margin-bottom: 4px;
+            margin-bottom: 3px;
         }
         
         .form-control, .form-select {
             border-radius: 8px;
             border: 1.5px solid #e0e0e0;
-            padding: 10px 14px;
-            font-size: 0.95rem;
+            padding: 8px 12px;
+            font-size: 0.9rem;
             transition: all 0.3s;
-            -webkit-appearance: none;
-            appearance: none;
         }
         
         .form-control:focus, .form-select:focus {
             border-color: var(--primary-color);
             box-shadow: 0 0 0 3px rgba(26, 35, 126, 0.1);
-        }
-        
-        .form-control::placeholder {
-            color: #aaa;
-            font-size: 0.85rem;
         }
         
         .required-star {
@@ -355,12 +470,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
         .btn-primary-custom {
             background: linear-gradient(135deg, var(--primary-color), var(--primary-light));
             border: none;
-            padding: 12px 35px;
+            padding: 10px 25px;
             font-weight: 600;
             border-radius: 8px;
             color: white;
             transition: all 0.3s;
-            width: 100%;
         }
         
         .btn-primary-custom:hover {
@@ -378,11 +492,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
             border: 2px solid var(--primary-color);
             color: var(--primary-color);
             background: transparent;
-            padding: 10px 20px;
+            padding: 8px 18px;
             font-weight: 600;
             border-radius: 8px;
             transition: all 0.3s;
-            width: 100%;
         }
         
         .btn-outline-custom:hover {
@@ -395,7 +508,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
             background: white;
             border: 1px solid #ddd;
             border-radius: 8px;
-            max-height: 220px;
+            max-height: 200px;
             overflow-y: auto;
             z-index: 9999;
             width: 100%;
@@ -404,10 +517,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
         }
         
         .search-dropdown .item {
-            padding: 10px 14px;
+            padding: 8px 12px;
             cursor: pointer;
             border-bottom: 1px solid #f5f5f5;
             transition: background 0.2s;
+            font-size: 0.85rem;
         }
         
         .search-dropdown .item:hover {
@@ -415,7 +529,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
         }
         
         .search-dropdown .item .sub {
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             color: #6c757d;
             display: block;
         }
@@ -425,33 +539,76 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
         }
         
         .security-info {
-            font-size: 0.8rem;
+            font-size: 0.75rem;
             color: #6c757d;
-            margin-top: 4px;
-            padding: 4px 10px;
+            margin-top: 3px;
+            padding: 3px 8px;
             background: #f8f9fa;
             border-radius: 4px;
-            min-height: 24px;
+            min-height: 20px;
         }
         
-        .receipt-preview {
-            max-width: 70px;
-            max-height: 50px;
+        .badge-status {
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+        }
+        
+        .badge-status.pending { background: #fff3e0; color: #e65100; }
+        .badge-status.confirmed { background: #e8f5e9; color: #1b5e20; }
+        .badge-status.rejected { background: #ffebee; color: #c62828; }
+        .badge-status.cancelled { background: #eceff1; color: #455a64; }
+        
+        .table th {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            color: #6c757d;
+            font-weight: 700;
+            border-bottom: 2px solid #e0e0e0;
+            white-space: nowrap;
+        }
+        
+        .table td {
+            font-size: 0.8rem;
+            vertical-align: middle;
+        }
+        
+        .btn-sm-custom {
+            padding: 3px 8px;
+            font-size: 0.65rem;
+            border-radius: 6px;
+        }
+        
+        .receipt-thumb {
+            max-width: 40px;
+            max-height: 35px;
             object-fit: cover;
             border-radius: 4px;
-            margin: 2px;
+            cursor: pointer;
             border: 1px solid #ddd;
+        }
+        
+        .receipt-thumb:hover {
+            border-color: var(--primary-color);
+        }
+        
+        .receipt-thumbnails {
+            display: flex;
+            gap: 3px;
+            flex-wrap: wrap;
+            align-items: center;
         }
         
         .file-item {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 5px 12px;
+            padding: 4px 10px;
             background: #f8f9fa;
             border-radius: 4px;
-            margin-bottom: 3px;
-            font-size: 0.85rem;
+            margin-bottom: 2px;
+            font-size: 0.8rem;
         }
         
         .file-item .remove-file {
@@ -465,75 +622,99 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
             color: #a71d2a;
         }
         
-        .receipt-thumbnails {
-            display: flex;
-            gap: 4px;
-            flex-wrap: wrap;
-            align-items: center;
-            margin-top: 5px;
-        }
-        
         .section-divider {
             border-top: 2px dashed #e8e8e8;
-            margin: 18px 0;
+            margin: 15px 0;
         }
         
         .form-hint {
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             color: #6c757d;
             margin-top: 2px;
         }
         
-        .alert-custom {
-            border-radius: 8px;
-            padding: 12px 18px;
-            font-size: 0.9rem;
+        .filter-section {
+            background: white;
+            border-radius: 10px;
+            padding: 12px 15px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.06);
         }
         
-        .clock-display {
-            font-size: 0.8rem;
-            opacity: 0.8;
-            font-weight: 300;
+        .filter-btn {
+            padding: 4px 14px;
+            border-radius: 20px;
+            border: 1px solid #ddd;
+            background: white;
+            font-size: 0.75rem;
+            transition: all 0.3s;
+            text-decoration: none;
+            color: #333;
+            display: inline-block;
+        }
+        
+        .filter-btn:hover {
+            background: #f0f4ff;
+        }
+        
+        .filter-btn.active {
+            background: var(--primary-color);
+            color: white;
+            border-color: var(--primary-color);
+        }
+        
+        .view-count {
+            font-size: 0.6rem;
+            color: #6c757d;
+        }
+        
+        .order-row-cancelled {
+            background-color: #f5f5f5 !important;
+            opacity: 0.6;
+        }
+        
+        .order-row-cancelled td {
+            text-decoration: line-through;
+        }
+        
+        .nav-tabs .nav-link {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #6c757d;
+            border: none;
+            padding: 8px 20px;
+            border-radius: 8px 8px 0 0;
+        }
+        
+        .nav-tabs .nav-link.active {
+            color: var(--primary-color);
+            background: white;
+            border-bottom: 3px solid var(--primary-color);
+        }
+        
+        .nav-tabs .nav-link:hover {
+            color: var(--primary-color);
+        }
+        
+        .tab-content {
+            padding-top: 15px;
         }
         
         @media (max-width: 768px) {
             body { padding: 10px; }
-            .container-custom { max-width: 100%; }
-            .card-body { padding: 16px; }
-            .header-logo h1 { font-size: 1.2rem; }
-            .btn-primary-custom, .btn-outline-custom { 
-                padding: 10px 20px;
-                font-size: 0.9rem;
-            }
-            .form-control, .form-select { font-size: 16px; } /* Prevents zoom on iOS */
+            .header-logo h1 { font-size: 1.1rem; }
+            .stat-card .number { font-size: 1.2rem; }
+            .stat-card { padding: 8px 10px; }
+            .card-body { padding: 12px; }
+            .form-control, .form-select { font-size: 16px; }
+            .table-responsive { font-size: 0.7rem; }
+            .btn-sm-custom { font-size: 0.55rem; padding: 2px 5px; }
         }
         
         @media (max-width: 480px) {
-            .col-md-3, .col-md-4, .col-md-6 {
-                padding-left: 6px;
-                padding-right: 6px;
-            }
-            .row.g-3 { --bs-gutter-y: 0.5rem; }
-            .card-header { padding: 12px 16px; }
-            .card-header h6 { font-size: 0.9rem; }
-        }
-        
-        /* Spinner */
-        .spinner-border-sm {
-            width: 1rem;
-            height: 1rem;
-        }
-        
-        /* Custom scrollbar */
-        .search-dropdown::-webkit-scrollbar {
-            width: 4px;
-        }
-        .search-dropdown::-webkit-scrollbar-track {
-            background: #f1f1f1;
-        }
-        .search-dropdown::-webkit-scrollbar-thumb {
-            background: #ccc;
-            border-radius: 4px;
+            .stat-card .number { font-size: 1rem; }
+            .filter-btn { font-size: 0.65rem; padding: 3px 8px; }
+            .nav-tabs .nav-link { font-size: 0.75rem; padding: 6px 12px; }
         }
     </style>
 </head>
@@ -543,217 +724,527 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
 
     <!-- Header -->
     <div class="header-logo">
-        <h1>
-            <i class="bi bi-building me-2"></i><?php echo htmlspecialchars($company['company_name'] ?? 'Victory Financial Services'); ?>
-        </h1>
-        <small>Order Entry Form</small>
-        <div class="badge-public">
-            <i class="bi bi-globe me-1"></i> Public Access
-            <span class="clock-display ms-2" id="currentDateTime"></span>
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div>
+                <h1><i class="bi bi-speedometer2 me-2"></i>Order Dashboard</h1>
+                <small><i class="bi bi-calendar3 me-1"></i> <?php echo date('l, F j, Y'); ?></small>
+            </div>
+            <div>
+                <span class="badge bg-light text-dark" id="liveClock"></span>
+            </div>
         </div>
     </div>
 
-    <!-- Main Form Card -->
-    <div class="card">
-        <div class="card-header">
-            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-                <h6 class="mb-0"><i class="bi bi-plus-circle me-2"></i>New Order</h6>
-                <span class="text-muted small">
-                    <i class="bi bi-asterisk text-danger me-1"></i> Required fields
-                </span>
+    <!-- Stats Cards -->
+    <div class="row g-2 g-md-3 mb-3">
+        <div class="col-6 col-md-2">
+            <div class="stat-card total">
+                <div class="number"><?php echo $stats['total']; ?></div>
+                <div class="label">Total Orders</div>
             </div>
         </div>
-        <div class="card-body">
-
-            <!-- Alert Container -->
-            <div id="alertContainer"></div>
-
-            <form id="orderForm" enctype="multipart/form-data">
-
-                <!-- ========================================= -->
-                <!-- SECTION 1: ORDER BASIC INFO -->
-                <!-- ========================================= -->
-                <h6 class="fw-bold text-primary mb-2" style="font-size:0.85rem;">
-                    <i class="bi bi-info-circle me-2"></i>Order Information
-                </h6>
-                <div class="row g-2 g-md-3">
-                    <div class="col-6 col-md-4">
-                        <label class="form-label">Order Type <span class="required-star">*</span></label>
-                        <select class="form-select" name="order_type" id="order_type" required>
-                            <option value="buy">BUY</option>
-                            <option value="sell">SELL</option>
-                        </select>
-                    </div>
-                    <div class="col-6 col-md-4">
-                        <label class="form-label">Priority</label>
-                        <select class="form-select" name="priority" id="priority">
-                            <option value="normal">Normal</option>
-                            <option value="urgent">Urgent</option>
-                            <option value="most_important">Most Important</option>
-                        </select>
-                    </div>
-                    <div class="col-6 col-md-4">
-                        <label class="form-label">Asset Class <span class="required-star">*</span></label>
-                        <select class="form-select" name="asset_class" id="asset_class" required>
-                            <option value="equity">Equity / Shares</option>
-                            <option value="bond">Bond</option>
-                            <option value="etf">ETF</option>
-                        </select>
-                    </div>
-                    <div class="col-6 col-md-3">
-                        <label class="form-label">Order Date</label>
-                        <input type="date" class="form-control" name="order_date" id="order_date">
-                    </div>
-                    <div class="col-6 col-md-3">
-                        <label class="form-label">Order Time</label>
-                        <input type="time" class="form-control" name="order_time" id="order_time">
-                    </div>
-                    <div class="col-12 col-md-6">
-                        <label class="form-label">Broker Code</label>
-                        <input class="form-control" name="broker_code" id="broker_code" placeholder="e.g., B13/C" value="<?php echo htmlspecialchars($company['company_code'] ?? ''); ?>">
-                    </div>
-                </div>
-
-                <div class="section-divider"></div>
-
-                <!-- ========================================= -->
-                <!-- SECTION 2: CLIENT & SECURITY -->
-                <!-- ========================================= -->
-                <h6 class="fw-bold text-primary mb-2" style="font-size:0.85rem;">
-                    <i class="bi bi-person me-2"></i>Client & Security Details
-                </h6>
-                <div class="row g-2 g-md-3">
-                    <div class="col-12 col-md-6 position-relative">
-                        <label class="form-label">Client Name <span class="required-star">*</span></label>
-                        <input type="text" class="form-control" id="client_search" placeholder="Type to search client..." autocomplete="off">
-                        <input type="hidden" name="client_name" id="client_name">
-                        <input type="hidden" name="client_cds_account" id="client_cds_account">
-                        <div id="client_search_dropdown" class="search-dropdown"></div>
-                        <div class="form-hint">Type at least 2 characters to search</div>
-                    </div>
-                    <div class="col-12 col-md-6 position-relative">
-                        <label class="form-label">Security <span class="required-star">*</span></label>
-                        <input type="text" class="form-control" id="security_search" placeholder="Type to search security..." autocomplete="off">
-                        <input type="hidden" name="security_id" id="security_id">
-                        <input type="hidden" name="security_name" id="security_name">
-                        <div id="security_search_dropdown" class="search-dropdown"></div>
-                        <div id="security_info" class="security-info"></div>
-                    </div>
-                </div>
-
-                <div class="section-divider"></div>
-
-                <!-- ========================================= -->
-                <!-- SECTION 3: QUANTITY & PRICE -->
-                <!-- ========================================= -->
-                <h6 class="fw-bold text-primary mb-2" style="font-size:0.85rem;">
-                    <i class="bi bi-calculator me-2"></i>Quantity & Price
-                </h6>
-                <div class="row g-2 g-md-3">
-                    <div class="col-6 col-md-4">
-                        <label class="form-label" id="quantity_label">Quantity <span class="required-star">*</span></label>
-                        <input type="number" class="form-control" name="quantity" id="quantity" step="1" min="1" required>
-                        <div class="form-hint" id="quantity_hint">Number of shares</div>
-                    </div>
-                    <div class="col-6 col-md-4">
-                        <label class="form-label" id="price_label">Price (TZS) <span class="required-star">*</span></label>
-                        <input type="number" class="form-control" name="order_price" id="order_price" step="0.01" min="0" required>
-                        <div class="form-hint" id="price_hint">Price per share in TZS</div>
-                    </div>
-                </div>
-
-                <div class="section-divider"></div>
-
-                <!-- ========================================= -->
-                <!-- SECTION 4: EXECUTION DETAILS -->
-                <!-- ========================================= -->
-                <h6 class="fw-bold text-primary mb-2" style="font-size:0.85rem;">
-                    <i class="bi bi-check2-circle me-2"></i>Execution Details
-                    <span class="text-muted fw-normal" style="font-size:0.75rem;">(Optional)</span>
-                </h6>
-                <div class="row g-2 g-md-3">
-                    <div class="col-6 col-md-3">
-                        <label class="form-label" id="exec_qty_label">Executed Qty</label>
-                        <input type="number" class="form-control" name="executed_quantity" id="executed_quantity" step="1" min="0">
-                    </div>
-                    <div class="col-6 col-md-3">
-                        <label class="form-label" id="exec_price_label">Executed Price</label>
-                        <input type="number" class="form-control" name="executed_price" id="executed_price" step="0.01" min="0">
-                    </div>
-                    <div class="col-6 col-md-3">
-                        <label class="form-label">Trade Date</label>
-                        <input type="date" class="form-control" name="trade_date" id="trade_date">
-                    </div>
-                    <div class="col-6 col-md-3">
-                        <label class="form-label">Settlement Date</label>
-                        <input type="date" class="form-control" name="settlement_date" id="settlement_date">
-                    </div>
-                    <div class="col-6 col-md-3">
-                        <label class="form-label">Execution Time</label>
-                        <input type="time" class="form-control" name="execution_time" id="execution_time">
-                    </div>
-                </div>
-
-                <div class="section-divider"></div>
-
-                <!-- ========================================= -->
-                <!-- SECTION 5: RECEIPT UPLOAD -->
-                <!-- ========================================= -->
-                <h6 class="fw-bold text-primary mb-2" style="font-size:0.85rem;">
-                    <i class="bi bi-file-earmark-image me-2"></i>Payment Receipt
-                    <span class="text-muted fw-normal" style="font-size:0.75rem;">(Optional)</span>
-                </h6>
-                <div class="row g-2">
-                    <div class="col-12">
-                        <input type="file" class="form-control" name="payment_receipts[]" id="receipt_files" accept="image/*,.pdf" multiple style="padding:8px 12px;">
-                        <div class="form-hint">Allowed: JPG, PNG, GIF, PDF (Max 5MB each) &mdash; Select multiple files</div>
-                    </div>
-                    <div class="col-12">
-                        <div id="fileList"></div>
-                        <div id="receiptPreviews" class="receipt-thumbnails"></div>
-                    </div>
-                </div>
-
-                <div class="section-divider"></div>
-
-                <!-- ========================================= -->
-                <!-- SECTION 6: REMARKS -->
-                <!-- ========================================= -->
-                <div class="row g-2">
-                    <div class="col-12">
-                        <label class="form-label">Remarks</label>
-                        <textarea class="form-control" name="remarks" id="remarks" rows="2" placeholder="Any additional notes..."></textarea>
-                    </div>
-                </div>
-
-                <div class="section-divider"></div>
-
-                <!-- ========================================= -->
-                <!-- FORM ACTIONS -->
-                <!-- ========================================= -->
-                <div class="row g-2">
-                    <div class="col-6">
-                        <button type="button" class="btn btn-outline-custom" onclick="resetForm()">
-                            <i class="bi bi-arrow-counterclockwise me-1"></i> Reset
-                        </button>
-                    </div>
-                    <div class="col-6">
-                        <button type="submit" class="btn btn-primary-custom" id="submitBtn">
-                            <i class="bi bi-save me-2"></i> Submit
-                        </button>
-                    </div>
-                </div>
-
-            </form>
+        <div class="col-6 col-md-2">
+            <div class="stat-card pending">
+                <div class="number"><?php echo $stats['pending']; ?></div>
+                <div class="label">Pending</div>
+            </div>
         </div>
+        <div class="col-6 col-md-2">
+            <div class="stat-card confirmed">
+                <div class="number"><?php echo $stats['confirmed']; ?></div>
+                <div class="label">Confirmed</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-2">
+            <div class="stat-card rejected">
+                <div class="number"><?php echo $stats['rejected']; ?></div>
+                <div class="label">Rejected</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-2">
+            <div class="stat-card cancelled">
+                <div class="number"><?php echo $stats['cancelled']; ?></div>
+                <div class="label">Cancelled</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tabs -->
+    <ul class="nav nav-tabs" id="mainTabs">
+        <li class="nav-item">
+            <button class="nav-link active" id="form-tab" data-bs-toggle="tab" data-bs-target="#form-panel">
+                <i class="bi bi-plus-circle me-1"></i> New Order
+            </button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link" id="orders-tab" data-bs-toggle="tab" data-bs-target="#orders-panel">
+                <i class="bi bi-list-ul me-1"></i> Orders List
+                <span class="badge bg-primary ms-1"><?php echo count($orders); ?></span>
+            </button>
+        </li>
+    </ul>
+
+    <div class="tab-content">
+
+        <!-- ========================================= -->
+        <!-- TAB 1: FORM PANEL -->
+        <!-- ========================================= -->
+        <div class="tab-pane fade show active" id="form-panel">
+            <div class="card">
+                <div class="card-header">
+                    <h6 class="mb-0"><i class="bi bi-pencil-square me-2"></i>Enter Order Details</h6>
+                </div>
+                <div class="card-body">
+                    <div id="alertContainer"></div>
+
+                    <form id="orderForm" enctype="multipart/form-data">
+
+                        <!-- Order Basic Info -->
+                        <div class="row g-2 g-md-3">
+                            <div class="col-6 col-md-3">
+                                <label class="form-label">Order Type <span class="required-star">*</span></label>
+                                <select class="form-select" name="order_type" id="order_type" required>
+                                    <option value="buy">BUY</option>
+                                    <option value="sell">SELL</option>
+                                </select>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label">Priority</label>
+                                <select class="form-select" name="priority" id="priority">
+                                    <option value="normal">Normal</option>
+                                    <option value="urgent">Urgent</option>
+                                    <option value="most_important">Most Important</option>
+                                </select>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label">Asset Class <span class="required-star">*</span></label>
+                                <select class="form-select" name="asset_class" id="asset_class" required>
+                                    <option value="equity">Equity / Shares</option>
+                                    <option value="bond">Bond</option>
+                                    <option value="etf">ETF</option>
+                                </select>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label">Order Date</label>
+                                <input type="date" class="form-control" name="order_date" id="order_date">
+                            </div>
+                        </div>
+
+                        <div class="section-divider"></div>
+
+                        <!-- Client & Security -->
+                        <div class="row g-2 g-md-3">
+                            <div class="col-12 col-md-6 position-relative">
+                                <label class="form-label">Client Name <span class="required-star">*</span></label>
+                                <input type="text" class="form-control" id="client_search" placeholder="Type to search client..." autocomplete="off">
+                                <input type="hidden" name="client_name" id="client_name">
+                                <input type="hidden" name="client_cds_account" id="client_cds_account">
+                                <div id="client_search_dropdown" class="search-dropdown"></div>
+                                <div class="form-hint">Type at least 2 characters to search</div>
+                            </div>
+                            <div class="col-12 col-md-6 position-relative">
+                                <label class="form-label">Security <span class="required-star">*</span></label>
+                                <input type="text" class="form-control" id="security_search" placeholder="Type to search security..." autocomplete="off">
+                                <input type="hidden" name="security_id" id="security_id">
+                                <input type="hidden" name="security_name" id="security_name">
+                                <div id="security_search_dropdown" class="search-dropdown"></div>
+                                <div id="security_info" class="security-info"></div>
+                            </div>
+                        </div>
+
+                        <div class="section-divider"></div>
+
+                        <!-- Quantity & Price -->
+                        <div class="row g-2 g-md-3">
+                            <div class="col-6 col-md-3">
+                                <label class="form-label" id="quantity_label">Quantity <span class="required-star">*</span></label>
+                                <input type="number" class="form-control" name="quantity" id="quantity" step="1" min="1" required>
+                                <div class="form-hint" id="quantity_hint">Number of shares</div>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label" id="price_label">Price (TZS) <span class="required-star">*</span></label>
+                                <input type="number" class="form-control" name="order_price" id="order_price" step="0.01" min="0" required>
+                                <div class="form-hint" id="price_hint">Price per share in TZS</div>
+                            </div>
+                            <div class="col-12 col-md-6">
+                                <label class="form-label">Broker Code</label>
+                                <input class="form-control" name="broker_code" id="broker_code" placeholder="e.g., B13/C" value="<?php echo htmlspecialchars($company['company_code'] ?? ''); ?>">
+                            </div>
+                        </div>
+
+                        <div class="section-divider"></div>
+
+                        <!-- Execution Details -->
+                        <div class="row g-2 g-md-3">
+                            <div class="col-6 col-md-3">
+                                <label class="form-label" id="exec_qty_label">Executed Qty</label>
+                                <input type="number" class="form-control" name="executed_quantity" id="executed_quantity" step="1" min="0">
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label" id="exec_price_label">Executed Price</label>
+                                <input type="number" class="form-control" name="executed_price" id="executed_price" step="0.01" min="0">
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label">Trade Date</label>
+                                <input type="date" class="form-control" name="trade_date" id="trade_date">
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label">Settlement Date</label>
+                                <input type="date" class="form-control" name="settlement_date" id="settlement_date">
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label">Execution Time</label>
+                                <input type="time" class="form-control" name="execution_time" id="execution_time">
+                            </div>
+                        </div>
+
+                        <div class="section-divider"></div>
+
+                        <!-- Receipt Upload -->
+                        <div class="row g-2">
+                            <div class="col-12">
+                                <label class="form-label">Payment Receipt <span class="text-muted">(Optional)</span></label>
+                                <input type="file" class="form-control" name="payment_receipts[]" id="receipt_files" accept="image/*,.pdf" multiple style="padding:6px 10px;">
+                                <div class="form-hint">Allowed: JPG, PNG, GIF, PDF (Max 5MB each) &mdash; Select multiple files</div>
+                            </div>
+                            <div class="col-12">
+                                <div id="fileList"></div>
+                                <div id="receiptPreviews" class="receipt-thumbnails"></div>
+                            </div>
+                        </div>
+
+                        <div class="section-divider"></div>
+
+                        <!-- Remarks -->
+                        <div class="row g-2">
+                            <div class="col-12">
+                                <label class="form-label">Remarks</label>
+                                <textarea class="form-control" name="remarks" id="remarks" rows="2" placeholder="Any additional notes..."></textarea>
+                            </div>
+                        </div>
+
+                        <div class="section-divider"></div>
+
+                        <!-- Form Actions -->
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <button type="button" class="btn btn-outline-custom w-100" onclick="resetForm()">
+                                    <i class="bi bi-arrow-counterclockwise me-1"></i> Reset
+                                </button>
+                            </div>
+                            <div class="col-6">
+                                <button type="submit" class="btn btn-primary-custom w-100" id="submitBtn">
+                                    <i class="bi bi-save me-2"></i> Submit
+                                </button>
+                            </div>
+                        </div>
+
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- ========================================= -->
+        <!-- TAB 2: ORDERS LIST PANEL -->
+        <!-- ========================================= -->
+        <div class="tab-pane fade" id="orders-panel">
+            
+            <!-- Filter Section -->
+            <div class="filter-section">
+                <div class="row g-2 align-items-end">
+                    <div class="col-12 col-md-auto">
+                        <label class="form-label small fw-semibold">Quick Filters</label>
+                        <div class="d-flex flex-wrap gap-1">
+                            <a href="?filter=today" class="filter-btn <?php echo $filter === 'today' ? 'active' : ''; ?>">Today</a>
+                            <a href="?filter=week" class="filter-btn <?php echo $filter === 'week' ? 'active' : ''; ?>">Week</a>
+                            <a href="?filter=month" class="filter-btn <?php echo $filter === 'month' ? 'active' : ''; ?>">Month</a>
+                            <a href="?filter=all" class="filter-btn <?php echo $filter === 'all' ? 'active' : ''; ?>">All</a>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md">
+                        <form method="GET" action="" class="row g-2">
+                            <input type="hidden" name="filter" value="<?php echo htmlspecialchars($filter); ?>">
+                            <div class="col-6 col-md-3">
+                                <input type="date" class="form-control form-control-sm" name="date_from" value="<?php echo htmlspecialchars($date_from); ?>">
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <input type="date" class="form-control form-control-sm" name="date_to" value="<?php echo htmlspecialchars($date_to); ?>">
+                            </div>
+                            <div class="col-8 col-md-4">
+                                <input type="text" class="form-control form-control-sm" name="search" placeholder="Search..." value="<?php echo htmlspecialchars($search); ?>">
+                            </div>
+                            <div class="col-4 col-md-2">
+                                <button type="submit" class="btn btn-primary btn-sm w-100">
+                                    <i class="bi bi-search"></i>
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Orders Table -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                        <span><i class="bi bi-list-ul me-2"></i>Orders List</span>
+                        <span class="text-muted small"><?php echo count($orders); ?> orders found</span>
+                    </div>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Ref</th>
+                                    <th>Client</th>
+                                    <th>Security</th>
+                                    <th>Qty</th>
+                                    <th>Price</th>
+                                    <th>Value</th>
+                                    <th>Date</th>
+                                    <th>Status</th>
+                                    <th>Receipt</th>
+                                    <th class="text-end">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php if (empty($orders)): ?>
+                                    <tr>
+                                        <td colspan="10" class="text-center py-4 text-muted">
+                                            <i class="bi bi-inbox me-2"></i>No orders found
+                                        </td>
+                                    </tr>
+                                <?php else: ?>
+                                    <?php foreach ($orders as $order): 
+                                        $isCancelled = (bool) $order['is_cancelled'];
+                                        $rowClass = $isCancelled ? 'order-row-cancelled' : '';
+                                        
+                                        $isBond = ($order['asset_class'] ?? '') === 'bond';
+                                        if ($isBond) {
+                                            $displayQty = 'TZS ' . number_format(floatval($order['quantity'] ?? 0), 2);
+                                            $displayPrice = number_format(floatval($order['order_price'] ?? 0), 4) . '%';
+                                            $displayValue = 'TZS ' . number_format((floatval($order['order_price'] ?? 0) / 100) * floatval($order['quantity'] ?? 0), 2);
+                                        } else {
+                                            $displayQty = number_format(floatval($order['quantity'] ?? 0), 0);
+                                            $displayPrice = 'TZS ' . number_format(floatval($order['order_price'] ?? 0), 2);
+                                            $displayValue = 'TZS ' . number_format(floatval($order['order_value'] ?? 0), 2);
+                                        }
+                                        
+                                        $status = $isCancelled ? 'cancelled' : ($order['payment_status'] ?? 'pending');
+                                        $statusColors = ['pending' => 'pending', 'confirmed' => 'confirmed', 'rejected' => 'rejected', 'cancelled' => 'cancelled'];
+                                        $statusLabels = ['pending' => 'Pending', 'confirmed' => 'Confirmed', 'rejected' => 'Rejected', 'cancelled' => 'Cancelled'];
+                                        
+                                        $hasReceipt = !empty($order['payment_receipt']);
+                                        $receiptFiles = $hasReceipt ? explode(',', $order['payment_receipt']) : [];
+                                    ?>
+                                        <tr class="<?php echo $rowClass; ?>">
+                                            <td><span class="fw-semibold"><?php echo htmlspecialchars($order['sheet_reference'] ?? 'N/A'); ?></span></td>
+                                            <td><?php echo htmlspecialchars($order['client_name'] ?? ''); ?></td>
+                                            <td><?php echo htmlspecialchars($order['security_id'] ?? ''); ?></td>
+                                            <td><?php echo $displayQty; ?></td>
+                                            <td><?php echo $displayPrice; ?></td>
+                                            <td><?php echo $displayValue; ?></td>
+                                            <td><?php echo htmlspecialchars($order['order_date'] ?? ''); ?></td>
+                                            <td>
+                                                <span class="badge-status <?php echo $statusColors[$status] ?? 'pending'; ?>">
+                                                    <?php echo $statusLabels[$status] ?? 'Pending'; ?>
+                                                </span>
+                                                <?php if ($order['payment_confirmed_at']): ?>
+                                                    <br><small class="text-success" style="font-size:0.55rem;">
+                                                        <?php echo date('d/m/Y H:i', strtotime($order['payment_confirmed_at'])); ?>
+                                                    </small>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td>
+                                                <?php if ($hasReceipt && !$isCancelled): ?>
+                                                    <div class="receipt-thumbnails">
+                                                        <?php 
+                                                        $count = 0;
+                                                        foreach ($receiptFiles as $file):
+                                                            $file = trim($file);
+                                                            if (empty($file)) continue;
+                                                            $count++;
+                                                            $filepath = '../uploads/payment_receipts/' . $file;
+                                                            $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
+                                                            $isImage = in_array($ext, ['jpg', 'jpeg', 'png', 'gif']);
+                                                            if ($isImage && file_exists($filepath)):
+                                                        ?>
+                                                            <img src="<?php echo $filepath; ?>" class="receipt-thumb" onclick="viewReceipt('<?php echo $filepath; ?>')" title="Click to view">
+                                                        <?php else: ?>
+                                                            <span class="badge bg-info" onclick="viewReceiptPDF('<?php echo $filepath; ?>')" style="cursor:pointer; font-size:0.6rem;">
+                                                                <i class="bi bi-file-pdf"></i>
+                                                            </span>
+                                                        <?php endif; ?>
+                                                        <?php endforeach; ?>
+                                                        <?php if ($count > 1): ?>
+                                                            <span class="badge bg-secondary" style="font-size:0.6rem;">+<?php echo $count - 1; ?></span>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                <?php else: ?>
+                                                    <span class="text-muted" style="font-size:0.65rem;">No receipt</span>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td class="text-end">
+                                                <?php if (!$isCancelled): ?>
+                                                    <?php if ($order['payment_status'] === 'pending'): ?>
+                                                        <button class="btn btn-success btn-sm-custom" onclick="confirmPayment(<?php echo $order['id']; ?>, '<?php echo htmlspecialchars($order['sheet_reference']); ?>')" title="Confirm Payment">
+                                                            <i class="bi bi-check-circle"></i>
+                                                        </button>
+                                                        <button class="btn btn-danger btn-sm-custom" onclick="rejectPayment(<?php echo $order['id']; ?>, '<?php echo htmlspecialchars($order['sheet_reference']); ?>')" title="Reject Payment">
+                                                            <i class="bi bi-x-circle"></i>
+                                                        </button>
+                                                    <?php endif; ?>
+                                                    <button class="btn btn-secondary btn-sm-custom" onclick="cancelOrder(<?php echo $order['id']; ?>, '<?php echo htmlspecialchars($order['sheet_reference']); ?>')" title="Cancel Order">
+                                                        <i class="bi bi-ban"></i>
+                                                    </button>
+                                                <?php else: ?>
+                                                    <span class="text-muted" style="font-size:0.65rem;">Cancelled</span>
+                                                <?php endif; ?>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                <?php endif; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
     </div>
 
     <!-- Footer -->
     <div class="text-center text-muted small py-3">
-        <i class="bi bi-shield-check me-1"></i> This form is for internal use only.<br>
-        Data is submitted to the system securely.
+        <i class="bi bi-shield-check me-1"></i> Secure Order Management System
     </div>
+</div>
 
+<!-- ========================================= -->
+<!-- MODALS -->
+<!-- ========================================= -->
+
+<!-- Receipt Image Modal -->
+<div class="modal fade" id="receiptModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-info text-white">
+                <h5 class="modal-title"><i class="bi bi-image me-2"></i>Payment Receipt</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body text-center">
+                <img id="receiptViewImg" src="" alt="Receipt" style="max-width:100%; max-height:80vh;">
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <a id="receiptDownloadLink" href="#" target="_blank" class="btn btn-primary">Download</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Receipt PDF Modal -->
+<div class="modal fade" id="receiptPdfModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-centered" style="max-width:95%; height:90vh;">
+        <div class="modal-content" style="height:100%;">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title"><i class="bi bi-file-pdf me-2"></i>PDF Receipt</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" style="height:calc(100% - 120px); padding:0;">
+                <embed id="receiptPdfViewer" src="" type="application/pdf" width="100%" height="100%">
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <a id="receiptPdfDownloadLink" href="#" target="_blank" class="btn btn-primary">Download PDF</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Confirm Payment Modal -->
+<div class="modal fade" id="confirmModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-success text-white">
+                <h5 class="modal-title"><i class="bi bi-check-circle me-2"></i>Confirm Payment</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="confirmForm">
+                <div class="modal-body">
+                    <input type="hidden" name="order_id" id="confirm_order_id">
+                    <input type="hidden" name="action" value="confirm_payment">
+                    <p>Confirm payment for: <strong id="confirm_ref"></strong></p>
+                    <div class="mb-3">
+                        <label class="form-label">Notes</label>
+                        <textarea class="form-control" name="notes" id="confirm_notes" rows="2"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success">Confirm</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Reject Payment Modal -->
+<div class="modal fade" id="rejectModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title"><i class="bi bi-x-circle me-2"></i>Reject Payment</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="rejectForm">
+                <div class="modal-body">
+                    <input type="hidden" name="order_id" id="reject_order_id">
+                    <input type="hidden" name="action" value="reject_payment">
+                    <p>Reject payment for: <strong id="reject_ref"></strong></p>
+                    <div class="mb-3">
+                        <label class="form-label">Reason <span class="text-danger">*</span></label>
+                        <textarea class="form-control" name="reason" id="reject_reason" rows="2" required></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger">Reject</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Cancel Order Modal -->
+<div class="modal fade" id="cancelModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-secondary text-white">
+                <h5 class="modal-title"><i class="bi bi-ban me-2"></i>Cancel Order</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="cancelForm">
+                <div class="modal-body">
+                    <input type="hidden" name="order_id" id="cancel_order_id">
+                    <input type="hidden" name="action" value="cancel_order">
+                    <div class="alert alert-warning">
+                        <i class="bi bi-exclamation-triangle me-2"></i>
+                        <strong>Warning:</strong> This action cannot be undone.
+                    </div>
+                    <p>Cancel order: <strong id="cancel_ref"></strong></p>
+                    <div class="mb-3">
+                        <label class="form-label">Reason <span class="text-danger">*</span></label>
+                        <textarea class="form-control" name="reason" id="cancel_reason" rows="2" required></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-secondary">Cancel Order</button>
+                </div>
+            </form>
+        </div>
+    </div>
 </div>
 
 <!-- ========================================= -->
@@ -761,15 +1252,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
 <!-- ========================================= -->
 <script>
 // ============================================
-// CONFIGURATION
+// CLOCK
 // ============================================
-const API_URL = window.location.href;
+function updateClock() {
+    const now = new Date();
+    document.getElementById('liveClock').textContent = 
+        now.toLocaleDateString() + ' ' + now.toLocaleTimeString();
+}
+setInterval(updateClock, 1000);
+updateClock();
 
 // ============================================
 // INITIALIZATION
 // ============================================
 document.addEventListener('DOMContentLoaded', function() {
-    // Set default dates
     const today = new Date();
     const dateStr = today.toISOString().split('T')[0];
     document.getElementById('order_date').value = dateStr;
@@ -783,21 +1279,14 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('order_time').value = timeStr;
     document.getElementById('execution_time').value = timeStr;
     
-    // Update clock
-    updateClock();
-    setInterval(updateClock, 1000);
-    
-    // Initialize fields
     updateFieldsForAssetClass();
     
-    // Event listeners
     document.getElementById('asset_class').addEventListener('change', updateFieldsForAssetClass);
     document.getElementById('client_search').addEventListener('input', searchClients);
     document.getElementById('security_search').addEventListener('input', searchSecurities);
     document.getElementById('receipt_files').addEventListener('change', handleFilePreview);
     document.getElementById('orderForm').addEventListener('submit', submitForm);
     
-    // Close dropdowns on outside click
     document.addEventListener('click', function(e) {
         if (!e.target.closest('#client_search')) {
             document.getElementById('client_search_dropdown').style.display = 'none';
@@ -807,16 +1296,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 });
-
-// ============================================
-// CLOCK
-// ============================================
-function updateClock() {
-    const now = new Date();
-    document.getElementById('currentDateTime').textContent = 
-        now.toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }) +
-        ' ' + now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-}
 
 // ============================================
 // ASSET CLASS FIELD UPDATES
@@ -844,7 +1323,7 @@ function updateFieldsForAssetClass() {
         priceInput.placeholder = 'e.g., 98.5000';
         priceInput.step = '0.0001';
         quantityHint.textContent = 'Face value in TZS';
-        priceHint.textContent = 'Percentage of par value (e.g., 98.5 = 98.5%)';
+        priceHint.textContent = 'Percentage of par value';
         execQtyLabel.textContent = 'Executed Face Value (TZS)';
         execPriceLabel.textContent = 'Executed Price (% of Par)';
         execQtyInput.step = '0.01';
@@ -881,7 +1360,7 @@ function searchClients() {
         return;
     }
     
-    fetch(API_URL + '?ajax_action=search_clients&search=' + encodeURIComponent(search))
+    fetch(window.location.href + '?ajax_action=search_clients&search=' + encodeURIComponent(search))
         .then(r => r.json())
         .then(data => {
             dropdown.innerHTML = '';
@@ -903,7 +1382,6 @@ function searchClients() {
                 });
                 dropdown.style.display = 'block';
             } else {
-                // Allow manual entry
                 const div = document.createElement('div');
                 div.className = 'item';
                 div.innerHTML = `<em>No matching clients found. Type manually.</em>`;
@@ -916,9 +1394,7 @@ function searchClients() {
                 dropdown.style.display = 'block';
             }
         })
-        .catch(() => {
-            dropdown.style.display = 'none';
-        });
+        .catch(() => { dropdown.style.display = 'none'; });
 }
 
 // ============================================
@@ -934,7 +1410,7 @@ function searchSecurities() {
         return;
     }
     
-    fetch(API_URL + '?ajax_action=get_securities&asset_class=' + encodeURIComponent(assetClass) + '&search=' + encodeURIComponent(search))
+    fetch(window.location.href + '?ajax_action=get_securities&asset_class=' + encodeURIComponent(assetClass) + '&search=' + encodeURIComponent(search))
         .then(r => r.json())
         .then(data => {
             dropdown.innerHTML = '';
@@ -980,9 +1456,7 @@ function searchSecurities() {
                 dropdown.style.display = 'block';
             }
         })
-        .catch(() => {
-            dropdown.style.display = 'none';
-        });
+        .catch(() => { dropdown.style.display = 'none'; });
 }
 
 // ============================================
@@ -1013,7 +1487,7 @@ function handleFilePreview() {
             reader.onload = function(e) {
                 const img = document.createElement('img');
                 img.src = e.target.result;
-                img.className = 'receipt-preview';
+                img.className = 'receipt-thumb';
                 img.title = file.name;
                 previewContainer.appendChild(img);
             };
@@ -1033,7 +1507,6 @@ function removeFile(index) {
         }
     }
     input.files = dt.files;
-    
     const event = new Event('change');
     input.dispatchEvent(event);
 }
@@ -1044,7 +1517,6 @@ function removeFile(index) {
 function submitForm(e) {
     e.preventDefault();
     
-    // Validate required fields
     const clientName = document.getElementById('client_name').value.trim();
     const securityId = document.getElementById('security_id').value.trim();
     const quantity = document.getElementById('quantity').value;
@@ -1078,16 +1550,14 @@ function submitForm(e) {
         return;
     }
     
-    // Disable button
     const btn = document.getElementById('submitBtn');
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> Submitting...';
     
-    // Build FormData
     const formData = new FormData(document.getElementById('orderForm'));
     formData.append('ajax_action', 'save_order');
     
-    fetch(API_URL, {
+    fetch(window.location.href, {
         method: 'POST',
         body: formData
     })
@@ -1099,7 +1569,7 @@ function submitForm(e) {
                 resetForm();
                 btn.disabled = false;
                 btn.innerHTML = '<i class="bi bi-save me-2"></i> Submit';
-                window.scrollTo({ top: 0, behavior: 'smooth' });
+                document.getElementById('orders-tab').click();
             }, 2000);
         } else {
             showAlert('danger', '❌ ' + (data.message || 'An error occurred.'));
@@ -1108,7 +1578,6 @@ function submitForm(e) {
         }
     })
     .catch(error => {
-        console.error('Error:', error);
         showAlert('danger', '❌ Connection error. Please try again.');
         btn.disabled = false;
         btn.innerHTML = '<i class="bi bi-save me-2"></i> Submit';
@@ -1121,7 +1590,10 @@ function submitForm(e) {
 function showAlert(type, message) {
     const container = document.getElementById('alertContainer');
     const alert = document.createElement('div');
-    alert.className = `alert alert-${type} alert-dismissible fade show alert-custom`;
+    alert.className = `alert alert-${type} alert-dismissible fade show`;
+    alert.style.borderRadius = '8px';
+    alert.style.padding = '10px 15px';
+    alert.style.fontSize = '0.9rem';
     alert.innerHTML = `
         ${message}
         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
@@ -1169,6 +1641,141 @@ function resetForm() {
     document.getElementById('security_search_dropdown').style.display = 'none';
     document.getElementById('asset_class').dispatchEvent(new Event('change'));
 }
+
+// ============================================
+// RECEIPT VIEW
+// ============================================
+function viewReceipt(path) {
+    document.getElementById('receiptViewImg').src = path;
+    document.getElementById('receiptDownloadLink').href = path;
+    new bootstrap.Modal(document.getElementById('receiptModal')).show();
+}
+
+function viewReceiptPDF(path) {
+    document.getElementById('receiptPdfViewer').src = path;
+    document.getElementById('receiptPdfDownloadLink').href = path;
+    new bootstrap.Modal(document.getElementById('receiptPdfModal')).show();
+}
+
+// ============================================
+// CONFIRM PAYMENT
+// ============================================
+function confirmPayment(id, ref) {
+    document.getElementById('confirm_order_id').value = id;
+    document.getElementById('confirm_ref').textContent = ref;
+    document.getElementById('confirm_notes').value = '';
+    new bootstrap.Modal(document.getElementById('confirmModal')).show();
+}
+
+document.getElementById('confirmForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const btn = this.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> Processing...';
+    
+    fetch(window.location.href, {
+        method: 'POST',
+        body: new FormData(this)
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            alert('✅ ' + data.message);
+            location.reload();
+        } else {
+            alert('❌ ' + data.message);
+            btn.disabled = false;
+            btn.innerHTML = 'Confirm';
+        }
+    })
+    .catch(() => {
+        alert('❌ An error occurred.');
+        btn.disabled = false;
+        btn.innerHTML = 'Confirm';
+    });
+});
+
+// ============================================
+// REJECT PAYMENT
+// ============================================
+function rejectPayment(id, ref) {
+    document.getElementById('reject_order_id').value = id;
+    document.getElementById('reject_ref').textContent = ref;
+    document.getElementById('reject_reason').value = '';
+    new bootstrap.Modal(document.getElementById('rejectModal')).show();
+}
+
+document.getElementById('rejectForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const btn = this.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> Processing...';
+    
+    fetch(window.location.href, {
+        method: 'POST',
+        body: new FormData(this)
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            alert('✅ ' + data.message);
+            location.reload();
+        } else {
+            alert('❌ ' + data.message);
+            btn.disabled = false;
+            btn.innerHTML = 'Reject';
+        }
+    })
+    .catch(() => {
+        alert('❌ An error occurred.');
+        btn.disabled = false;
+        btn.innerHTML = 'Reject';
+    });
+});
+
+// ============================================
+// CANCEL ORDER
+// ============================================
+function cancelOrder(id, ref) {
+    document.getElementById('cancel_order_id').value = id;
+    document.getElementById('cancel_ref').textContent = ref;
+    document.getElementById('cancel_reason').value = '';
+    new bootstrap.Modal(document.getElementById('cancelModal')).show();
+}
+
+document.getElementById('cancelForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const btn = this.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> Processing...';
+    
+    if (!confirm('⚠️ Are you sure you want to cancel this order? This cannot be undone.')) {
+        btn.disabled = false;
+        btn.innerHTML = 'Cancel Order';
+        return;
+    }
+    
+    fetch(window.location.href, {
+        method: 'POST',
+        body: new FormData(this)
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            alert('✅ ' + data.message);
+            location.reload();
+        } else {
+            alert('❌ ' + data.message);
+            btn.disabled = false;
+            btn.innerHTML = 'Cancel Order';
+        }
+    })
+    .catch(() => {
+        alert('❌ An error occurred.');
+        btn.disabled = false;
+        btn.innerHTML = 'Cancel Order';
+    });
+});
 
 // ============================================
 // UTILITY
