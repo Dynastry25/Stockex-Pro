@@ -77,7 +77,7 @@ class DealingSheetPDF extends TCPDF {
         
         // Title
         $this->SetFont('helvetica', 'B', 16);
-        $this->Cell(0, 10, 'DEALING SHEET (INTERNAL USE)', 0, 1, 'C');
+        $this->Cell(0, 10, 'ORDER SHEET', 0, 1, 'C');
         
         $this->Ln(4);
         
@@ -133,7 +133,7 @@ class DealingSheetPDF extends TCPDF {
         $this->SetFont('helvetica', '', 10);
         $this->Cell(45, 7, 'Security:', 0, 0);
         $this->SetFont('helvetica', 'B', 10);
-        $this->Cell(0, 7, $sheet['security_id'] . ' - ' . $sheet['security_name'], 0, 1);
+        $this->Cell(0, 7, $sheet['security_id'], 0, 1);
         
         $qty = floatval($sheet['quantity'] ?? 0);
         $price = floatval($sheet['order_price'] ?? 0);
