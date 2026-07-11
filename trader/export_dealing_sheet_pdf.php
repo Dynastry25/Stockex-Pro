@@ -386,7 +386,6 @@ if ($executed_qty > 0) {
     $pdf->Cell(0, 7, $sheet['settlement_date'] ? date('d/m/Y', strtotime($sheet['settlement_date'])) : 'Pending', 0, 1);
     
     $pdf->SetFont('helvetica', '', 10);
-    $pdf->Cell(60, 7, 'Trade Reference:', 0, 0);
     $pdf->SetFont('helvetica', 'B', 10);
     $pdf->Cell(0, 7, $sheet['trade_reference'] ?? 'Pending', 0, 1);
 }
