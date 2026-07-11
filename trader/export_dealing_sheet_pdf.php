@@ -232,7 +232,7 @@ $pdf->AddPage();
 
 // Title
 $pdf->SetFont('helvetica', 'B', 16);
-$pdf->Cell(0, 8, 'DEALING SHEET (INTERNAL USE)', 0, 1, 'C');
+$pdf->Cell(0, 8, 'ORDER SHEET', 0, 1, 'C');
 $pdf->Ln(3);
 
 // Document info
