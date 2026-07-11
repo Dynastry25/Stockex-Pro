@@ -196,6 +196,8 @@ class DealingSheetPDF extends TCPDF {
         // ============================================
         // TITLE - Starts after header (4mm spacing)
         // ============================================
+                $this->Ln(6);
+
         $this->SetFont('helvetica', 'B', 12);
         $this->Cell(0, 6, 'ORDER SHEET', 0, 1, 'C');
         $this->Ln(2);
