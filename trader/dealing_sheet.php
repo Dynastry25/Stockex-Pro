@@ -25,6 +25,88 @@ $company = dealingSheetGetCompany($db);
 $view = $_GET['view'] ?? 'all';
 
 // ============================================
+// PAYMENT RECEIPT UPLOAD HANDLER
+// ============================================
+if (isset($_POST['upload_receipt']) && isset($_POST['sheet_id'])) {
+    $sheet_id = (int) $_POST['sheet_id'];
+    
+    // Check if file was uploaded
+    if (isset($_FILES['payment_receipt']) && $_FILES['payment_receipt']['error'] === UPLOAD_ERR_OK) {
+        $file = $_FILES['payment_receipt'];
+        $file_ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+        $allowed_exts = ['jpg', 'jpeg', 'png', 'gif', 'pdf'];
+        
+        if (!in_array($file_ext, $allowed_exts)) {
+            $_SESSION['alert'] = ['Invalid file type. Allowed: JPG, PNG, GIF, PDF', 'danger'];
+            header('Location: dealing_sheet.php?view=' . urlencode($view));
+            exit;
+        }
+        
+        // Check file size (max 5MB)
+        if ($file['size'] > 5 * 1024 * 1024) {
+            $_SESSION['alert'] = ['File size exceeds 5MB limit', 'danger'];
+            header('Location: dealing_sheet.php?view=' . urlencode($view));
+            exit;
+        }
+        
+        // Create upload directory if it doesn't exist
+        $upload_dir = __DIR__ . '/../uploads/payment_receipts/';
+        if (!file_exists($upload_dir)) {
+            mkdir($upload_dir, 0777, true);
+        }
+        
+        // Generate unique filename
+        $filename = 'receipt_' . $sheet_id . '_' . date('Ymd_His') . '.' . $file_ext;
+        $filepath = $upload_dir . $filename;
+        
+        // Move uploaded file
+        if (move_uploaded_file($file['tmp_name'], $filepath)) {
+            // Update database with receipt filename
+            $stmt = $db->prepare("UPDATE dealing_sheets SET payment_receipt = ? WHERE id = ?");
+            if ($stmt->execute([$filename, $sheet_id])) {
+                $_SESSION['alert'] = ['Payment receipt uploaded successfully!', 'success'];
+            } else {
+                $_SESSION['alert'] = ['Failed to update database', 'danger'];
+            }
+        } else {
+            $_SESSION['alert'] = ['Failed to upload file', 'danger'];
+        }
+    } else {
+        $_SESSION['alert'] = ['No file selected or upload error', 'danger'];
+    }
+    header('Location: dealing_sheet.php?view=' . urlencode($view));
+    exit;
+}
+
+// ============================================
+// DELETE PAYMENT RECEIPT
+// ============================================
+if (isset($_GET['delete_receipt']) && isset($_GET['id'])) {
+    $sheet_id = (int) $_GET['id'];
+    
+    // Get filename from database
+    $stmt = $db->prepare("SELECT payment_receipt FROM dealing_sheets WHERE id = ?");
+    $stmt->execute([$sheet_id]);
+    $sheet = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($sheet && !empty($sheet['payment_receipt'])) {
+        // Delete file from server
+        $filepath = __DIR__ . '/../uploads/payment_receipts/' . $sheet['payment_receipt'];
+        if (file_exists($filepath)) {
+            unlink($filepath);
+        }
+        
+        // Update database
+        $stmt = $db->prepare("UPDATE dealing_sheets SET payment_receipt = NULL WHERE id = ?");
+        if ($stmt->execute([$sheet_id])) {
+            $_SESSION['alert'] = ['Payment receipt deleted successfully.', 'success'];
+        }
+    }
+    header('Location: dealing_sheet.php?view=' . urlencode($view));
+    exit;
+}
+
+// ============================================
 // DEALING SHEET PDF CLASS
 // ============================================
 class DealingSheetPDF extends TCPDF {
@@ -315,6 +397,30 @@ class DealingSheetPDF extends TCPDF {
         $this->SetTextColor(0, 0, 0);
         
         $this->Ln(8);
+        
+        // ============================================
+        // PAYMENT RECEIPT (if uploaded)
+        // ============================================
+        if (!empty($sheet['payment_receipt'])) {
+            $receipt_path = '../uploads/payment_receipts/' . $sheet['payment_receipt'];
+            if (file_exists($receipt_path)) {
+                $this->SetFont('helvetica', 'B', 10);
+                $this->Cell(0, 6, 'Payment Receipt:', 0, 1, 'L');
+                
+                // Check if it's an image or PDF
+                $ext = strtolower(pathinfo($sheet['payment_receipt'], PATHINFO_EXTENSION));
+                if (in_array($ext, ['jpg', 'jpeg', 'png', 'gif'])) {
+                    // For images, display the image in the PDF
+                    $this->Image($receipt_path, 30, $this->GetY(), 150, 0, '', '', '', false, 300, '', false, false, 0);
+                    $this->Ln(10);
+                } else {
+                    // For PDFs, show a link or note
+                    $this->SetFont('helvetica', 'I', 9);
+                    $this->Cell(0, 6, 'PDF receipt attached (view separately)', 0, 1, 'L');
+                }
+                $this->Ln(4);
+            }
+        }
         
         // ============================================
         // REMARKS
@@ -844,6 +950,28 @@ include '../includes/header.php';
     .position-relative { position: relative; }
     .btn-group-sm .btn { padding: 0.25rem 0.5rem; font-size: 0.75rem; }
     .table-responsive { overflow-x: auto; }
+    .receipt-upload-form {
+        display: inline-block;
+        margin: 0 2px;
+    }
+    .receipt-upload-form input[type="file"] {
+        display: none;
+    }
+    .receipt-badge {
+        font-size: 0.7rem;
+        padding: 2px 6px;
+    }
+    .receipt-preview {
+        max-width: 100px;
+        max-height: 60px;
+        object-fit: cover;
+        border-radius: 4px;
+        cursor: pointer;
+    }
+    .receipt-modal-img {
+        max-width: 100%;
+        max-height: 80vh;
+    }
 </style>
 
 <!-- Modal for Order Entry -->
@@ -941,6 +1069,64 @@ include '../includes/header.php';
     </div>
 </div>
 
+<!-- Receipt Upload Modal -->
+<div class="modal fade" id="receiptModal" tabindex="-1" aria-labelledby="receiptModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-md">
+        <div class="modal-content">
+            <div class="modal-header bg-success text-white">
+                <h5 class="modal-title"><i class="bi bi-upload me-2"></i>Upload Payment Receipt</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" enctype="multipart/form-data" action="dealing_sheet.php">
+                <div class="modal-body">
+                    <input type="hidden" name="sheet_id" id="receipt_sheet_id" value="">
+                    <input type="hidden" name="upload_receipt" value="1">
+                    
+                    <div class="text-center mb-3">
+                        <div class="receipt-preview-container">
+                            <img id="receipt_preview" src="" alt="Receipt Preview" style="display:none; max-width:100%; max-height:200px; border-radius:8px; border:1px solid #ddd;">
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Select Receipt File</label>
+                        <input type="file" class="form-control" name="payment_receipt" id="receipt_file" accept="image/*,.pdf" required>
+                        <div class="form-text">Allowed formats: JPG, PNG, GIF, PDF (Max 5MB)</div>
+                    </div>
+                    
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle me-2"></i>
+                        Upload a clear photo or scanned copy of the payment receipt/confirmation.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success">Upload Receipt</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Receipt View Modal -->
+<div class="modal fade" id="receiptViewModal" tabindex="-1" aria-labelledby="receiptViewModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-info text-white">
+                <h5 class="modal-title"><i class="bi bi-image me-2"></i>Payment Receipt</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body text-center">
+                <img id="receiptViewImg" src="" alt="Payment Receipt" class="receipt-modal-img">
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <a id="receiptDownloadLink" href="#" target="_blank" class="btn btn-primary">Download</a>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="page-header">
     <div class="container-fluid">
         <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
@@ -996,12 +1182,13 @@ include '../includes/header.php';
                             <th class="text-end">Value</th>
                             <th>Date</th>
                             <th>Status</th>
+                            <th>Receipt</th>
                             <th class="text-end">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
                         <?php if (empty($sheets)): ?>
-                            <tr><td colspan="10" class="text-center py-5 text-muted">No orders found</td></tr>
+                            <tr><td colspan="11" class="text-center py-5 text-muted">No orders found</td></tr>
                         <?php else: ?>
                             <?php foreach ($sheets as $sheet): 
                                 $isOldOrder = strtotime($sheet['order_date'] ?? '') < strtotime(date('Y-m-d'));
@@ -1009,6 +1196,8 @@ include '../includes/header.php';
                                 if ($isOldOrder) $rowClass = 'old-order';
                                 elseif (($sheet['priority'] ?? '') === 'Urgent') $rowClass = 'priority-Urgent';
                                 elseif (($sheet['priority'] ?? '') === 'Most Important') $rowClass = 'priority-Most Important';
+                                $hasReceipt = !empty($sheet['payment_receipt']);
+                                $receiptPath = $hasReceipt ? '../uploads/payment_receipts/' . $sheet['payment_receipt'] : '';
                             ?>
                                 <tr class="<?php echo $rowClass; ?>">
                                     <td><span class="fw-semibold"><?php echo htmlspecialchars($sheet['sheet_reference'] ?? 'N/A'); ?></span></td>
@@ -1028,12 +1217,37 @@ include '../includes/header.php';
                                             <span class="badge bg-warning">Pending</span>
                                         <?php endif; ?>
                                     </td>
+                                    <td>
+                                        <?php if ($hasReceipt): ?>
+                                            <?php 
+                                            $ext = strtolower(pathinfo($sheet['payment_receipt'], PATHINFO_EXTENSION));
+                                            $isImage = in_array($ext, ['jpg', 'jpeg', 'png', 'gif']);
+                                            ?>
+                                            <div class="d-flex align-items-center gap-1">
+                                                <?php if ($isImage && file_exists($receiptPath)): ?>
+                                                    <img src="<?php echo $receiptPath; ?>" alt="Receipt" class="receipt-preview" onclick="viewReceipt('<?php echo $receiptPath; ?>')" title="Click to view">
+                                                <?php else: ?>
+                                                    <span class="badge bg-info receipt-badge">
+                                                        <i class="bi bi-file-pdf"></i> PDF
+                                                    </span>
+                                                <?php endif; ?>
+                                                <a href="dealing_sheet.php?delete_receipt=1&id=<?php echo $sheet['id']; ?>&view=<?php echo urlencode($view); ?>" class="text-danger" onclick="return confirm('Delete this receipt?')" title="Delete receipt">
+                                                    <i class="bi bi-x-circle"></i>
+                                                </a>
+                                            </div>
+                                        <?php else: ?>
+                                            <button class="btn btn-outline-success btn-sm" onclick="openReceiptUpload(<?php echo $sheet['id']; ?>)">
+                                                <i class="bi bi-upload"></i> Upload
+                                            </button>
+                                        <?php endif; ?>
+                                    </td>
                                     <td class="text-end">
                                         <div class="btn-group btn-group-sm">
                                             <button class="btn btn-outline-primary" onclick='editOrder(<?php echo json_encode($sheet); ?>)'><i class="bi bi-pencil"></i></button>
-<a href="export_dealing_sheet_pdf.php?id=<?php echo $sheet['id']; ?>" target="_blank" class="btn btn-outline-danger btn-sm">
-    <i class="bi bi-file-pdf"></i> PDF
-</a>                                            <button class="btn btn-outline-warning" onclick="confirmAction(<?php echo $sheet['id']; ?>, 'cancel_order')"><i class="bi bi-x-circle"></i></button>
+                                            <a href="export_dealing_sheet_pdf.php?id=<?php echo $sheet['id']; ?>" target="_blank" class="btn btn-outline-danger btn-sm">
+                                                <i class="bi bi-file-pdf"></i>
+                                            </a>
+                                            <button class="btn btn-outline-warning" onclick="confirmAction(<?php echo $sheet['id']; ?>, 'cancel_order')"><i class="bi bi-x-circle"></i></button>
                                             <button class="btn btn-outline-success" onclick="confirmAction(<?php echo $sheet['id']; ?>, 'mark_executed')"><i class="bi bi-check-circle"></i></button>
                                             <button class="btn btn-outline-danger" onclick="confirmAction(<?php echo $sheet['id']; ?>, 'delete_order')"><i class="bi bi-trash"></i></button>
                                         </div>
@@ -1114,6 +1328,36 @@ function confirmAction(id, action) {
         window.location.href = 'dealing_sheet.php?action=' + action + '&id=' + id + '&view=' + encodeURIComponent('<?php echo $view; ?>');
     }
 }
+
+// Receipt upload functions
+function openReceiptUpload(sheetId) {
+    document.getElementById('receipt_sheet_id').value = sheetId;
+    document.getElementById('receipt_file').value = '';
+    document.getElementById('receipt_preview').style.display = 'none';
+    const modal = new bootstrap.Modal(document.getElementById('receiptModal'));
+    modal.show();
+}
+
+function viewReceipt(path) {
+    document.getElementById('receiptViewImg').src = path;
+    document.getElementById('receiptDownloadLink').href = path;
+    const modal = new bootstrap.Modal(document.getElementById('receiptViewModal'));
+    modal.show();
+}
+
+// Receipt file preview
+document.getElementById('receipt_file')?.addEventListener('change', function(e) {
+    const file = this.files[0];
+    if (file) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const img = document.getElementById('receipt_preview');
+            img.src = e.target.result;
+            img.style.display = 'block';
+        };
+        reader.readAsDataURL(file);
+    }
+});
 
 // Client search
 document.getElementById('client_search')?.addEventListener('input', function() {
