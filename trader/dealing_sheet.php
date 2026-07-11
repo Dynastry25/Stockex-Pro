@@ -191,7 +191,6 @@ class DealingSheetPDF extends TCPDF {
         // ============================================
         // TITLE - Reduced font
         // ============================================
-                $this->Ln(2);
         $this->SetFont('helvetica', 'B', 12);
         $this->Cell(0, 6, 'ORDER SHEET', 0, 1, 'C');
         $this->Ln(2);
@@ -699,7 +698,7 @@ if (isset($_GET['export_pdf']) && isset($_GET['id'])) {
     $pdf->SetAuthor($sheet['dealer_name'] ?? 'System');
     $pdf->SetTitle('Dealing Sheet - ' . ($sheet['sheet_reference'] ?? ''));
     $pdf->SetMargins(15, 15, 15);
-    $pdf->SetHeaderMargin(3);
+    $pdf->SetHeaderMargin(5);
     $pdf->SetFooterMargin(8);
     $pdf->SetAutoPageBreak(true, 12);
     
