@@ -139,7 +139,8 @@ if (isset($_GET['delete_receipt']) && isset($_GET['id']) && isset($_GET['file'])
 
 // ============================================
 // DEALING SHEET PDF CLASS - REDUCED FONT SIZES
-// ============================================class DealingSheetPDF extends TCPDF {
+// ============================================
+class DealingSheetPDF extends TCPDF {
     use ReportHeaderTrait;
     
     private $company_name = '';
@@ -438,119 +439,6 @@ if (isset($_GET['delete_receipt']) && isset($_GET['id']) && isset($_GET['file'])
         
         $this->Ln(2);
         
-        // ============================================
-        // NET AMOUNT
-        // ============================================
-        $consideration = $executed_value > 0 ? $executed_value : $order_value;
-        $is_sell = ($trade_side === 'SELL');
-        
-        if ($is_sell) {
-            $net_amount = $consideration - $fees['total'];
-            $net_label = 'NET AMOUNT RECEIVABLE';
-        } else {
-            $net_amount = $consideration + $fees['total'];
-            $net_label = 'NET AMOUNT PAYABLE';
-        }
-        
-        $this->SetLineWidth(0.5);
-        $this->Line(15, $this->GetY() + 2, 195, $this->GetY() + 2);
-        $this->Ln(3);
-        
-        $this->SetFont('helvetica', 'B', 9);
-        $this->Cell(120, 5, $net_label . ':', 0, 0, 'R');
-        $this->SetFont('helvetica', 'B', 9);
-        $this->SetTextColor(0, 100, 0);
-        $this->Cell(35, 5, 'TZS ' . number_format($net_amount, 2), 0, 1, 'R');
-        $this->SetTextColor(0, 0, 0);
-        
-        if ($is_bond) {
-            $this->SetFont('helvetica', 'I', 5.5);
-            $this->SetTextColor(100, 100, 100);
-            $this->Cell(0, 3, '* For bonds: Consideration = (Price% / 100) × Face Value', 0, 1, 'L');
-            $this->SetTextColor(0, 0, 0);
-        }
-        
-        $this->Ln(3);
-        
-        // ============================================
-        // PAYMENT RECEIPTS (Multiple) - Compact
-        // ============================================
-        if (!empty($sheet['payment_receipt'])) {
-            $receipt_files = explode(',', $sheet['payment_receipt']);
-            $has_receipts = false;
-            
-            foreach ($receipt_files as $receipt_file) {
-                $receipt_path = '../uploads/payment_receipts/' . trim($receipt_file);
-                if (file_exists($receipt_path)) {
-                    if (!$has_receipts) {
-                        $this->SetFont('helvetica', 'B', 7);
-                        $this->Cell(0, 4, 'Payment Receipts:', 0, 1, 'L');
-                        $has_receipts = true;
-                    }
-                    
-                    $ext = strtolower(pathinfo($receipt_file, PATHINFO_EXTENSION));
-                    if (in_array($ext, ['jpg', 'jpeg', 'png', 'gif'])) {
-                        $this->Image($receipt_path, 30, $this->GetY(), 120, 0, '', '', '', false, 200, '', false, false, 0);
-                        $this->Ln(6);
-                    } else {
-                        $this->SetFont('helvetica', 'I', 5.5);
-                        $this->Cell(0, 3, '• PDF receipt attached: ' . htmlspecialchars($receipt_file), 0, 1, 'L');
-                    }
-                }
-            }
-            if ($has_receipts) {
-                $this->Ln(2);
-            }
-        }
-        
-        // ============================================
-        // REMARKS - Compact
-        // ============================================
-        if (!empty($sheet['remarks'])) {
-            $this->SetFont('helvetica', 'B', 7);
-            $this->Cell(0, 4, 'Remarks:', 0, 1);
-            $this->SetFont('helvetica', '', 6.5);
-            $this->MultiCell(0, 3, $sheet['remarks'], 0, 'L');
-            $this->Ln(2);
-        }
-        
-        // ============================================
-        // SIGNATURES - Compact
-        // ============================================
-        $this->SetFont('helvetica', 'B', 7);
-        $this->Cell(0, 4, 'Dealer Name:', 0, 0);
-        $this->SetFont('helvetica', '', 7);
-        $this->Cell(0, 4, $sheet['dealer_name'] ?? $exportedByName, 0, 1);
-        $this->Ln(2);
-        
-        $this->SetFont('helvetica', 'B', 7);
-        $this->Cell(70, 4, 'Prepared By:', 0, 0);
-        $this->Cell(70, 4, 'Checked By:', 0, 0);
-        $this->Cell(0, 4, 'Approved By:', 0, 1);
-        
-        $this->SetLineWidth(0.2);
-        $this->Line(15, $this->GetY() + 5, 65, $this->GetY() + 5);
-        $this->Line(85, $this->GetY() + 5, 135, $this->GetY() + 5);
-        $this->Line(150, $this->GetY() + 5, 195, $this->GetY() + 5);
-        
-        $this->SetFont('helvetica', 'I', 5.5);
-        $this->Cell(70, 8, $exportedByName, 0, 0, 'L');
-        $this->Cell(70, 8, '__________________', 0, 0, 'L');
-        $this->Cell(0, 8, '__________________', 0, 1, 'L');
-        
-        $this->Ln(3);
-        
-        // ============================================
-        // DISCLAIMER - Smallest font
-        // ============================================
-        $this->SetFont('helvetica', 'I', 4.5);
-        $this->SetTextColor(120, 120, 120);
-        $disclaimer = "This Order Sheet is for internal use only. It does not constitute a contract note or official trade confirmation. " .
-                      "All trades are subject to the Rules, Regulations and Customs of the Dar es Salaam Stock Exchange.";
-        $this->MultiCell(0, 2.5, $disclaimer, 0, 'C');
-        $this->SetTextColor(0, 0, 0);
-    }
-}
         // ============================================
         // NET AMOUNT
         // ============================================
