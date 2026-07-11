@@ -698,7 +698,7 @@ if (isset($_GET['export_pdf']) && isset($_GET['id'])) {
     $pdf->SetAuthor($sheet['dealer_name'] ?? 'System');
     $pdf->SetTitle('Dealing Sheet - ' . ($sheet['sheet_reference'] ?? ''));
     $pdf->SetMargins(15, 15, 15);
-    $pdf->SetHeaderMargin(5);
+    $pdf->SetHeaderMargin(9);
     $pdf->SetFooterMargin(8);
     $pdf->SetAutoPageBreak(true, 12);
     
