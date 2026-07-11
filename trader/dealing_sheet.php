@@ -175,7 +175,6 @@ class DealingSheetPDF extends TCPDF {
         }
         
         // Set Y position to start content AFTER the header
-        // This ensures "ORDER SHEET" appears below the header
         $this->SetY($y + 12);
     }
     
@@ -194,10 +193,9 @@ class DealingSheetPDF extends TCPDF {
         $trade_side = strtoupper($sheet['order_type'] ?? 'BUY');
         
         // ============================================
-        // TITLE - Starts after header (4mm spacing)
+        // TITLE - Starts after header
         // ============================================
-                $this->Ln(12);
-
+        $this->Ln(12);
         $this->SetFont('helvetica', 'B', 12);
         $this->Cell(0, 6, 'ORDER SHEET', 0, 1, 'C');
         $this->Ln(2);
@@ -391,14 +389,14 @@ class DealingSheetPDF extends TCPDF {
         $this->Cell(50, 4, '@ 18.00%', 0, 0, 'R');
         $this->Cell(35, 4, number_format($fees['vat'], 2), 0, 1, 'R');
         
-        // CMSA
+        // CMSA - Only fee calculated from Consideration for Bonds
         $cmsa_rate = $is_bond ? '0.0100%' : '0.1400%';
         $cmsa_basis = $is_bond ? 'of Consideration' : 'of Consideration';
         $this->Cell(85, 4, 'CMSA Transaction Fee', 0, 0, 'L');
         $this->Cell(50, 4, '@ ' . $cmsa_rate . ' ' . $cmsa_basis, 0, 0, 'R');
         $this->Cell(35, 4, number_format($fees['cmsa'], 2), 0, 1, 'R');
         
-        // DSE
+        // DSE - Calculated on Face Value for Bonds
         $dse_rate = $is_bond ? '0.02006%' : '0.1652%';
         $dse_basis = $is_bond ? 'of Face Value' : 'of Consideration';
         $this->Cell(85, 4, 'DSE Transaction Fee', 0, 0, 'L');
@@ -412,7 +410,7 @@ class DealingSheetPDF extends TCPDF {
             $this->Cell(35, 4, number_format($fees['fidelity'] ?? 0, 2), 0, 1, 'R');
         }
         
-        // CDS/CSDR
+        // CDS/CSDR - Calculated on Face Value for Bonds
         $cds_rate = $is_bond ? '0.0118%' : '0.0708%';
         $cds_basis = $is_bond ? 'of Face Value' : 'of Consideration';
         $cds_label = $is_bond ? 'CSDR Fee' : 'CDS Fee';
@@ -556,7 +554,7 @@ class DealingSheetPDF extends TCPDF {
 }
 
 // ============================================
-// FEES CALCULATION FUNCTION
+// FEES CALCULATION FUNCTION - UPDATED FOR BONDS
 // ============================================
 function calculateDealingSheetFees($asset_class, $consideration, $quantity, $price) {
     $fees = [];
@@ -566,7 +564,10 @@ function calculateDealingSheetFees($asset_class, $consideration, $quantity, $pri
     $is_bond = ($asset_class === 'bond');
     
     if ($is_bond) {
-        // BOND FEES
+        // ============================================
+        // BOND FEES - Calculated on Face Value (Quantity)
+        // CMSA is the ONLY fee calculated from Consideration
+        // ============================================
         $face_value = $quantity;
         
         // Brokerage: 0.063132% on first 100M, 0.035% on excess
@@ -590,15 +591,28 @@ function calculateDealingSheetFees($asset_class, $consideration, $quantity, $pri
             ];
         }
         
+        // VAT: 18% of Brokerage (calculated on Face Value)
         $fees['vat'] = $fees['brokerage'] * 0.18;
+        
+        // CMSA: 0.0100% of CONSIDERATION (Monetary Value)
         $fees['cmsa'] = $consideration * (0.0100 / 100);
+        
+        // CSD: 0.0118% of FACE VALUE
         $fees['csd'] = $face_value * (0.0118 / 100);
+        
+        // DSE: 0.02006% of FACE VALUE
         $fees['dse'] = $face_value * (0.02006 / 100);
+        
+        // No Fidelity for bonds
         $fees['fidelity'] = 0;
+        
+        // No VRF for bonds
         $fees['vrf'] = 0;
         
     } else {
-        // EQUITY/ETF FEES
+        // ============================================
+        // EQUITY/ETF FEES - All calculated on Consideration
+        // ============================================
         $total_brokerage = 0;
         
         if ($consideration <= 10000000) {
@@ -950,13 +964,62 @@ if (isset($_GET['ajax_action'])) {
 }
 
 // ============================================
-// GET DATA FOR DISPLAY
+// GET DATA FOR DISPLAY WITH FILTERS
 // ============================================
 
 // Simple list function if not in helper
 if (!function_exists('dealingSheetList')) {
     function dealingSheetList($db, $filters) {
-        $sql = "SELECT * FROM dealing_sheets ORDER BY 
+        $sql = "SELECT * FROM dealing_sheets WHERE 1=1";
+        $params = [];
+        
+        // Apply view filter
+        if ($filters['view'] === 'orders') {
+            $sql .= " AND (lifecycle_stage = 'order' OR execution_status = 'pending')";
+        } elseif ($filters['view'] === 'execution') {
+            $sql .= " AND (lifecycle_stage = 'execution' OR execution_status = 'executed')";
+        } elseif ($filters['view'] === 'approved') {
+            $sql .= " AND lifecycle_stage = 'approved'";
+        } elseif ($filters['view'] === 'settled') {
+            $sql .= " AND lifecycle_stage = 'settled'";
+        }
+        
+        // Apply asset class filter
+        if (!empty($filters['asset_class']) && $filters['asset_class'] !== 'all') {
+            $sql .= " AND asset_class = ?";
+            $params[] = $filters['asset_class'];
+        }
+        
+        // Apply date range filter
+        if (!empty($filters['date_from'])) {
+            $sql .= " AND order_date >= ?";
+            $params[] = $filters['date_from'];
+        }
+        if (!empty($filters['date_to'])) {
+            $sql .= " AND order_date <= ?";
+            $params[] = $filters['date_to'];
+        }
+        
+        // Apply search filter
+        if (!empty($filters['search'])) {
+            $sql .= " AND (client_name LIKE ? OR security_id LIKE ? OR sheet_reference LIKE ?)";
+            $search = '%' . $filters['search'] . '%';
+            $params[] = $search;
+            $params[] = $search;
+            $params[] = $search;
+        }
+        
+        // Apply payment status filter
+        if (!empty($filters['payment_status']) && $filters['payment_status'] !== 'all') {
+            if ($filters['payment_status'] === 'paid') {
+                $sql .= " AND payment_receipt IS NOT NULL";
+            } else {
+                $sql .= " AND payment_receipt IS NULL";
+            }
+        }
+        
+        // Order by
+        $sql .= " ORDER BY 
             CASE priority 
                 WHEN 'Most Important' THEN 1 
                 WHEN 'Urgent' THEN 2 
@@ -964,18 +1027,9 @@ if (!function_exists('dealingSheetList')) {
             END,
             created_at DESC";
         
-        // Apply basic filters
-        if ($filters['view'] === 'orders') {
-            $sql = "SELECT * FROM dealing_sheets WHERE lifecycle_stage = 'order' OR execution_status = 'pending' ORDER BY created_at DESC";
-        } elseif ($filters['view'] === 'execution') {
-            $sql = "SELECT * FROM dealing_sheets WHERE lifecycle_stage = 'execution' OR execution_status = 'executed' ORDER BY created_at DESC";
-        } elseif ($filters['view'] === 'approved') {
-            $sql = "SELECT * FROM dealing_sheets WHERE lifecycle_stage = 'approved' ORDER BY created_at DESC";
-        } elseif ($filters['view'] === 'settled') {
-            $sql = "SELECT * FROM dealing_sheets WHERE lifecycle_stage = 'settled' ORDER BY created_at DESC";
-        }
-        
-        return $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 }
 
@@ -987,12 +1041,20 @@ if (!function_exists('dealingSheetOverview')) {
         $settled = $db->query("SELECT COUNT(*) FROM dealing_sheets WHERE lifecycle_stage = 'settled'")->fetchColumn();
         $total_executed_value = $db->query("SELECT COALESCE(SUM(executed_value), 0) FROM dealing_sheets WHERE execution_status = 'executed'")->fetchColumn();
         
+        // Asset class breakdown
+        $bond_count = $db->query("SELECT COUNT(*) FROM dealing_sheets WHERE asset_class = 'bond'")->fetchColumn();
+        $equity_count = $db->query("SELECT COUNT(*) FROM dealing_sheets WHERE asset_class = 'equity'")->fetchColumn();
+        $etf_count = $db->query("SELECT COUNT(*) FROM dealing_sheets WHERE asset_class = 'etf'")->fetchColumn();
+        
         return [
             'total' => $total,
             'orders' => $orders,
             'execution' => $execution,
             'settled' => $settled,
-            'total_executed_value' => $total_executed_value
+            'total_executed_value' => $total_executed_value,
+            'bond_count' => $bond_count,
+            'equity_count' => $equity_count,
+            'etf_count' => $etf_count
         ];
     }
 }
@@ -1014,6 +1076,7 @@ if (!function_exists('dealingSheetGetCurrentUserDisplayName')) {
     }
 }
 
+// Get filters from request
 $filters = [
     'view' => $view,
     'search' => $_GET['search'] ?? '',
@@ -1023,6 +1086,7 @@ $filters = [
     'date_from' => $_GET['date_from'] ?? '',
     'date_to' => $_GET['date_to'] ?? '',
 ];
+
 $sheets = dealingSheetList($db, $filters);
 $overview = dealingSheetOverview($db);
 
@@ -1037,6 +1101,7 @@ include '../includes/header.php';
     .priority-Most\ Important { background-color: #ffebee; border-left: 4px solid #f44336 !important; }
     .old-order { background-color: #ffcdd2 !important; color: #c62828 !important; }
     .old-order td { color: #c62828 !important; }
+    .bond-row { background-color: #e3f2fd !important; border-left: 3px solid #1976d2 !important; }
     .client-search-dropdown, .security-search-dropdown {
         position: absolute;
         background: white;
@@ -1157,6 +1222,57 @@ include '../includes/header.php';
     .receipt-pdf-viewer .modal-body embed {
         width: 100%;
         height: 100%;
+    }
+    /* Dashboard cards */
+    .stat-card {
+        transition: transform 0.2s;
+    }
+    .stat-card:hover {
+        transform: translateY(-3px);
+    }
+    .stat-icon {
+        font-size: 2rem;
+        opacity: 0.3;
+    }
+    .filter-section {
+        background: #f8f9fa;
+        border-radius: 8px;
+        padding: 15px;
+        margin-bottom: 20px;
+    }
+    .filter-section .form-control,
+    .filter-section .form-select {
+        font-size: 0.875rem;
+    }
+    .chart-container {
+        height: 200px;
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+        gap: 30px;
+        padding: 20px 0;
+    }
+    .chart-bar {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 5px;
+        width: 60px;
+    }
+    .chart-bar .bar {
+        width: 40px;
+        border-radius: 4px 4px 0 0;
+        min-height: 10px;
+        transition: height 0.5s ease;
+    }
+    .chart-bar .bar-label {
+        font-size: 0.7rem;
+        color: #6c757d;
+        text-align: center;
+    }
+    .chart-bar .bar-value {
+        font-size: 0.8rem;
+        font-weight: bold;
     }
 </style>
 
@@ -1384,23 +1500,179 @@ include '../includes/header.php';
         <?php unset($_SESSION['alert']); ?>
     <?php endif; ?>
 
+    <!-- Stats Cards -->
+    <div class="row g-4 mb-4">
+        <div class="col-lg-3 col-md-6">
+            <div class="card stat-card bg-primary text-white">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <div class="small">Total Sheets</div>
+                            <div class="fs-3 fw-bold"><?php echo number_format($overview['total']); ?></div>
+                        </div>
+                        <div class="stat-icon"><i class="bi bi-file-earmark-text"></i></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-6">
+            <div class="card stat-card bg-warning text-dark">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <div class="small">Open Orders</div>
+                            <div class="fs-3 fw-bold"><?php echo number_format($overview['orders']); ?></div>
+                        </div>
+                        <div class="stat-icon"><i class="bi bi-clock-history"></i></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-6">
+            <div class="card stat-card bg-info text-white">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <div class="small">Awaiting Review</div>
+                            <div class="fs-3 fw-bold"><?php echo number_format($overview['execution']); ?></div>
+                        </div>
+                        <div class="stat-icon"><i class="bi bi-hourglass-split"></i></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-6">
+            <div class="card stat-card bg-success text-white">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <div class="small">Settled</div>
+                            <div class="fs-3 fw-bold"><?php echo number_format($overview['settled']); ?></div>
+                        </div>
+                        <div class="stat-icon"><i class="bi bi-check-circle"></i></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Visualization Charts -->
+    <div class="row g-4 mb-4">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header bg-transparent">
+                    <h6 class="mb-0"><i class="bi bi-pie-chart me-2"></i>Asset Class Distribution</h6>
+                </div>
+                <div class="card-body">
+                    <div class="chart-container">
+                        <div class="chart-bar">
+                            <div class="bar-value"><?php echo number_format($overview['equity_count']); ?></div>
+                            <div class="bar" style="height: <?php echo $overview['total'] > 0 ? ($overview['equity_count'] / $overview['total'] * 150) : 10; ?>px; background: #0d6efd;"></div>
+                            <div class="bar-label">Equity</div>
+                        </div>
+                        <div class="chart-bar">
+                            <div class="bar-value"><?php echo number_format($overview['bond_count']); ?></div>
+                            <div class="bar" style="height: <?php echo $overview['total'] > 0 ? ($overview['bond_count'] / $overview['total'] * 150) : 10; ?>px; background: #198754;"></div>
+                            <div class="bar-label">Bonds</div>
+                        </div>
+                        <div class="chart-bar">
+                            <div class="bar-value"><?php echo number_format($overview['etf_count']); ?></div>
+                            <div class="bar" style="height: <?php echo $overview['total'] > 0 ? ($overview['etf_count'] / $overview['total'] * 150) : 10; ?>px; background: #6f42c1;"></div>
+                            <div class="bar-label">ETFs</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header bg-transparent">
+                    <h6 class="mb-0"><i class="bi bi-bar-chart me-2"></i>Order Status Overview</h6>
+                </div>
+                <div class="card-body">
+                    <div class="chart-container">
+                        <div class="chart-bar">
+                            <div class="bar-value"><?php echo number_format($overview['orders']); ?></div>
+                            <div class="bar" style="height: <?php echo $overview['total'] > 0 ? ($overview['orders'] / $overview['total'] * 150) : 10; ?>px; background: #ffc107;"></div>
+                            <div class="bar-label">Open</div>
+                        </div>
+                        <div class="chart-bar">
+                            <div class="bar-value"><?php echo number_format($overview['execution']); ?></div>
+                            <div class="bar" style="height: <?php echo $overview['total'] > 0 ? ($overview['execution'] / $overview['total'] * 150) : 10; ?>px; background: #0dcaf0;"></div>
+                            <div class="bar-label">Review</div>
+                        </div>
+                        <div class="chart-bar">
+                            <div class="bar-value"><?php echo number_format($overview['settled']); ?></div>
+                            <div class="bar" style="height: <?php echo $overview['total'] > 0 ? ($overview['settled'] / $overview['total'] * 150) : 10; ?>px; background: #198754;"></div>
+                            <div class="bar-label">Settled</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Navigation Tabs -->
     <div class="d-flex flex-wrap gap-2 mb-4">
         <?php foreach (['all' => 'All Sheets', 'orders' => 'Order Intake', 'execution' => 'Execution Queue', 'approved' => 'Approved', 'settled' => 'Settled'] as $viewKey => $viewLabel): ?>
-            <a href="dealing_sheet.php?view=<?php echo urlencode($viewKey); ?>" class="btn <?php echo $view === $viewKey ? 'btn-primary' : 'btn-outline-secondary'; ?>"><?php echo htmlspecialchars($viewLabel); ?></a>
+            <a href="dealing_sheet.php?view=<?php echo urlencode($viewKey); ?>&<?php echo http_build_query(array_filter(['search' => $_GET['search'] ?? '', 'asset_class' => $_GET['asset_class'] ?? '', 'payment_status' => $_GET['payment_status'] ?? '', 'date_from' => $_GET['date_from'] ?? '', 'date_to' => $_GET['date_to'] ?? ''])); ?>" class="btn <?php echo $view === $viewKey ? 'btn-primary' : 'btn-outline-secondary'; ?>"><?php echo htmlspecialchars($viewLabel); ?></a>
         <?php endforeach; ?>
     </div>
 
-    <div class="row g-4 mb-4">
-        <div class="col-lg-3 col-md-6"><div class="card bg-primary text-white"><div class="card-body"><div class="small">Total Sheets</div><div class="fs-3 fw-bold"><?php echo number_format($overview['total']); ?></div></div></div></div>
-        <div class="col-lg-3 col-md-6"><div class="card bg-warning text-dark"><div class="card-body"><div class="small">Open Orders</div><div class="fs-3 fw-bold"><?php echo number_format($overview['orders']); ?></div></div></div></div>
-        <div class="col-lg-3 col-md-6"><div class="card bg-info text-white"><div class="card-body"><div class="small">Awaiting Review</div><div class="fs-3 fw-bold"><?php echo number_format($overview['execution']); ?></div></div></div></div>
-        <div class="col-lg-3 col-md-6"><div class="card bg-success text-white"><div class="card-body"><div class="small">Settled</div><div class="fs-3 fw-bold"><?php echo number_format($overview['settled']); ?></div></div></div></div>
+    <!-- Filter Section -->
+    <div class="filter-section">
+        <form method="GET" action="dealing_sheet.php" class="row g-3 align-items-end">
+            <input type="hidden" name="view" value="<?php echo htmlspecialchars($view); ?>">
+            
+            <div class="col-md-3">
+                <label class="form-label small fw-semibold">Search</label>
+                <input type="text" class="form-control" name="search" placeholder="Client, Security, Ref..." value="<?php echo htmlspecialchars($filters['search']); ?>">
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small fw-semibold">Asset Class</label>
+                <select class="form-select" name="asset_class">
+                    <option value="all" <?php echo $filters['asset_class'] === 'all' ? 'selected' : ''; ?>>All</option>
+                    <option value="equity" <?php echo $filters['asset_class'] === 'equity' ? 'selected' : ''; ?>>Equity</option>
+                    <option value="bond" <?php echo $filters['asset_class'] === 'bond' ? 'selected' : ''; ?>>Bond</option>
+                    <option value="etf" <?php echo $filters['asset_class'] === 'etf' ? 'selected' : ''; ?>>ETF</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small fw-semibold">Payment Status</label>
+                <select class="form-select" name="payment_status">
+                    <option value="all" <?php echo $filters['payment_status'] === 'all' ? 'selected' : ''; ?>>All</option>
+                    <option value="paid" <?php echo $filters['payment_status'] === 'paid' ? 'selected' : ''; ?>>Paid</option>
+                    <option value="unpaid" <?php echo $filters['payment_status'] === 'unpaid' ? 'selected' : ''; ?>>Unpaid</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small fw-semibold">Date From</label>
+                <input type="date" class="form-control" name="date_from" value="<?php echo htmlspecialchars($filters['date_from']); ?>">
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small fw-semibold">Date To</label>
+                <input type="date" class="form-control" name="date_to" value="<?php echo htmlspecialchars($filters['date_to']); ?>">
+            </div>
+            <div class="col-md-1">
+                <button type="submit" class="btn btn-primary w-100">Filter</button>
+            </div>
+        </form>
     </div>
 
+    <!-- Orders Table -->
     <div class="card dashboard-card">
         <div class="card-header bg-transparent border-0 pb-0">
-            <h6 class="mb-1 fw-semibold">Order Register</h6>
-            <div class="small text-muted"><?php echo number_format(count($sheets)); ?> orders matching current view</div>
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <h6 class="mb-1 fw-semibold">Order Register</h6>
+                    <div class="small text-muted"><?php echo number_format(count($sheets)); ?> orders matching current filters</div>
+                </div>
+                <div>
+                    <a href="dealing_sheet.php?export_excel=1&<?php echo http_build_query($filters); ?>" class="btn btn-outline-success btn-sm">
+                        <i class="bi bi-file-earmark-excel"></i> Export
+                    </a>
+                </div>
+            </div>
         </div>
         <div class="card-body">
             <div class="table-responsive">
@@ -1411,38 +1683,54 @@ include '../includes/header.php';
                             <th>Priority</th>
                             <th>Client</th>
                             <th>Security</th>
+                            <th>Asset</th>
                             <th class="text-end">Qty</th>
                             <th class="text-end">Price</th>
                             <th class="text-end">Value</th>
                             <th>Date</th>
                             <th>Status</th>
-                            <th>Receipts</th>
+                            <th>Receipt</th>
                             <th class="text-end">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
                         <?php if (empty($sheets)): ?>
-                            <tr><td colspan="11" class="text-center py-5 text-muted">No orders found</td></tr>
+                            <tr><td colspan="12" class="text-center py-5 text-muted">No orders found matching filters</td></tr>
                         <?php else: ?>
                             <?php foreach ($sheets as $sheet): 
                                 $isOldOrder = strtotime($sheet['order_date'] ?? '') < strtotime(date('Y-m-d'));
+                                $isBond = ($sheet['asset_class'] ?? '') === 'bond';
                                 $rowClass = '';
                                 if ($isOldOrder) $rowClass = 'old-order';
-                                elseif (($sheet['priority'] ?? '') === 'Urgent') $rowClass = 'priority-Urgent';
-                                elseif (($sheet['priority'] ?? '') === 'Most Important') $rowClass = 'priority-Most Important';
+                                if ($isBond) $rowClass .= ' bond-row';
+                                if (($sheet['priority'] ?? '') === 'Urgent') $rowClass .= ' priority-Urgent';
+                                if (($sheet['priority'] ?? '') === 'Most Important') $rowClass .= ' priority-Most Important';
                                 
                                 $hasReceipt = !empty($sheet['payment_receipt']);
                                 $receiptFiles = $hasReceipt ? explode(',', $sheet['payment_receipt']) : [];
                                 $receiptCount = count($receiptFiles);
+                                
+                                if ($isBond) {
+                                    $displayQty = 'TZS ' . number_format(floatval($sheet['quantity'] ?? 0), 2);
+                                    $displayPrice = number_format(floatval($sheet['order_price'] ?? 0), 4) . '%';
+                                    $displayValue = 'TZS ' . number_format((floatval($sheet['order_price'] ?? 0) / 100) * floatval($sheet['quantity'] ?? 0), 2);
+                                    $assetDisplay = '<span class="badge bg-info">Bond</span>';
+                                } else {
+                                    $displayQty = number_format(floatval($sheet['quantity'] ?? 0), 0);
+                                    $displayPrice = 'TZS ' . number_format(floatval($sheet['order_price'] ?? 0), 2);
+                                    $displayValue = 'TZS ' . number_format(floatval($sheet['order_value'] ?? 0), 2);
+                                    $assetDisplay = '<span class="badge bg-secondary">' . ucfirst($sheet['asset_class'] ?? 'Equity') . '</span>';
+                                }
                             ?>
                                 <tr class="<?php echo $rowClass; ?>">
                                     <td><span class="fw-semibold"><?php echo htmlspecialchars($sheet['sheet_reference'] ?? 'N/A'); ?></span></td>
                                     <td><?php echo htmlspecialchars($sheet['priority'] ?? 'Normal'); ?></td>
                                     <td><?php echo htmlspecialchars($sheet['client_name'] ?? ''); ?></td>
                                     <td><?php echo htmlspecialchars($sheet['security_id'] ?? ''); ?></td>
-                                    <td class="text-end"><?php echo number_format(floatval($sheet['quantity'] ?? 0)); ?></td>
-                                    <td class="text-end"><?php echo number_format(floatval($sheet['order_price'] ?? 0), 2); ?></td>
-                                    <td class="text-end"><?php echo number_format(floatval($sheet['order_value'] ?? 0), 2); ?></td>
+                                    <td><?php echo $assetDisplay; ?></td>
+                                    <td class="text-end"><?php echo $displayQty; ?></td>
+                                    <td class="text-end"><?php echo $displayPrice; ?></td>
+                                    <td class="text-end"><?php echo $displayValue; ?></td>
                                     <td><?php echo htmlspecialchars($sheet['order_date'] ?? ''); ?></td>
                                     <td>
                                         <?php if (($sheet['execution_status'] ?? '') === 'executed'): ?>
@@ -1471,7 +1759,7 @@ include '../includes/header.php';
                                                     <img src="<?php echo $filepath; ?>" alt="Receipt" class="receipt-preview" onclick="viewReceiptImage('<?php echo $filepath; ?>')" title="Click to view">
                                                 <?php else: ?>
                                                     <span class="badge bg-danger receipt-badge" onclick="viewReceiptPDF('<?php echo $filepath; ?>')" style="cursor:pointer;">
-                                                        <i class="bi bi-file-pdf"></i> PDF
+                                                        <i class="bi bi-file-pdf"></i>
                                                     </span>
                                                 <?php endif; ?>
                                                 <?php endforeach; ?>
@@ -1486,7 +1774,7 @@ include '../includes/header.php';
                                             </div>
                                         <?php else: ?>
                                             <button class="btn btn-outline-success btn-sm" onclick="openReceiptUpload(<?php echo $sheet['id']; ?>)">
-                                                <i class="bi bi-upload"></i> Upload
+                                                <i class="bi bi-upload"></i>
                                             </button>
                                         <?php endif; ?>
                                     </td>
