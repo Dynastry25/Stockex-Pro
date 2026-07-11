@@ -488,7 +488,6 @@ $pdf->SetTextColor(0, 0, 0);
 if ($is_bond) {
     $pdf->SetFont('helvetica', 'I', 7);
     $pdf->SetTextColor(100, 100, 100);
-    $pdf->Cell(0, 4, '* For bonds: Consideration = (Price% / 100) × Face Value', 0, 1, 'L');
     $pdf->SetTextColor(0, 0, 0);
 }
 
