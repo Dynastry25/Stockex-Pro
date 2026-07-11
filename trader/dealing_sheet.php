@@ -77,7 +77,7 @@ class DealingSheetPDF extends TCPDF {
         
         // Title
         $this->SetFont('helvetica', 'B', 16);
-        $this->Cell(0, 10, 'DEALING SHEET (INTERNAL USE)', 0, 1, 'C');
+        $this->Cell(0, 10, 'ORDER SHEET', 0, 1, 'C');
         
         $this->Ln(4);
         
