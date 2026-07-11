@@ -191,6 +191,7 @@ class DealingSheetPDF extends TCPDF {
         // ============================================
         // TITLE - Reduced font
         // ============================================
+                $this->Ln(2);
         $this->SetFont('helvetica', 'B', 12);
         $this->Cell(0, 6, 'ORDER SHEET', 0, 1, 'C');
         $this->Ln(2);
