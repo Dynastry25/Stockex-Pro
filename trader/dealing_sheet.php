@@ -176,7 +176,7 @@ class DealingSheetPDF extends TCPDF {
         
         // Set Y position to start content AFTER the header
         // This ensures "ORDER SHEET" appears below the header
-        $this->SetY($y + 4);
+        $this->SetY($y + 12);
     }
     
     public function Footer() {
