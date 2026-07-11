@@ -138,7 +138,7 @@ if (isset($_GET['delete_receipt']) && isset($_GET['id']) && isset($_GET['file'])
 }
 
 // ============================================
-// DEALING SHEET PDF CLASS - FIXED FORMATTING
+// DEALING SHEET PDF CLASS - COMPACT VERSION
 // ============================================
 class DealingSheetPDF extends TCPDF {
     use ReportHeaderTrait;
@@ -188,106 +188,102 @@ class DealingSheetPDF extends TCPDF {
         $is_bond = ($sheet['asset_class'] === 'bond');
         $trade_side = strtoupper($sheet['order_type'] ?? 'BUY');
         
-        // Title
-        $this->SetFont('helvetica', 'B', 14);
-        $this->Cell(0, 8, 'ORDER SHEET', 0, 1, 'C');
+        // Title - Smaller
+        $this->SetFont('helvetica', 'B', 13);
+        $this->Cell(0, 7, 'ORDER SHEET', 0, 1, 'C');
         $this->Ln(2);
         
-        // Company info line - using smaller font and compact layout
-        $this->SetFont('helvetica', '', 8);
-        $this->Cell(50, 4, 'Broker Code: ' . ($sheet['broker_code'] ?? 'N/A'), 0, 0, 'L');
+        // Company info line - Smaller font
+        $this->SetFont('helvetica', '', 7);
+        $this->Cell(55, 4, 'Broker Code: ' . ($sheet['broker_code'] ?? 'N/A'), 0, 0, 'L');
         $this->Cell(60, 4, 'Department: Operations', 0, 0, 'L');
         $this->Cell(0, 4, 'Date: ' . date('d/m/Y', strtotime($sheet['order_date'] ?? date('Y-m-d'))), 0, 1, 'L');
         $this->Ln(2);
         
         // ============================================
-        // 1. CLIENT DETAILS - More compact
+        // 1. CLIENT DETAILS - Compact
         // ============================================
-        $this->SetFont('helvetica', 'B', 10);
+        $this->SetFont('helvetica', 'B', 9);
         $this->SetFillColor(240, 240, 240);
-        $this->Cell(0, 6, '1. CLIENT DETAILS', 0, 1, 'L', true);
+        $this->Cell(0, 5, '1. CLIENT DETAILS', 0, 1, 'L', true);
         
-        $this->SetFont('helvetica', '', 9);
-        $this->Cell(35, 5, 'Client Name:', 0, 0);
-        $this->SetFont('helvetica', 'B', 9);
-        $this->Cell(0, 5, $this->shortenText($sheet['client_name'], 60), 0, 1);
+        $this->SetFont('helvetica', '', 8);
+        $this->Cell(35, 4, 'Client Name:', 0, 0);
+        $this->SetFont('helvetica', 'B', 8);
+        $this->Cell(0, 4, $sheet['client_name'], 0, 1);
         
-        $this->SetFont('helvetica', '', 9);
-        $this->Cell(35, 5, 'CDS Account:', 0, 0);
-        $this->SetFont('helvetica', 'B', 9);
-        $this->Cell(0, 5, $sheet['client_cds_account'] ?? 'N/A', 0, 1);
+        $this->SetFont('helvetica', '', 8);
+        $this->Cell(35, 4, 'CDS Account:', 0, 0);
+        $this->SetFont('helvetica', 'B', 8);
+        $this->Cell(0, 4, $sheet['client_cds_account'] ?? 'N/A', 0, 1);
         
         $this->Ln(2);
         
         // ============================================
-        // 2. ORDER DETAILS - Compact layout
+        // 2. ORDER DETAILS - Compact two-column
         // ============================================
-        $this->SetFont('helvetica', 'B', 10);
+        $this->SetFont('helvetica', 'B', 9);
         $this->SetFillColor(240, 240, 240);
-        $this->Cell(0, 6, '2. ORDER DETAILS', 0, 1, 'L', true);
+        $this->Cell(0, 5, '2. ORDER DETAILS', 0, 1, 'L', true);
         
         $qty = floatval($sheet['quantity'] ?? 0);
         $price = floatval($sheet['order_price'] ?? 0);
         $order_value = $qty * $price;
         
-        // Two-column layout for order details
-        $this->SetFont('helvetica', '', 9);
+        $this->SetFont('helvetica', '', 8);
         
-        // Left column
-        $this->Cell(45, 5, 'Order Type:', 0, 0);
-        $this->SetFont('helvetica', 'B', 9);
-        $this->Cell(50, 5, $trade_side, 0, 0);
+        // Row 1
+        $this->Cell(40, 4, 'Order Type:', 0, 0);
+        $this->SetFont('helvetica', 'B', 8);
+        $this->Cell(50, 4, $trade_side, 0, 0);
+        $this->SetFont('helvetica', '', 8);
+        $this->Cell(30, 4, 'Priority:', 0, 0);
+        $this->SetFont('helvetica', 'B', 8);
+        $this->Cell(0, 4, $sheet['priority'] ?? 'Normal', 0, 1);
         
-        $this->SetFont('helvetica', '', 9);
-        $this->Cell(35, 5, 'Priority:', 0, 0);
-        $this->SetFont('helvetica', 'B', 9);
-        $this->Cell(0, 5, $sheet['priority'] ?? 'Normal', 0, 1);
+        // Row 2
+        $this->SetFont('helvetica', '', 8);
+        $this->Cell(40, 4, 'Asset Class:', 0, 0);
+        $this->SetFont('helvetica', 'B', 8);
+        $this->Cell(50, 4, ucfirst($sheet['asset_class']), 0, 0);
+        $this->SetFont('helvetica', '', 8);
+        $this->Cell(30, 4, 'Security:', 0, 0);
+        $this->SetFont('helvetica', 'B', 8);
+        $this->Cell(0, 4, $sheet['security_id'], 0, 1);
         
-        $this->SetFont('helvetica', '', 9);
-        $this->Cell(45, 5, 'Asset Class:', 0, 0);
-        $this->SetFont('helvetica', 'B', 9);
-        $this->Cell(50, 5, ucfirst($sheet['asset_class']), 0, 0);
-        
-        $this->SetFont('helvetica', '', 9);
-        $this->Cell(35, 5, 'Security:', 0, 0);
-        $this->SetFont('helvetica', 'B', 9);
-        $this->Cell(0, 5, $this->shortenText($sheet['security_id'], 25), 0, 1);
-        
-        // Quantity and Price
-        $this->SetFont('helvetica', '', 9);
-        $this->Cell(45, 5, 'Quantity:', 0, 0);
-        $this->SetFont('helvetica', 'B', 9);
-        $this->Cell(50, 5, number_format($qty, ($is_bond ? 2 : 0)), 0, 0);
-        
-        $this->SetFont('helvetica', '', 9);
-        $this->Cell(35, 5, 'Price:', 0, 0);
-        $this->SetFont('helvetica', 'B', 9);
+        // Row 3
+        $this->SetFont('helvetica', '', 8);
+        $this->Cell(40, 4, 'Quantity:', 0, 0);
+        $this->SetFont('helvetica', 'B', 8);
+        $this->Cell(50, 4, number_format($qty, ($is_bond ? 2 : 0)), 0, 0);
+        $this->SetFont('helvetica', '', 8);
+        $this->Cell(30, 4, 'Price:', 0, 0);
+        $this->SetFont('helvetica', 'B', 8);
         if ($is_bond) {
-            $this->Cell(0, 5, number_format($price, 4) . '%', 0, 1);
+            $this->Cell(0, 4, number_format($price, 4) . '%', 0, 1);
         } else {
-            $this->Cell(0, 5, 'TZS ' . number_format($price, 2), 0, 1);
+            $this->Cell(0, 4, 'TZS ' . number_format($price, 2), 0, 1);
         }
         
-        // Order Value and Date/Time
-        $this->SetFont('helvetica', '', 9);
-        $this->Cell(45, 5, 'Order Value:', 0, 0);
-        $this->SetFont('helvetica', 'B', 9);
-        $this->Cell(50, 5, 'TZS ' . number_format($order_value, 2), 0, 0);
-        
-        $this->SetFont('helvetica', '', 9);
-        $this->Cell(35, 5, 'Order Date/Time:', 0, 0);
-        $this->SetFont('helvetica', 'B', 9);
+        // Row 4
+        $this->SetFont('helvetica', '', 8);
+        $this->Cell(40, 4, 'Order Value:', 0, 0);
+        $this->SetFont('helvetica', 'B', 8);
+        $this->Cell(50, 4, 'TZS ' . number_format($order_value, 2), 0, 0);
+        $this->SetFont('helvetica', '', 8);
+        $this->Cell(30, 4, 'Order Date/Time:', 0, 0);
+        $this->SetFont('helvetica', 'B', 8);
         $order_datetime = ($sheet['order_date'] ?? date('Y-m-d')) . ' ' . ($sheet['order_time'] ?? '');
-        $this->Cell(0, 5, date('d/m/Y H:i', strtotime($order_datetime)), 0, 1);
+        $this->Cell(0, 4, date('d/m/Y H:i', strtotime($order_datetime)), 0, 1);
         
         $this->Ln(2);
         
         // ============================================
         // 3. EXECUTION DETAILS - Compact
         // ============================================
-        $this->SetFont('helvetica', 'B', 10);
+        $this->SetFont('helvetica', 'B', 9);
         $this->SetFillColor(240, 240, 240);
-        $this->Cell(0, 6, '3. EXECUTION DETAILS', 0, 1, 'L', true);
+        $this->Cell(0, 5, '3. EXECUTION DETAILS', 0, 1, 'L', true);
         
         $executed_qty = floatval($sheet['executed_quantity'] ?? 0);
         $executed_price = floatval($sheet['executed_price'] ?? 0);
@@ -302,135 +298,135 @@ class DealingSheetPDF extends TCPDF {
             $exec_price_display = $executed_price > 0 ? 'TZS ' . number_format($executed_price, 2) : 'Pending';
         }
         
-        $this->SetFont('helvetica', '', 9);
-        $this->Cell(50, 5, 'Executed Quantity:', 0, 0);
-        $this->SetFont('helvetica', 'B', 9);
-        $this->Cell(50, 5, $exec_qty_display, 0, 0);
+        $this->SetFont('helvetica', '', 8);
         
-        $this->SetFont('helvetica', '', 9);
-        $this->Cell(40, 5, 'Executed Price:', 0, 0);
-        $this->SetFont('helvetica', 'B', 9);
-        $this->Cell(0, 5, $exec_price_display, 0, 1);
+        // Row 1
+        $this->Cell(50, 4, 'Executed Quantity:', 0, 0);
+        $this->SetFont('helvetica', 'B', 8);
+        $this->Cell(50, 4, $exec_qty_display, 0, 0);
+        $this->SetFont('helvetica', '', 8);
+        $this->Cell(35, 4, 'Executed Price:', 0, 0);
+        $this->SetFont('helvetica', 'B', 8);
+        $this->Cell(0, 4, $exec_price_display, 0, 1);
         
-        $this->SetFont('helvetica', '', 9);
-        $this->Cell(50, 5, 'Executed Value:', 0, 0);
-        $this->SetFont('helvetica', 'B', 9);
-        $this->Cell(50, 5, $executed_value > 0 ? 'TZS ' . number_format($executed_value, 2) : 'Pending', 0, 0);
-        
-        $this->SetFont('helvetica', '', 9);
-        $this->Cell(40, 5, 'Execution Status:', 0, 0);
-        $this->SetFont('helvetica', 'B', 9);
-        $this->Cell(0, 5, ucfirst($sheet['execution_status'] ?? 'Pending'), 0, 1);
+        // Row 2
+        $this->SetFont('helvetica', '', 8);
+        $this->Cell(50, 4, 'Executed Value:', 0, 0);
+        $this->SetFont('helvetica', 'B', 8);
+        $this->Cell(50, 4, $executed_value > 0 ? 'TZS ' . number_format($executed_value, 2) : 'Pending', 0, 0);
+        $this->SetFont('helvetica', '', 8);
+        $this->Cell(35, 4, 'Execution Status:', 0, 0);
+        $this->SetFont('helvetica', 'B', 8);
+        $this->Cell(0, 4, ucfirst($sheet['execution_status'] ?? 'Pending'), 0, 1);
         
         if ($executed_qty > 0) {
-            $this->SetFont('helvetica', '', 9);
-            $this->Cell(50, 5, 'Trade Date:', 0, 0);
-            $this->SetFont('helvetica', 'B', 9);
-            $this->Cell(50, 5, $sheet['trade_date'] ? date('d/m/Y', strtotime($sheet['trade_date'])) : 'Pending', 0, 0);
+            $this->SetFont('helvetica', '', 8);
+            $this->Cell(50, 4, 'Trade Date:', 0, 0);
+            $this->SetFont('helvetica', 'B', 8);
+            $this->Cell(50, 4, $sheet['trade_date'] ? date('d/m/Y', strtotime($sheet['trade_date'])) : 'Pending', 0, 0);
+            $this->SetFont('helvetica', '', 8);
+            $this->Cell(35, 4, 'Settlement Date:', 0, 0);
+            $this->SetFont('helvetica', 'B', 8);
+            $this->Cell(0, 4, $sheet['settlement_date'] ? date('d/m/Y', strtotime($sheet['settlement_date'])) : 'Pending', 0, 1);
             
-            $this->SetFont('helvetica', '', 9);
-            $this->Cell(40, 5, 'Settlement Date:', 0, 0);
-            $this->SetFont('helvetica', 'B', 9);
-            $this->Cell(0, 5, $sheet['settlement_date'] ? date('d/m/Y', strtotime($sheet['settlement_date'])) : 'Pending', 0, 1);
-            
-            $this->SetFont('helvetica', '', 9);
-            $this->Cell(50, 5, 'Trade Reference:', 0, 0);
-            $this->SetFont('helvetica', 'B', 9);
-            $this->Cell(0, 5, $sheet['trade_reference'] ?? 'Pending', 0, 1);
+            $this->SetFont('helvetica', '', 8);
+            $this->Cell(50, 4, 'Trade Reference:', 0, 0);
+            $this->SetFont('helvetica', 'B', 8);
+            $this->Cell(0, 4, $sheet['trade_reference'] ?? 'Pending', 0, 1);
         }
         
         $this->Ln(2);
         
         // ============================================
-        // 4. FEES AND CHARGES - Compact with proper widths
+        // 4. FEES AND CHARGES - Compact
         // ============================================
-        $this->SetFont('helvetica', 'B', 10);
+        $this->SetFont('helvetica', 'B', 9);
         $this->SetFillColor(240, 240, 240);
-        $this->Cell(0, 6, '4. FEES AND CHARGES', 0, 1, 'L', true);
+        $this->Cell(0, 5, '4. FEES AND CHARGES', 0, 1, 'L', true);
         
-        // Table header - using proper widths that fit
-        $this->SetFont('helvetica', 'B', 8);
-        $this->Cell(85, 5, 'Description', 0, 0, 'L');
-        $this->Cell(50, 5, 'Rate / Basis', 0, 0, 'R');
-        $this->Cell(40, 5, 'Amount (TZS)', 0, 1, 'R');
+        // Table header - proper widths
+        $this->SetFont('helvetica', 'B', 7);
+        $this->Cell(85, 4, 'Description', 0, 0, 'L');
+        $this->Cell(50, 4, 'Rate / Basis', 0, 0, 'R');
+        $this->Cell(35, 4, 'Amount (TZS)', 0, 1, 'R');
         $this->SetLineWidth(0.2);
         $this->Line(15, $this->GetY(), 195, $this->GetY());
         
-        $this->SetFont('helvetica', '', 8);
+        $this->SetFont('helvetica', '', 7);
         
         // Brokerage Commission
-        $this->Cell(85, 5, 'Brokerage Commission', 0, 0, 'L');
+        $this->Cell(85, 4, 'Brokerage Commission', 0, 0, 'L');
         if ($is_bond) {
-            $this->Cell(50, 5, 'Tiered (0.063132% / 0.035%)', 0, 0, 'R');
+            $this->Cell(50, 4, 'Tiered (0.063132% / 0.035%)', 0, 0, 'R');
         } else {
-            $this->Cell(50, 5, 'Tiered (1.7% / 1.5% / 0.8%)', 0, 0, 'R');
+            $this->Cell(50, 4, 'Tiered (1.7% / 1.5% / 0.8%)', 0, 0, 'R');
         }
-        $this->Cell(40, 5, number_format($fees['brokerage'], 2), 0, 1, 'R');
+        $this->Cell(35, 4, number_format($fees['brokerage'], 2), 0, 1, 'R');
         
-        // Show tier details - smaller font
+        // Show tier details
         if (!empty($fees['tier_details'])) {
             $this->SetFont('helvetica', 'I', 6);
             foreach ($fees['tier_details'] as $tier) {
-                $this->Cell(15, 4, '', 0, 0);
-                $this->Cell(70, 4, $this->shortenText($tier['label'], 30), 0, 0, 'L');
-                $this->Cell(50, 4, '', 0, 0, 'R');
-                $this->Cell(40, 4, number_format($tier['fee'], 2), 0, 1, 'R');
+                $this->Cell(15, 3, '', 0, 0);
+                $this->Cell(70, 3, $tier['label'], 0, 0, 'L');
+                $this->Cell(50, 3, '', 0, 0, 'R');
+                $this->Cell(35, 3, number_format($tier['fee'], 2), 0, 1, 'R');
             }
-            $this->SetFont('helvetica', '', 8);
+            $this->SetFont('helvetica', '', 7);
         }
         
         // VAT
-        $this->Cell(85, 5, 'VAT on Brokerage', 0, 0, 'L');
-        $this->Cell(50, 5, '@ 18.00%', 0, 0, 'R');
-        $this->Cell(40, 5, number_format($fees['vat'], 2), 0, 1, 'R');
+        $this->Cell(85, 4, 'VAT on Brokerage', 0, 0, 'L');
+        $this->Cell(50, 4, '@ 18.00%', 0, 0, 'R');
+        $this->Cell(35, 4, number_format($fees['vat'], 2), 0, 1, 'R');
         
         // CMSA
         $cmsa_rate = $is_bond ? '0.0100%' : '0.1400%';
         $cmsa_basis = $is_bond ? 'of Consideration' : 'of Consideration';
-        $this->Cell(85, 5, 'CMSA Transaction Fee', 0, 0, 'L');
-        $this->Cell(50, 5, '@ ' . $cmsa_rate . ' ' . $cmsa_basis, 0, 0, 'R');
-        $this->Cell(40, 5, number_format($fees['cmsa'], 2), 0, 1, 'R');
+        $this->Cell(85, 4, 'CMSA Transaction Fee', 0, 0, 'L');
+        $this->Cell(50, 4, '@ ' . $cmsa_rate . ' ' . $cmsa_basis, 0, 0, 'R');
+        $this->Cell(35, 4, number_format($fees['cmsa'], 2), 0, 1, 'R');
         
         // DSE
         $dse_rate = $is_bond ? '0.02006%' : '0.1652%';
         $dse_basis = $is_bond ? 'of Face Value' : 'of Consideration';
-        $this->Cell(85, 5, 'DSE Transaction Fee', 0, 0, 'L');
-        $this->Cell(50, 5, '@ ' . $dse_rate . ' ' . $dse_basis, 0, 0, 'R');
-        $this->Cell(40, 5, number_format($fees['dse'], 2), 0, 1, 'R');
+        $this->Cell(85, 4, 'DSE Transaction Fee', 0, 0, 'L');
+        $this->Cell(50, 4, '@ ' . $dse_rate . ' ' . $dse_basis, 0, 0, 'R');
+        $this->Cell(35, 4, number_format($fees['dse'], 2), 0, 1, 'R');
         
         // Fidelity (Equity/ETF only)
         if (!$is_bond) {
-            $this->Cell(85, 5, 'Fidelity Fee', 0, 0, 'L');
-            $this->Cell(50, 5, '@ 0.0200% of Consideration', 0, 0, 'R');
-            $this->Cell(40, 5, number_format($fees['fidelity'] ?? 0, 2), 0, 1, 'R');
+            $this->Cell(85, 4, 'Fidelity Fee', 0, 0, 'L');
+            $this->Cell(50, 4, '@ 0.0200% of Consideration', 0, 0, 'R');
+            $this->Cell(35, 4, number_format($fees['fidelity'] ?? 0, 2), 0, 1, 'R');
         }
         
         // CDS/CSDR
         $cds_rate = $is_bond ? '0.0118%' : '0.0708%';
         $cds_basis = $is_bond ? 'of Face Value' : 'of Consideration';
         $cds_label = $is_bond ? 'CSDR Fee' : 'CDS Fee';
-        $this->Cell(85, 5, $cds_label, 0, 0, 'L');
-        $this->Cell(50, 5, '@ ' . $cds_rate . ' ' . $cds_basis, 0, 0, 'R');
-        $this->Cell(40, 5, number_format($fees['csd'], 2), 0, 1, 'R');
+        $this->Cell(85, 4, $cds_label, 0, 0, 'L');
+        $this->Cell(50, 4, '@ ' . $cds_rate . ' ' . $cds_basis, 0, 0, 'R');
+        $this->Cell(35, 4, number_format($fees['csd'], 2), 0, 1, 'R');
         
         // VRF (Equity/ETF only)
         if (!$is_bond) {
-            $this->Cell(85, 5, 'VRF Fee', 0, 0, 'L');
-            $this->Cell(50, 5, '@ 0.0025% of Consideration', 0, 0, 'R');
-            $this->Cell(40, 5, number_format($fees['vrf'] ?? 0, 2), 0, 1, 'R');
+            $this->Cell(85, 4, 'VRF Fee', 0, 0, 'L');
+            $this->Cell(50, 4, '@ 0.0025% of Consideration', 0, 0, 'R');
+            $this->Cell(35, 4, number_format($fees['vrf'] ?? 0, 2), 0, 1, 'R');
         }
         
         // Other Charges
-        $this->Cell(85, 5, 'Other Charges', 0, 0, 'L');
-        $this->Cell(50, 5, '', 0, 0, 'R');
-        $this->Cell(40, 5, '0.00', 0, 1, 'R');
+        $this->Cell(85, 4, 'Other Charges', 0, 0, 'L');
+        $this->Cell(50, 4, '', 0, 0, 'R');
+        $this->Cell(35, 4, '0.00', 0, 1, 'R');
         
         $this->Line(15, $this->GetY(), 195, $this->GetY());
         
         // Total Charges
-        $this->SetFont('helvetica', 'B', 9);
-        $this->Cell(135, 6, 'TOTAL CHARGES', 0, 0, 'R');
-        $this->Cell(40, 6, number_format($fees['total'], 2), 0, 1, 'R');
+        $this->SetFont('helvetica', 'B', 8);
+        $this->Cell(135, 5, 'TOTAL CHARGES', 0, 0, 'R');
+        $this->Cell(35, 5, number_format($fees['total'], 2), 0, 1, 'R');
         
         $this->Ln(2);
         
@@ -450,20 +446,19 @@ class DealingSheetPDF extends TCPDF {
         
         $this->SetLineWidth(0.5);
         $this->Line(15, $this->GetY() + 2, 195, $this->GetY() + 2);
-        $this->Ln(4);
+        $this->Ln(3);
         
-        $this->SetFont('helvetica', 'B', 11);
-        $this->Cell(120, 7, $net_label . ':', 0, 0, 'R');
-        $this->SetFont('helvetica', 'B', 11);
+        $this->SetFont('helvetica', 'B', 10);
+        $this->Cell(120, 6, $net_label . ':', 0, 0, 'R');
+        $this->SetFont('helvetica', 'B', 10);
         $this->SetTextColor(0, 100, 0);
-        $this->Cell(40, 7, 'TZS ' . number_format($net_amount, 2), 0, 1, 'R');
+        $this->Cell(35, 6, 'TZS ' . number_format($net_amount, 2), 0, 1, 'R');
         $this->SetTextColor(0, 0, 0);
         
-        // Add breakdown explanation for bonds
         if ($is_bond) {
             $this->SetFont('helvetica', 'I', 6);
             $this->SetTextColor(100, 100, 100);
-            $this->Cell(0, 4, '* For bonds: Consideration = (Price% / 100) × Face Value', 0, 1, 'L');
+            $this->Cell(0, 3, '* For bonds: Consideration = (Price% / 100) × Face Value', 0, 1, 'L');
             $this->SetTextColor(0, 0, 0);
         }
         
@@ -480,21 +475,18 @@ class DealingSheetPDF extends TCPDF {
                 $receipt_path = '../uploads/payment_receipts/' . trim($receipt_file);
                 if (file_exists($receipt_path)) {
                     if (!$has_receipts) {
-                        $this->SetFont('helvetica', 'B', 9);
-                        $this->Cell(0, 5, 'Payment Receipts:', 0, 1, 'L');
+                        $this->SetFont('helvetica', 'B', 8);
+                        $this->Cell(0, 4, 'Payment Receipts:', 0, 1, 'L');
                         $has_receipts = true;
                     }
                     
-                    // Check if it's an image or PDF
                     $ext = strtolower(pathinfo($receipt_file, PATHINFO_EXTENSION));
                     if (in_array($ext, ['jpg', 'jpeg', 'png', 'gif'])) {
-                        // For images, display smaller in PDF
-                        $this->Image($receipt_path, 30, $this->GetY(), 120, 0, '', '', '', false, 200, '', false, false, 0);
-                        $this->Ln(8);
+                        $this->Image($receipt_path, 30, $this->GetY(), 100, 0, '', '', '', false, 200, '', false, false, 0);
+                        $this->Ln(6);
                     } else {
-                        // For PDFs, show a link or note
-                        $this->SetFont('helvetica', 'I', 7);
-                        $this->Cell(0, 4, '• PDF receipt attached: ' . htmlspecialchars($receipt_file), 0, 1, 'L');
+                        $this->SetFont('helvetica', 'I', 6);
+                        $this->Cell(0, 3, '• PDF receipt attached: ' . htmlspecialchars($receipt_file), 0, 1, 'L');
                     }
                 }
             }
@@ -507,36 +499,36 @@ class DealingSheetPDF extends TCPDF {
         // REMARKS - Compact
         // ============================================
         if (!empty($sheet['remarks'])) {
-            $this->SetFont('helvetica', 'B', 9);
-            $this->Cell(0, 5, 'Remarks:', 0, 1);
-            $this->SetFont('helvetica', '', 8);
-            $this->MultiCell(0, 4, $sheet['remarks'], 0, 'L');
+            $this->SetFont('helvetica', 'B', 8);
+            $this->Cell(0, 4, 'Remarks:', 0, 1);
+            $this->SetFont('helvetica', '', 7);
+            $this->MultiCell(0, 3, $sheet['remarks'], 0, 'L');
             $this->Ln(2);
         }
         
         // ============================================
         // SIGNATURES - Compact
         // ============================================
-        $this->SetFont('helvetica', 'B', 9);
-        $this->Cell(0, 5, 'Dealer Name:', 0, 0);
-        $this->SetFont('helvetica', '', 9);
-        $this->Cell(0, 5, $sheet['dealer_name'] ?? $exportedByName, 0, 1);
+        $this->SetFont('helvetica', 'B', 8);
+        $this->Cell(0, 4, 'Dealer Name:', 0, 0);
+        $this->SetFont('helvetica', '', 8);
+        $this->Cell(0, 4, $sheet['dealer_name'] ?? $exportedByName, 0, 1);
         $this->Ln(2);
         
-        $this->SetFont('helvetica', 'B', 9);
-        $this->Cell(70, 5, 'Prepared By:', 0, 0);
-        $this->Cell(70, 5, 'Checked By:', 0, 0);
-        $this->Cell(0, 5, 'Approved By:', 0, 1);
+        $this->SetFont('helvetica', 'B', 8);
+        $this->Cell(70, 4, 'Prepared By:', 0, 0);
+        $this->Cell(70, 4, 'Checked By:', 0, 0);
+        $this->Cell(0, 4, 'Approved By:', 0, 1);
         
         $this->SetLineWidth(0.2);
-        $this->Line(15, $this->GetY() + 6, 65, $this->GetY() + 6);
-        $this->Line(85, $this->GetY() + 6, 135, $this->GetY() + 6);
-        $this->Line(150, $this->GetY() + 6, 195, $this->GetY() + 6);
+        $this->Line(15, $this->GetY() + 5, 65, $this->GetY() + 5);
+        $this->Line(85, $this->GetY() + 5, 135, $this->GetY() + 5);
+        $this->Line(150, $this->GetY() + 5, 195, $this->GetY() + 5);
         
-        $this->SetFont('helvetica', 'I', 7);
-        $this->Cell(70, 10, $exportedByName, 0, 0, 'L');
-        $this->Cell(70, 10, '__________________', 0, 0, 'L');
-        $this->Cell(0, 10, '__________________', 0, 1, 'L');
+        $this->SetFont('helvetica', 'I', 6);
+        $this->Cell(70, 8, $exportedByName, 0, 0, 'L');
+        $this->Cell(70, 8, '__________________', 0, 0, 'L');
+        $this->Cell(0, 8, '__________________', 0, 1, 'L');
         
         $this->Ln(4);
         
@@ -547,16 +539,8 @@ class DealingSheetPDF extends TCPDF {
         $this->SetTextColor(120, 120, 120);
         $disclaimer = "This Order Sheet is for internal use only. It does not constitute a contract note or official trade confirmation. " .
                       "All trades are subject to the Rules, Regulations and Customs of the Dar es Salaam Stock Exchange.";
-        $this->MultiCell(0, 3, $disclaimer, 0, 'C');
+        $this->MultiCell(0, 2.5, $disclaimer, 0, 'C');
         $this->SetTextColor(0, 0, 0);
-    }
-    
-    // Helper function to shorten text
-    private function shortenText($text, $maxLength = 40) {
-        if (strlen($text) <= $maxLength) {
-            return $text;
-        }
-        return substr($text, 0, $maxLength) . '...';
     }
 }
 
@@ -709,17 +693,17 @@ if (isset($_GET['export_pdf']) && isset($_GET['id'])) {
     $pdf->SetCreator($company_name);
     $pdf->SetAuthor($sheet['dealer_name'] ?? 'System');
     $pdf->SetTitle('Dealing Sheet - ' . ($sheet['sheet_reference'] ?? ''));
-    $pdf->SetMargins(15, 20, 15);
-    $pdf->SetHeaderMargin(5);
-    $pdf->SetFooterMargin(10);
-    $pdf->SetAutoPageBreak(true, 15);
+    $pdf->SetMargins(15, 15, 15);
+    $pdf->SetHeaderMargin(3);
+    $pdf->SetFooterMargin(8);
+    $pdf->SetAutoPageBreak(true, 12);
     
     $exportedByName = dealingSheetGetCurrentUserDisplayName($current_user);
     $pdf->addDealingSheet($sheet, $fees, $exportedByName);
     
     $filename = 'dealing_sheet_' . preg_replace('/[^a-zA-Z0-9_-]/', '_', $sheet['sheet_reference'] ?? 'export') . '.pdf';
     
-    // Force download with proper headers
+    // Force inline view with proper headers
     header('Content-Type: application/pdf');
     header('Content-Disposition: inline; filename="' . $filename . '"');
     header('Cache-Control: private, max-age=0, must-revalidate');
@@ -1035,7 +1019,136 @@ $page_title = $view === 'orders' ? 'Order Intake Sheet' : 'Dealing Sheet Lifecyc
 include '../includes/header.php';
 ?>
 
-<!-- Rest of the HTML remains the same as the previous version -->
+<style>
+    .modal-xl { max-width: 900px; }
+    .priority-Normal { background-color: #e8f5e9; }
+    .priority-Urgent { background-color: #fff3e0; border-left: 4px solid #ff9800 !important; }
+    .priority-Most\ Important { background-color: #ffebee; border-left: 4px solid #f44336 !important; }
+    .old-order { background-color: #ffcdd2 !important; color: #c62828 !important; }
+    .old-order td { color: #c62828 !important; }
+    .client-search-dropdown, .security-search-dropdown {
+        position: absolute;
+        background: white;
+        border: 1px solid #ddd;
+        max-height: 250px;
+        overflow-y: auto;
+        z-index: 10000;
+        width: 100%;
+        display: none;
+        border-radius: 4px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
+    .client-search-dropdown div, .security-search-dropdown div {
+        padding: 10px 12px;
+        cursor: pointer;
+        border-bottom: 1px solid #eee;
+    }
+    .client-search-dropdown div:hover, .security-search-dropdown div:hover {
+        background-color: #f0f0f0;
+    }
+    .security-info { font-size: 11px; color: #6c757d; margin-top: 4px; }
+    .position-relative { position: relative; }
+    .btn-group-sm .btn { padding: 0.25rem 0.5rem; font-size: 0.75rem; }
+    .table-responsive { overflow-x: auto; }
+    .receipt-upload-form {
+        display: inline-block;
+        margin: 0 2px;
+    }
+    .receipt-upload-form input[type="file"] {
+        display: none;
+    }
+    .receipt-badge {
+        font-size: 0.7rem;
+        padding: 2px 6px;
+    }
+    .receipt-preview {
+        max-width: 60px;
+        max-height: 50px;
+        object-fit: cover;
+        border-radius: 4px;
+        cursor: pointer;
+        border: 1px solid #ddd;
+    }
+    .receipt-preview:hover {
+        border-color: #0d6efd;
+        box-shadow: 0 0 5px rgba(13, 110, 253, 0.3);
+    }
+    .receipt-modal-img {
+        max-width: 100%;
+        max-height: 80vh;
+    }
+    .receipt-thumbnails {
+        display: flex;
+        gap: 5px;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+    .receipt-thumbnails .badge {
+        cursor: pointer;
+    }
+    .receipt-count {
+        font-size: 0.7rem;
+        background: #0d6efd;
+        color: white;
+        border-radius: 50%;
+        padding: 1px 6px;
+        margin-left: 3px;
+    }
+    .file-input-wrapper {
+        position: relative;
+    }
+    .file-input-wrapper .file-list {
+        margin-top: 10px;
+        max-height: 150px;
+        overflow-y: auto;
+    }
+    .file-input-wrapper .file-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 5px 10px;
+        background: #f8f9fa;
+        border-radius: 4px;
+        margin-bottom: 3px;
+    }
+    .file-input-wrapper .file-item .file-name {
+        font-size: 0.85rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 200px;
+    }
+    .file-input-wrapper .file-item .file-size {
+        font-size: 0.75rem;
+        color: #6c757d;
+    }
+    .file-input-wrapper .file-item .remove-file {
+        cursor: pointer;
+        color: #dc3545;
+        font-weight: bold;
+        padding: 0 5px;
+    }
+    .file-input-wrapper .file-item .remove-file:hover {
+        color: #a71d2a;
+    }
+    .pdf-viewer-modal .modal-dialog {
+        max-width: 95%;
+        height: 90vh;
+    }
+    .pdf-viewer-modal .modal-content {
+        height: 100%;
+    }
+    .pdf-viewer-modal .modal-body {
+        height: calc(100% - 120px);
+        padding: 0;
+    }
+    .pdf-viewer-modal .modal-body iframe {
+        width: 100%;
+        height: 100%;
+        border: none;
+    }
+</style>
+
 <!-- Modal for Order Entry -->
 <div class="modal fade" id="orderModal" tabindex="-1" aria-labelledby="orderModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-xl">
@@ -1218,6 +1331,25 @@ include '../includes/header.php';
     </div>
 </div>
 
+<!-- PDF Viewer Modal -->
+<div class="modal fade pdf-viewer-modal" id="pdfViewerModal" tabindex="-1" aria-labelledby="pdfViewerModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title"><i class="bi bi-file-pdf me-2"></i>Dealing Sheet PDF</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <iframe id="pdfViewerFrame" src=""></iframe>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <a id="pdfDownloadLink" href="#" target="_blank" class="btn btn-primary">Download PDF</a>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="page-header">
     <div class="container-fluid">
         <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
@@ -1350,9 +1482,9 @@ include '../includes/header.php';
                                     <td class="text-end">
                                         <div class="btn-group btn-group-sm">
                                             <button class="btn btn-outline-primary" onclick='editOrder(<?php echo json_encode($sheet); ?>)'><i class="bi bi-pencil"></i></button>
-                                            <a href="dealing_sheet.php?export_pdf=1&id=<?php echo $sheet['id']; ?>" target="_blank" class="btn btn-outline-danger btn-sm">
+                                            <button class="btn btn-outline-danger btn-sm" onclick="viewPDF(<?php echo $sheet['id']; ?>)">
                                                 <i class="bi bi-file-pdf"></i>
-                                            </a>
+                                            </button>
                                             <button class="btn btn-outline-warning" onclick="confirmAction(<?php echo $sheet['id']; ?>, 'cancel_order')"><i class="bi bi-x-circle"></i></button>
                                             <button class="btn btn-outline-success" onclick="confirmAction(<?php echo $sheet['id']; ?>, 'mark_executed')"><i class="bi bi-check-circle"></i></button>
                                             <button class="btn btn-outline-danger" onclick="confirmAction(<?php echo $sheet['id']; ?>, 'delete_order')"><i class="bi bi-trash"></i></button>
@@ -1481,6 +1613,15 @@ function updateFieldsForAssetClass() {
 }
 
 document.getElementById('asset_class')?.addEventListener('change', updateFieldsForAssetClass);
+
+// PDF Viewer Function
+function viewPDF(sheetId) {
+    const pdfUrl = 'dealing_sheet.php?export_pdf=1&id=' + sheetId;
+    const modal = new bootstrap.Modal(document.getElementById('pdfViewerModal'));
+    document.getElementById('pdfViewerFrame').src = pdfUrl;
+    document.getElementById('pdfDownloadLink').href = pdfUrl;
+    modal.show();
+}
 
 // Receipt upload functions - Multi-file
 function openReceiptUpload(sheetId) {
