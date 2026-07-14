@@ -1773,19 +1773,21 @@ include '../includes/header.php';
                                             <td>
                                                 <code><?php echo htmlspecialchars($entity_info['code']); ?></code>
                                             </td>
-                                            <td>
-                                                <a href="entity_ledger.php?type=<?php echo urlencode($entity_info['type']); ?>&id=<?php echo urlencode($entity_info['id']); ?>"
-                                                   class="text-decoration-none"
-                                                   title="View full ledger for <?php echo htmlspecialchars($entity_info['name']); ?>">
-                                                    <strong><?php echo htmlspecialchars($entity_info['name']); ?></strong>
-                                                </a>
-                                                <?php if ($entity_info['type'] == 'client' && isset($entity_info['details']['client_type'])): ?>
-                                                    <br><small class="text-muted"><?php echo htmlspecialchars($entity_info['details']['client_type']); ?></small>
-                                                <?php endif; ?>
-                                                <?php if ($entity_info['type'] == 'bank_account' && isset($entity_info['details']['bank_name'])): ?>
-                                                    <br><small class="text-muted"><?php echo htmlspecialchars($entity_info['details']['bank_name']); ?></small>
-                                                <?php endif; ?>
-                                            </td>
+                                          <td>
+    <a href="entity_ledger.php?type=<?php echo urlencode($entity_info['type']); ?>&id=<?php echo urlencode($entity_info['id']); ?><?php echo isset($_GET['entity_type']) ? '&return_to=' . urlencode(http_build_query(['entity_type' => $_GET['entity_type']])) : ''; ?>"
+       class="text-decoration-none"
+       style="color: #007bff; font-weight: 600;"
+       title="View full ledger for <?php echo htmlspecialchars($entity_info['name']); ?>">
+        <strong><?php echo htmlspecialchars($entity_info['name']); ?></strong>
+        <i class="bi bi-box-arrow-up-right ms-1" style="font-size: 0.7rem;"></i>
+    </a>
+    <?php if ($entity_info['type'] == 'client' && isset($entity_info['details']['client_type'])): ?>
+        <br><small class="text-muted"><?php echo htmlspecialchars($entity_info['details']['client_type']); ?></small>
+    <?php endif; ?>
+    <?php if ($entity_info['type'] == 'bank_account' && isset($entity_info['details']['bank_name'])): ?>
+        <br><small class="text-muted"><?php echo htmlspecialchars($entity_info['details']['bank_name']); ?></small>
+    <?php endif; ?>
+</td>
                                             <td class="text-success fw-bold">
                                                 <?php echo formatCurrency($totals['receipts']); ?>
                                             </td>
