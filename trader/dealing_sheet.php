@@ -3,7 +3,7 @@
 error_reporting(E_ALL);
 ini_set('display_errors', 0);
 ini_set('log_errors', 1);
-ini_set('error_log', __DIR__ . '/mtp_receipt_errors.log');
+ini_set('error_log', __DIR__ . '/numeric_receipt_errors.log');
 
 // Start output buffering
 if (ob_get_level() == 0) {
@@ -26,13 +26,6 @@ $user_name = $current_user['username'] ?? 'System';
 $user_id = $current_user['id'] ?? null;
 
 // ============================================
-// FUNCTION TO CHECK IF USER IS ACCOUNTANT
-// ============================================
-function isAccountant($user) {
-    return isset($user['role']) && in_array($user['role'], ['finance_officer', 'accountant', 'admin']);
-}
-
-// ============================================
 // HANDLE ACTIONS (Traders only - no approval)
 // ============================================
 
@@ -45,13 +38,13 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
     $allowed_exts = ['jpg', 'jpeg', 'png', 'gif', 'pdf'];
     $max_size = 5 * 1024 * 1024;
     
-    $upload_dir = __DIR__ . '/../uploads/mtp_receipts/';
+    $upload_dir = __DIR__ . '/../uploads/numeric_receipts/';
     if (!file_exists($upload_dir)) {
         mkdir($upload_dir, 0777, true);
     }
     
     // Get existing receipts
-    $stmt = $db->prepare("SELECT payment_receipt FROM mtp_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+    $stmt = $db->prepare("SELECT payment_receipt FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
     $stmt->execute([$trade_id]);
     $existing = $stmt->fetch(PDO::FETCH_ASSOC);
     $existing_receipts = !empty($existing['payment_receipt']) ? explode(',', $existing['payment_receipt']) : [];
@@ -92,13 +85,13 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
             $receipts_str = implode(',', $all_receipts);
             
             // Check if record exists
-            $stmt = $db->prepare("SELECT id FROM mtp_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+            $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
             $stmt->execute([$trade_id]);
             if ($stmt->fetch()) {
-                $stmt = $db->prepare("UPDATE mtp_trade_receipts SET payment_receipt = ?, updated_at = NOW(), uploaded_by = ? WHERE trade_id = ? AND trade_type = 'trade'");
+                $stmt = $db->prepare("UPDATE numeric_trade_receipts SET payment_receipt = ?, updated_at = NOW(), uploaded_by = ? WHERE trade_id = ? AND trade_type = 'trade'");
                 $result = $stmt->execute([$receipts_str, $user_name, $trade_id]);
             } else {
-                $stmt = $db->prepare("INSERT INTO mtp_trade_receipts (trade_id, trade_type, payment_receipt, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, NOW(), NOW())");
+                $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, payment_receipt, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, NOW(), NOW())");
                 $result = $stmt->execute([$trade_id, $receipts_str, $user_name]);
             }
             
@@ -113,7 +106,7 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
     } else {
         $_SESSION['alert'] = ['No files selected for upload', 'danger'];
     }
-    header('Location: mtp_receipt_upload.php?' . http_build_query(array_filter([
+    header('Location: numeric_receipt_upload.php?' . http_build_query(array_filter([
         'filter' => $_GET['filter'] ?? 'pending',
         'asset_class' => $_GET['asset_class'] ?? 'all',
         'search' => $_GET['search'] ?? ''
@@ -121,19 +114,19 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
     exit;
 }
 
-// Handle Receipt Delete (Traders can delete their own receipts)
+// Handle Receipt Delete (Traders can delete their own receipts if not approved)
 if (isset($_GET['delete_receipt']) && isset($_GET['trade_id']) && isset($_GET['file'])) {
     $trade_id = (int) $_GET['trade_id'];
     $file_to_delete = $_GET['file'];
     
     // Check if receipt is already approved - if approved, traders cannot delete
-    $stmt = $db->prepare("SELECT is_approved FROM mtp_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+    $stmt = $db->prepare("SELECT is_approved FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
     $stmt->execute([$trade_id]);
     $record = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if ($record && $record['is_approved'] == 1) {
         $_SESSION['alert'] = ['Cannot delete approved receipts. Please contact finance officer.', 'warning'];
-        header('Location: mtp_receipt_upload.php?' . http_build_query(array_filter([
+        header('Location: numeric_receipt_upload.php?' . http_build_query(array_filter([
             'filter' => $_GET['filter'] ?? 'pending',
             'asset_class' => $_GET['asset_class'] ?? 'all',
             'search' => $_GET['search'] ?? ''
@@ -141,7 +134,7 @@ if (isset($_GET['delete_receipt']) && isset($_GET['trade_id']) && isset($_GET['f
         exit;
     }
     
-    $stmt = $db->prepare("SELECT payment_receipt FROM mtp_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+    $stmt = $db->prepare("SELECT payment_receipt FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
     $stmt->execute([$trade_id]);
     $record = $stmt->fetch(PDO::FETCH_ASSOC);
     
@@ -151,19 +144,19 @@ if (isset($_GET['delete_receipt']) && isset($_GET['trade_id']) && isset($_GET['f
         if (($key = array_search($file_to_delete, $receipts)) !== false) {
             unset($receipts[$key]);
             
-            $filepath = __DIR__ . '/../uploads/mtp_receipts/' . $file_to_delete;
+            $filepath = __DIR__ . '/../uploads/numeric_receipts/' . $file_to_delete;
             if (file_exists($filepath)) {
                 unlink($filepath);
             }
             
             $receipts_str = !empty($receipts) ? implode(',', $receipts) : null;
-            $stmt = $db->prepare("UPDATE mtp_trade_receipts SET payment_receipt = ?, updated_at = NOW() WHERE trade_id = ? AND trade_type = 'trade'");
+            $stmt = $db->prepare("UPDATE numeric_trade_receipts SET payment_receipt = ?, updated_at = NOW() WHERE trade_id = ? AND trade_type = 'trade'");
             if ($stmt->execute([$receipts_str, $trade_id])) {
                 $_SESSION['alert'] = ['Receipt deleted successfully.', 'success'];
             }
         }
     }
-    header('Location: mtp_receipt_upload.php?' . http_build_query(array_filter([
+    header('Location: numeric_receipt_upload.php?' . http_build_query(array_filter([
         'filter' => $_GET['filter'] ?? 'pending',
         'asset_class' => $_GET['asset_class'] ?? 'all',
         'search' => $_GET['search'] ?? ''
@@ -178,7 +171,7 @@ if (isset($_POST['add_comment']) && isset($_POST['trade_id'])) {
     
     if (empty($comment)) {
         $_SESSION['alert'] = ['Please enter a comment.', 'danger'];
-        header('Location: mtp_receipt_upload.php?' . http_build_query(array_filter([
+        header('Location: numeric_receipt_upload.php?' . http_build_query(array_filter([
             'filter' => $_GET['filter'] ?? 'pending',
             'asset_class' => $_GET['asset_class'] ?? 'all',
             'search' => $_GET['search'] ?? ''
@@ -187,7 +180,7 @@ if (isset($_POST['add_comment']) && isset($_POST['trade_id'])) {
     }
     
     $stmt = $db->prepare("
-        INSERT INTO mtp_trade_comments (trade_id, comment, created_by, created_at) 
+        INSERT INTO numeric_trade_comments (trade_id, comment, created_by, created_at) 
         VALUES (?, ?, ?, NOW())
     ");
     
@@ -197,7 +190,7 @@ if (isset($_POST['add_comment']) && isset($_POST['trade_id'])) {
         $_SESSION['alert'] = ['Failed to add comment.', 'danger'];
     }
     
-    header('Location: mtp_receipt_upload.php?' . http_build_query(array_filter([
+    header('Location: numeric_receipt_upload.php?' . http_build_query(array_filter([
         'filter' => $_GET['filter'] ?? 'pending',
         'asset_class' => $_GET['asset_class'] ?? 'all',
         'search' => $_GET['search'] ?? ''
@@ -215,7 +208,7 @@ $search = $_GET['search'] ?? '';
 // ============================================
 // FETCH TRADES WITH ADDITIONAL_REFERENCE = NUMBER ONLY
 // ============================================
-function getMTPTrades($db, $filter = 'pending', $asset_class_filter = 'all', $search = '') {
+function getNumericTrades($db, $filter = 'pending', $asset_class_filter = 'all', $search = '') {
     $sql = "
         SELECT 
             t.*,
@@ -231,15 +224,20 @@ function getMTPTrades($db, $filter = 'pending', $asset_class_filter = 'all', $se
             GROUP_CONCAT(DISTINCT tc.created_by ORDER BY tc.created_at DESC SEPARATOR '|||') as comment_authors,
             GROUP_CONCAT(DISTINCT tc.created_at ORDER BY tc.created_at DESC SEPARATOR '|||') as comment_dates
         FROM trades t
-        LEFT JOIN mtp_trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
-        LEFT JOIN mtp_trade_comments tc ON t.id = tc.trade_id
+        LEFT JOIN numeric_trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
+        LEFT JOIN numeric_trade_comments tc ON t.id = tc.trade_id
         WHERE 1=1
     ";
     
     $params = [];
     
-    // Condition: additional_reference is a number only (numeric)
+    // =====================================================
+    // KEY CONDITION: additional_reference is a NUMBER ONLY
+    // Uses REGEX to match numeric values only
+    // =====================================================
     $sql .= " AND t.additional_reference REGEXP '^[0-9]+$'";
+    $sql .= " AND t.additional_reference IS NOT NULL";
+    $sql .= " AND t.additional_reference != ''";
     
     // Asset class conditions
     if ($asset_class_filter === 'all') {
@@ -287,7 +285,7 @@ function getMTPTrades($db, $filter = 'pending', $asset_class_filter = 'all', $se
 // ============================================
 // GET STATS
 // ============================================
-function getMTPStats($db) {
+function getNumericStats($db) {
     $stats = [
         'total' => 0,
         'pending' => 0,
@@ -306,8 +304,10 @@ function getMTPStats($db) {
             SUM(CASE WHEN tr.is_approved = 1 THEN 1 ELSE 0 END) as approved,
             SUM(CASE WHEN tr.is_approved = 2 THEN 1 ELSE 0 END) as rejected
         FROM trades t
-        LEFT JOIN mtp_trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
+        LEFT JOIN numeric_trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
         WHERE t.additional_reference REGEXP '^[0-9]+$'
+        AND t.additional_reference IS NOT NULL
+        AND t.additional_reference != ''
         AND (
             (t.asset_class = 'bond') OR 
             (t.asset_class IN ('equity', 'Exchange Traded Funds') AND LOWER(t.trade_side) = 'buy')
@@ -327,8 +327,10 @@ function getMTPStats($db) {
             asset_class,
             COUNT(*) as count
         FROM trades t
-        LEFT JOIN mtp_trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
+        LEFT JOIN numeric_trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
         WHERE t.additional_reference REGEXP '^[0-9]+$'
+        AND t.additional_reference IS NOT NULL
+        AND t.additional_reference != ''
         AND (
             (t.asset_class = 'bond') OR 
             (t.asset_class IN ('equity', 'Exchange Traded Funds') AND LOWER(t.trade_side) = 'buy')
@@ -344,10 +346,10 @@ function getMTPStats($db) {
     return $stats;
 }
 
-$trades = getMTPTrades($db, $filter, $asset_class_filter, $search);
-$stats = getMTPStats($db);
+$trades = getNumericTrades($db, $filter, $asset_class_filter, $search);
+$stats = getNumericStats($db);
 
-$page_title = 'MTP Payment Receipt Upload';
+$page_title = 'Numeric Reference Receipt Upload';
 include '../includes/header.php';
 ?>
 
@@ -861,10 +863,14 @@ include '../includes/header.php';
         <div>
             <h1 class="h3 mb-0 fw-bold">
                 <i class="bi bi-receipt-cutoff me-2" style="color: var(--primary);"></i>
-                MTP Payment Receipt Upload
+                Numeric Reference Receipt Upload
             </h1>
             <p class="text-muted mb-0 small">
-                Upload payment receipts for MTP trades (Additional Reference = Number only)
+                Upload payment receipts for trades where <strong>Additional Reference is a number only</strong>
+            </p>
+            <p class="text-muted mb-0 small">
+                <span class="badge bg-info">Bonds: All trades</span>
+                <span class="badge bg-success">Equities/ETFs: BUY only</span>
             </p>
         </div>
         <div>
@@ -888,9 +894,9 @@ include '../includes/header.php';
     <div class="stats-grid">
         <div class="stat-card primary">
             <div class="stat-icon"><i class="bi bi-file-text"></i></div>
-            <div class="stat-label">Total MTP Trades</div>
+            <div class="stat-label">Total Numeric Ref Trades</div>
             <div class="stat-value"><?php echo number_format($stats['total']); ?></div>
-            <div class="stat-sub">With numeric Additional Reference</div>
+            <div class="stat-sub">Additional Reference = Number only</div>
         </div>
         <div class="stat-card warning">
             <div class="stat-icon"><i class="bi bi-clock-history"></i></div>
@@ -955,7 +961,7 @@ include '../includes/header.php';
                         <button type="submit" class="btn-modern btn-modern-primary">
                             <i class="bi bi-filter"></i> Apply
                         </button>
-                        <a href="mtp_receipt_upload.php" class="btn-modern btn-modern-secondary">
+                        <a href="numeric_receipt_upload.php" class="btn-modern btn-modern-secondary">
                             <i class="bi bi-arrow-counterclockwise"></i> Reset
                         </a>
                     </div>
@@ -964,12 +970,21 @@ include '../includes/header.php';
         </form>
     </div>
 
+    <!-- Info Banner -->
+    <div class="alert alert-info mb-4" style="border-radius: var(--radius-sm);">
+        <i class="bi bi-info-circle me-2"></i>
+        <strong>What are Numeric Reference trades?</strong>
+        Trades where the <code>additional_reference</code> column contains a <strong>number only</strong> (e.g., 12345, 67890).
+        <br><small class="text-muted">• Bonds: All trades (BUY and SELL)</small>
+        <br><small class="text-muted">• Equities & ETFs: Only BUY side trades</small>
+    </div>
+
     <!-- Table -->
     <div class="table-wrapper">
         <div class="table-header">
             <h6>
                 <i class="bi bi-table"></i>
-                MTP Trades
+                Numeric Reference Trades
                 <span class="badge-count"><?php echo count($trades); ?> trades</span>
             </h6>
             <div>
@@ -989,7 +1004,7 @@ include '../includes/header.php';
         <?php if (empty($trades)): ?>
             <div class="empty-state">
                 <i class="bi bi-inbox"></i>
-                <h5>No MTP trades found</h5>
+                <h5>No trades with numeric Additional Reference found</h5>
                 <p>Try adjusting your filters or check if there are trades with numeric Additional Reference.</p>
             </div>
         <?php else: ?>
@@ -1072,7 +1087,7 @@ include '../includes/header.php';
                                 <td class="text-end fw-bold"><?php echo $displayValue; ?></td>
                                 <td><?php echo date('d/m/Y', strtotime($trade['trade_date'] ?? '')); ?></td>
                                 <td>
-                                    <code style="background: var(--gray-100); padding: 1px 6px; border-radius: 4px; font-size: 11px;">
+                                    <code style="background: var(--gray-100); padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; color: var(--primary);">
                                         <?php echo htmlspecialchars($trade['additional_reference'] ?? ''); ?>
                                     </code>
                                 </td>
@@ -1085,7 +1100,7 @@ include '../includes/header.php';
                                                 $receiptFile = trim($receiptFile);
                                                 if (empty($receiptFile)) continue;
                                                 $display_count++;
-                                                $filepath = '../uploads/mtp_receipts/' . $receiptFile;
+                                                $filepath = '../uploads/numeric_receipts/' . $receiptFile;
                                                 $ext = strtolower(pathinfo($receiptFile, PATHINFO_EXTENSION));
                                                 $isImage = in_array($ext, ['jpg', 'jpeg', 'png', 'gif']);
                                                 
@@ -1102,7 +1117,7 @@ include '../includes/header.php';
                                                 <span class="receipt-count">+<?php echo count($receipts) - 3; ?></span>
                                             <?php endif; ?>
                                             <?php if ($isApproved !== 1): // Only allow delete if not approved ?>
-                                                <a href="mtp_receipt_upload.php?delete_receipt=1&trade_id=<?php echo $trade['id']; ?>&file=<?php echo urlencode($receipts[0]); ?>&filter=<?php echo urlencode($filter); ?>&asset_class=<?php echo urlencode($asset_class_filter); ?>&search=<?php echo urlencode($search); ?>" 
+                                                <a href="numeric_receipt_upload.php?delete_receipt=1&trade_id=<?php echo $trade['id']; ?>&file=<?php echo urlencode($receipts[0]); ?>&filter=<?php echo urlencode($filter); ?>&asset_class=<?php echo urlencode($asset_class_filter); ?>&search=<?php echo urlencode($search); ?>" 
                                                    class="text-danger" onclick="return confirm('Delete this receipt?')" title="Delete receipt">
                                                     <i class="bi bi-x-circle" style="font-size: 12px;"></i>
                                                 </a>
@@ -1183,7 +1198,7 @@ include '../includes/header.php';
                 <h5 class="modal-title"><i class="bi bi-upload me-2"></i>Upload Payment Receipts</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
-            <form method="POST" enctype="multipart/form-data" action="mtp_receipt_upload.php">
+            <form method="POST" enctype="multipart/form-data" action="numeric_receipt_upload.php">
                 <div class="modal-body">
                     <input type="hidden" name="trade_id" id="receipt_trade_id" value="">
                     <input type="hidden" name="upload_receipt" value="1">
@@ -1225,7 +1240,7 @@ include '../includes/header.php';
                 <h5 class="modal-title"><i class="bi bi-chat-dots me-2"></i>Add Comment</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
-            <form method="POST" action="mtp_receipt_upload.php">
+            <form method="POST" action="numeric_receipt_upload.php">
                 <div class="modal-body">
                     <input type="hidden" name="trade_id" id="comment_trade_id" value="">
                     <input type="hidden" name="add_comment" value="1">
@@ -1410,7 +1425,7 @@ function viewTradeDetails(trade) {
                     <tr><td><strong>Consideration</strong></td><td>TZS ${Number(trade.consideration || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</td></tr>
                     <tr><td><strong>Trade Date</strong></td><td>${trade.trade_date || 'N/A'}</td></tr>
                     <tr><td><strong>Settlement Date</strong></td><td>${trade.settlement_date || 'N/A'}</td></tr>
-                    <tr><td><strong>Additional Reference</strong></td><td><code>${trade.additional_reference || 'N/A'}</code></td></tr>
+                    <tr><td><strong>Additional Reference</strong></td><td><code style="font-weight: bold; color: var(--primary);">${trade.additional_reference || 'N/A'}</code></td></tr>
                     <tr><td><strong>Status</strong></td><td>${trade.is_approved === 1 ? '✅ Approved' : trade.is_approved === 2 ? '❌ Rejected' : '⏳ Pending'}</td></tr>
                 </table>
             </div>
