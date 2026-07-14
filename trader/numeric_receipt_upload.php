@@ -1,6 +1,6 @@
 <?php
 // ============================================
-// TRADER - NUMERIC REFERENCE RECEIPT UPLOAD (SIMPLIFIED & WORKING)
+// TRADER - NUMERIC REFERENCE RECEIPT UPLOAD (WORKING)
 // ============================================
 
 error_reporting(E_ALL);
@@ -22,7 +22,7 @@ $current_user = get_logged_in_user() ?: get_session_user();
 $user_name = $current_user['username'] ?? 'System';
 
 // ============================================
-// HANDLE UPLOAD - SIMPLE VERSION
+// SIMPLE UPLOAD HANDLER
 // ============================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_receipt'])) {
     
@@ -35,7 +35,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_receipt'])) {
     }
     
     $uploaded_files = [];
-    $errors = [];
     
     // Create upload directory
     $upload_dir = __DIR__ . '/../uploads/numeric_receipts/';
@@ -43,7 +42,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_receipt'])) {
         mkdir($upload_dir, 0777, true);
     }
     
-    // Handle file uploads - same as working public form
+    // Handle file uploads
     if (isset($_FILES['payment_receipts']) && !empty($_FILES['payment_receipts']['name'][0])) {
         $allowed_exts = ['jpg', 'jpeg', 'png', 'gif', 'pdf'];
         $max_size = 5 * 1024 * 1024;
@@ -66,26 +65,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_receipt'])) {
         }
     }
     
-    // Save to database - SIMPLIFIED
+    // Save to database
     if (!empty($uploaded_files)) {
         try {
-            // Get existing receipts
-            $stmt = $db->prepare("SELECT payment_receipt FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+            // Check if record exists
+            $stmt = $db->prepare("SELECT id, payment_receipt FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
             $stmt->execute([$trade_id]);
             $existing = $stmt->fetch(PDO::FETCH_ASSOC);
             
-            $existing_receipts = !empty($existing['payment_receipt']) ? explode(',', $existing['payment_receipt']) : [];
-            $all_receipts = array_merge($existing_receipts, $uploaded_files);
-            $receipts_str = implode(',', $all_receipts);
-            
-            // Check if record exists
-            $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
-            $stmt->execute([$trade_id]);
-            
-            if ($stmt->fetch()) {
+            if ($existing) {
+                $receipts = !empty($existing['payment_receipt']) ? explode(',', $existing['payment_receipt']) : [];
+                $all_receipts = array_merge($receipts, $uploaded_files);
+                $receipts_str = implode(',', $all_receipts);
+                
                 $stmt = $db->prepare("UPDATE numeric_trade_receipts SET payment_receipt = ?, uploaded_by = ?, updated_at = NOW() WHERE trade_id = ? AND trade_type = 'trade'");
                 $result = $stmt->execute([$receipts_str, $user_name, $trade_id]);
             } else {
+                $receipts_str = implode(',', $uploaded_files);
                 $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, payment_receipt, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, NOW(), NOW())");
                 $result = $stmt->execute([$trade_id, $receipts_str, $user_name]);
             }
@@ -96,17 +92,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_receipt'])) {
                 $_SESSION['alert'] = ['Failed to save to database.', 'danger'];
             }
         } catch (Exception $e) {
-            $_SESSION['alert'] = ['Error: ' . $e->getMessage(), 'danger'];
+            $_SESSION['alert'] = ['Database error: ' . $e->getMessage(), 'danger'];
         }
     } else {
-        if (isset($_FILES['payment_receipts']) && !empty($_FILES['payment_receipts']['name'][0])) {
-            $_SESSION['alert'] = ['No valid files uploaded. Allowed: JPG, PNG, GIF, PDF (Max 5MB).', 'danger'];
-        } else {
-            $_SESSION['alert'] = ['No files selected for upload.', 'danger'];
-        }
+        $_SESSION['alert'] = ['No valid files uploaded.', 'danger'];
     }
     
-    // Redirect back with filters
+    // Redirect back
     $redirect_params = array_filter([
         'filter' => $_POST['filter'] ?? 'pending',
         'asset_class' => $_POST['asset_class'] ?? 'all',
@@ -129,7 +121,7 @@ if (isset($_GET['delete_receipt']) && isset($_GET['trade_id']) && isset($_GET['f
     $record = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if ($record && $record['is_approved'] == 1) {
-        $_SESSION['alert'] = ['Cannot delete approved receipts. Contact finance officer.', 'warning'];
+        $_SESSION['alert'] = ['Cannot delete approved receipts.', 'warning'];
     } else {
         $stmt = $db->prepare("SELECT payment_receipt FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
         $stmt->execute([$trade_id]);
@@ -197,94 +189,107 @@ $asset_class_filter = $_GET['asset_class'] ?? 'all';
 $search = $_GET['search'] ?? '';
 
 // ============================================
-// GET TRADES - SIMPLIFIED
+// GET TRADES - SIMPLE QUERY
 // ============================================
 function getNumericTrades($db, $filter, $asset_class_filter, $search) {
-    $sql = "
-        SELECT 
-            t.id,
-            t.trade_reference,
-            t.asset_class,
-            t.security_id,
-            t.security_name,
-            t.client_name,
-            t.client_cds_account,
-            t.trade_side,
-            t.quantity,
-            t.price,
-            t.consideration,
-            t.trade_date,
-            t.settlement_date,
-            t.exchange_reference,
-            t.additional_reference,
-            t.uploaded_by,
-            t.status,
-            t.created_at,
-            tr.payment_receipt,
-            tr.is_approved,
-            tr.approved_by,
-            tr.approved_at,
-            tr.approval_comment,
-            tr.uploaded_by as receipt_uploaded_by,
-            tr.created_at as receipt_created_at,
-            tr.updated_at as receipt_updated_at,
-            GROUP_CONCAT(DISTINCT tc.comment ORDER BY tc.created_at DESC SEPARATOR '|||') as comments,
-            GROUP_CONCAT(DISTINCT tc.created_by ORDER BY tc.created_at DESC SEPARATOR '|||') as comment_authors,
-            GROUP_CONCAT(DISTINCT tc.created_at ORDER BY tc.created_at DESC SEPARATOR '|||') as comment_dates
-        FROM trades t
-        LEFT JOIN numeric_trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
-        LEFT JOIN numeric_trade_comments tc ON t.id = tc.trade_id
-        WHERE 1=1
-    ";
-    
-    $params = [];
-    
-    $sql .= " AND t.additional_reference REGEXP '^[0-9]+$'";
-    $sql .= " AND t.additional_reference IS NOT NULL";
-    $sql .= " AND t.additional_reference != ''";
-    
-    if ($asset_class_filter === 'all') {
-        $sql .= " AND ((t.asset_class = 'bond') OR (t.asset_class IN ('equity', 'Exchange Traded Funds') AND LOWER(t.trade_side) = 'buy'))";
-    } elseif ($asset_class_filter === 'bond') {
-        $sql .= " AND t.asset_class = 'bond'";
-    } elseif ($asset_class_filter === 'equity') {
-        $sql .= " AND t.asset_class = 'equity' AND LOWER(t.trade_side) = 'buy'";
-    } elseif ($asset_class_filter === 'etf') {
-        $sql .= " AND t.asset_class = 'Exchange Traded Funds' AND LOWER(t.trade_side) = 'buy'";
+    try {
+        $sql = "
+            SELECT 
+                t.id,
+                t.trade_reference,
+                t.asset_class,
+                t.security_id,
+                t.security_name,
+                t.client_name,
+                t.client_cds_account,
+                t.trade_side,
+                t.quantity,
+                t.price,
+                t.consideration,
+                t.trade_date,
+                t.settlement_date,
+                t.exchange_reference,
+                t.additional_reference,
+                t.uploaded_by,
+                t.status,
+                t.created_at,
+                tr.payment_receipt,
+                tr.is_approved,
+                tr.approved_by,
+                tr.approved_at,
+                tr.approval_comment,
+                tr.uploaded_by as receipt_uploaded_by,
+                tr.created_at as receipt_created_at,
+                tr.updated_at as receipt_updated_at,
+                (SELECT GROUP_CONCAT(DISTINCT comment ORDER BY created_at DESC SEPARATOR '|||') 
+                 FROM numeric_trade_comments WHERE trade_id = t.id) as comments,
+                (SELECT GROUP_CONCAT(DISTINCT created_by ORDER BY created_at DESC SEPARATOR '|||') 
+                 FROM numeric_trade_comments WHERE trade_id = t.id) as comment_authors,
+                (SELECT GROUP_CONCAT(DISTINCT created_at ORDER BY created_at DESC SEPARATOR '|||') 
+                 FROM numeric_trade_comments WHERE trade_id = t.id) as comment_dates
+            FROM trades t
+            LEFT JOIN numeric_trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
+            WHERE 1=1
+        ";
+        
+        $params = [];
+        
+        // Numeric reference condition
+        $sql .= " AND t.additional_reference REGEXP '^[0-9]+$'";
+        $sql .= " AND t.additional_reference IS NOT NULL";
+        $sql .= " AND t.additional_reference != ''";
+        
+        // Asset class conditions
+        if ($asset_class_filter === 'all') {
+            $sql .= " AND ((t.asset_class = 'bond') OR (t.asset_class IN ('equity', 'Exchange Traded Funds') AND LOWER(t.trade_side) = 'buy'))";
+        } elseif ($asset_class_filter === 'bond') {
+            $sql .= " AND t.asset_class = 'bond'";
+        } elseif ($asset_class_filter === 'equity') {
+            $sql .= " AND t.asset_class = 'equity' AND LOWER(t.trade_side) = 'buy'";
+        } elseif ($asset_class_filter === 'etf') {
+            $sql .= " AND t.asset_class = 'Exchange Traded Funds' AND LOWER(t.trade_side) = 'buy'";
+        }
+        
+        // Status filter
+        if ($filter === 'pending') {
+            $sql .= " AND (tr.is_approved IS NULL OR tr.is_approved = 0)";
+        } elseif ($filter === 'approved') {
+            $sql .= " AND tr.is_approved = 1";
+        } elseif ($filter === 'rejected') {
+            $sql .= " AND tr.is_approved = 2";
+        }
+        
+        // Search filter
+        if (!empty($search)) {
+            $sql .= " AND (t.client_name LIKE ? OR t.security_id LIKE ? OR t.trade_reference LIKE ? OR t.exchange_reference LIKE ? OR t.additional_reference LIKE ?)";
+            $search_param = "%$search%";
+            $params[] = $search_param;
+            $params[] = $search_param;
+            $params[] = $search_param;
+            $params[] = $search_param;
+            $params[] = $search_param;
+        }
+        
+        $sql .= " ORDER BY t.trade_date DESC, t.id DESC";
+        
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+    } catch (Exception $e) {
+        error_log("Error getting trades: " . $e->getMessage());
+        return [];
     }
-    
-    if ($filter === 'pending') {
-        $sql .= " AND (tr.is_approved IS NULL OR tr.is_approved = 0)";
-    } elseif ($filter === 'approved') {
-        $sql .= " AND tr.is_approved = 1";
-    } elseif ($filter === 'rejected') {
-        $sql .= " AND tr.is_approved = 2";
-    }
-    
-    if (!empty($search)) {
-        $sql .= " AND (t.client_name LIKE ? OR t.security_id LIKE ? OR t.trade_reference LIKE ?)";
-        $search_param = "%$search%";
-        $params[] = $search_param;
-        $params[] = $search_param;
-        $params[] = $search_param;
-    }
-    
-    // GROUP BY with t.id only, and use ANY_VALUE for other columns or list them all
-    $sql .= " GROUP BY t.id ORDER BY t.trade_date DESC, t.id DESC";
-    
-    $stmt = $db->prepare($sql);
-    $stmt->execute($params);
-    return $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
 // ============================================
-// GET STATS - SIMPLIFIED
+// GET STATS - SIMPLE
 // ============================================
 function getNumericStats($db) {
     $stats = ['total' => 0, 'pending' => 0, 'approved' => 0, 'rejected' => 0, 'bond' => 0, 'equity' => 0, 'etf' => 0];
     
     try {
-        $stmt = $db->query("
+        $sql = "
             SELECT 
                 COUNT(*) as total,
                 SUM(CASE WHEN tr.is_approved IS NULL OR tr.is_approved = 0 THEN 1 ELSE 0 END) as pending,
@@ -296,18 +301,20 @@ function getNumericStats($db) {
             AND t.additional_reference IS NOT NULL
             AND t.additional_reference != ''
             AND ((t.asset_class = 'bond') OR (t.asset_class IN ('equity', 'Exchange Traded Funds') AND LOWER(t.trade_side) = 'buy'))
-        ");
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        ";
+        $result = $db->query($sql)->fetch(PDO::FETCH_ASSOC);
         if ($result) {
             $stats['total'] = (int)$result['total'];
             $stats['pending'] = (int)$result['pending'];
             $stats['approved'] = (int)$result['approved'];
             $stats['rejected'] = (int)$result['rejected'];
         }
-    } catch (Exception $e) {}
+    } catch (Exception $e) {
+        error_log("Error getting stats: " . $e->getMessage());
+    }
     
     try {
-        $stmt = $db->query("
+        $sql = "
             SELECT asset_class, COUNT(*) as count
             FROM trades t
             LEFT JOIN numeric_trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
@@ -316,17 +323,23 @@ function getNumericStats($db) {
             AND t.additional_reference != ''
             AND ((t.asset_class = 'bond') OR (t.asset_class IN ('equity', 'Exchange Traded Funds') AND LOWER(t.trade_side) = 'buy'))
             GROUP BY asset_class
-        ");
+        ";
+        $stmt = $db->query($sql);
         while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
             if ($row['asset_class'] === 'bond') $stats['bond'] = (int)$row['count'];
             elseif ($row['asset_class'] === 'equity') $stats['equity'] = (int)$row['count'];
             elseif ($row['asset_class'] === 'Exchange Traded Funds') $stats['etf'] = (int)$row['count'];
         }
-    } catch (Exception $e) {}
+    } catch (Exception $e) {
+        error_log("Error getting asset stats: " . $e->getMessage());
+    }
     
     return $stats;
 }
 
+// ============================================
+// GET DATA
+// ============================================
 $trades = getNumericTrades($db, $filter, $asset_class_filter, $search);
 $stats = getNumericStats($db);
 
@@ -334,24 +347,7 @@ $page_title = 'Numeric Reference Receipt Upload';
 include '../includes/header.php';
 ?>
 
-<style>
-    .receipt-thumbnails { display: flex; gap: 3px; flex-wrap: wrap; align-items: center; }
-    .receipt-thumbnails img { max-width: 40px; max-height: 35px; object-fit: cover; border: 1px solid #ddd; border-radius: 3px; cursor: pointer; }
-    .receipt-thumbnails img:hover { border-color: #0d6efd; }
-    .receipt-thumbnails .pdf-badge { background: #dc3545; color: white; padding: 2px 6px; border-radius: 3px; font-size: 10px; cursor: pointer; }
-    .receipt-count { background: #0d6efd; color: white; border-radius: 50%; padding: 0 5px; font-size: 10px; margin-left: 2px; }
-    .comment-bubble { background: #f8f9fa; border-left: 3px solid #0d6efd; padding: 4px 8px; border-radius: 3px; font-size: 12px; max-width: 200px; }
-    .comment-bubble .author { font-weight: bold; font-size: 10px; color: #6c757d; }
-    .trade-pending { border-left: 3px solid #ffc107; }
-    .trade-approved { border-left: 3px solid #198754; }
-    .trade-rejected { border-left: 3px solid #dc3545; }
-    .status-badge { font-size: 11px; padding: 3px 8px; }
-    .file-item { display: flex; justify-content: space-between; padding: 4px 8px; background: #f8f9fa; border-radius: 3px; margin-bottom: 2px; font-size: 13px; }
-    .file-item .size { color: #6c757d; font-size: 11px; }
-    .file-item .remove-file { cursor: pointer; color: #dc3545; font-weight: bold; padding: 0 5px; }
-    .file-item .remove-file:hover { color: #a71d2a; }
-</style>
-
+<!-- HTML content - simplified -->
 <div class="container-fluid">
     <!-- Page Header -->
     <div class="row mb-3">
@@ -489,22 +485,21 @@ include '../includes/header.php';
                                                     $receiptFile = trim($receiptFile);
                                                     if (empty($receiptFile)) continue;
                                                     $filepath = '../uploads/numeric_receipts/' . $receiptFile;
-                                                    $ext = strtolower(pathinfo($receiptFile, PATHINFO_EXTENSION));
-                                                    if (in_array($ext, ['jpg', 'jpeg', 'png', 'gif']) && file_exists($filepath)):
+                                                    if (file_exists($filepath)):
+                                                        $ext = strtolower(pathinfo($receiptFile, PATHINFO_EXTENSION));
+                                                        if (in_array($ext, ['jpg', 'jpeg', 'png', 'gif'])):
                                                 ?>
-                                                    <img src="<?php echo $filepath; ?>" alt="Receipt" onclick="window.open('<?php echo $filepath; ?>', '_blank')" title="Click to view">
+                                                    <img src="<?php echo $filepath; ?>" alt="Receipt" onclick="window.open('<?php echo $filepath; ?>', '_blank')" style="max-width:40px;max-height:35px;object-fit:cover;border:1px solid #ddd;border-radius:3px;cursor:pointer;" title="Click to view">
                                                 <?php else: ?>
-                                                    <span class="pdf-badge" onclick="window.open('<?php echo $filepath; ?>', '_blank')">PDF</span>
-                                                <?php endif; ?>
+                                                    <span class="badge bg-danger" style="cursor:pointer;font-size:10px;" onclick="window.open('<?php echo $filepath; ?>', '_blank')">PDF</span>
+                                                <?php endif; endif; ?>
                                                 <?php endforeach; ?>
                                                 <?php if (count($receipts) > 3): ?>
-                                                    <span class="receipt-count">+<?php echo count($receipts) - 3; ?></span>
+                                                    <span class="badge bg-primary" style="font-size:10px;">+<?php echo count($receipts) - 3; ?></span>
                                                 <?php endif; ?>
                                                 <?php if ($statusClass !== 'approved'): ?>
                                                     <a href="numeric_receipt_upload.php?delete_receipt=1&trade_id=<?php echo $trade['id']; ?>&file=<?php echo urlencode($receipts[0]); ?>&filter=<?php echo urlencode($filter); ?>&asset_class=<?php echo urlencode($asset_class_filter); ?>&search=<?php echo urlencode($search); ?>" 
-                                                       class="text-danger small" onclick="return confirm('Delete this receipt?')">
-                                                        <i class="bi bi-x-circle"></i>
-                                                    </a>
+                                                       class="text-danger" onclick="return confirm('Delete this receipt?')" style="font-size:14px;">&times;</a>
                                                 <?php endif; ?>
                                             </div>
                                         <?php else: ?>
@@ -514,15 +509,15 @@ include '../includes/header.php';
                                         <?php endif; ?>
                                     </td>
                                     <td>
-                                        <span class="badge bg-<?php echo $statusClass === 'approved' ? 'success' : ($statusClass === 'rejected' ? 'danger' : 'warning'); ?> status-badge"><?php echo $statusText; ?></span>
+                                        <span class="badge bg-<?php echo $statusClass === 'approved' ? 'success' : ($statusClass === 'rejected' ? 'danger' : 'warning'); ?>"><?php echo $statusText; ?></span>
                                         <?php if ($isApproved === 1 && !empty($trade['approved_by'])): ?>
                                             <br><small class="text-muted">by <?php echo htmlspecialchars($trade['approved_by']); ?></small>
                                         <?php endif; ?>
                                     </td>
                                     <td>
                                         <?php if (!empty($commentText)): ?>
-                                            <div class="comment-bubble">
-                                                <div class="author"><?php echo $commentAuthor; ?>:</div>
+                                            <div style="background:#f8f9fa;border-left:3px solid #0d6efd;padding:3px 8px;border-radius:3px;font-size:12px;max-width:200px;">
+                                                <strong style="font-size:10px;color:#6c757d;"><?php echo $commentAuthor; ?>:</strong>
                                                 <?php echo $commentText; ?>
                                             </div>
                                         <?php else: ?>
@@ -651,11 +646,11 @@ document.addEventListener('change', function(e) {
             const file = files[i];
             
             const fileItem = document.createElement('div');
-            fileItem.className = 'file-item';
+            fileItem.className = 'd-flex justify-content-between align-items-center p-1 bg-light rounded mb-1';
             fileItem.innerHTML = `
-                <span class="file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
-                <span class="size">${(file.size / 1024).toFixed(1)} KB</span>
-                <span class="remove-file" onclick="removeFile(${i})">&times;</span>
+                <span style="font-size:12px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(file.name)}</span>
+                <span style="font-size:10px;color:#6c757d;">${(file.size / 1024).toFixed(1)} KB</span>
+                <span onclick="removeFile(${i})" style="cursor:pointer;color:#dc3545;font-weight:bold;padding:0 5px;">&times;</span>
             `;
             fileList.appendChild(fileItem);
             
@@ -664,8 +659,8 @@ document.addEventListener('change', function(e) {
                 reader.onload = function(e) {
                     const img = document.createElement('img');
                     img.src = e.target.result;
-                    img.style.maxWidth = '60px';
-                    img.style.maxHeight = '50px';
+                    img.style.maxWidth = '50px';
+                    img.style.maxHeight = '40px';
                     img.style.objectFit = 'cover';
                     img.style.border = '1px solid #ddd';
                     img.style.borderRadius = '3px';
