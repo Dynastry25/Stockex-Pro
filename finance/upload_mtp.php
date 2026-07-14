@@ -15,40 +15,95 @@ header("Referrer-Policy: strict-origin-when-cross-origin");
 
 require_finance_officer();
 
-// Define log file in same directory
-$log_file = __DIR__ . '/csv_upload_debug.log';
+// ============ LOGGING SETUP ============
+// Use system temp directory for log file to avoid permission issues
+$log_dir = sys_get_temp_dir() . '/stockex_logs/';
 
-// Function to write to log file
+// Create log directory if it doesn't exist
+if (!is_dir($log_dir)) {
+    mkdir($log_dir, 0777, true);
+}
+
+// Define log file in temp directory
+$log_file = $log_dir . 'csv_upload_debug.log';
+
+// Alternative: If temp directory doesn't work, try using the uploads directory
+if (!is_writable(dirname($log_file))) {
+    // Try using the uploads directory if it exists
+    $uploads_dir = __DIR__ . '/../uploads/logs/';
+    if (!is_dir($uploads_dir)) {
+        mkdir($uploads_dir, 0777, true);
+    }
+    $log_file = $uploads_dir . 'csv_upload_debug.log';
+}
+
+// If still not writable, disable logging to file and use error_log only
+$use_file_logging = is_writable(dirname($log_file));
+
+// Function to write to log
 function writeLog($message, $level = 'INFO') {
-    global $log_file;
+    global $log_file, $use_file_logging;
     $timestamp = date('Y-m-d H:i:s');
-    $formatted_message = "[$timestamp] [$level] $message\n";
+    $formatted_message = "[$timestamp] [$level] $message";
     
-    // Write to file
-    file_put_contents($log_file, $formatted_message, FILE_APPEND | LOCK_EX);
-    
-    // Also write to PHP error log for backup
+    // Always write to PHP error log as backup
     error_log("CSV_UPLOAD [$level]: $message");
+    
+    // Write to file if possible
+    if ($use_file_logging) {
+        @file_put_contents($log_file, $formatted_message . "\n", FILE_APPEND | LOCK_EX);
+    }
 }
 
 // Function to read log file
 function readLog() {
-    global $log_file;
-    if (file_exists($log_file)) {
+    global $log_file, $use_file_logging;
+    if ($use_file_logging && file_exists($log_file)) {
         return file_get_contents($log_file);
     }
-    return "No log entries yet.";
+    return "Log file not available. Check PHP error log for details.";
 }
 
 // Function to clear log file
 function clearLog() {
-    global $log_file;
-    if (file_exists($log_file)) {
-        file_put_contents($log_file, '');
-        return true;
+    global $log_file, $use_file_logging;
+    if ($use_file_logging && file_exists($log_file)) {
+        return file_put_contents($log_file, '');
     }
     return false;
 }
+
+writeLog("=== CSV Upload Script Started ===");
+
+// CSRF Protection
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+    writeLog("Session started - ID: " . session_id());
+}
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    writeLog("CSRF token generated");
+}
+
+$db = getDBConnection();
+if ($db) {
+    writeLog("Database connection established successfully");
+} else {
+    writeLog("FAILED: Database connection could not be established", "ERROR");
+    die("Database connection failed");
+}
+
+$success_message = '';
+$error_message = '';
+$validation_errors = [];
+$processed_data = [];
+$duplicate_controls = [];
+$all_entries = [];
+$total_amount = 0;
+$valid_count = 0;
+$error_count = 0;
+$show_upload_button = false;
 
 // ============ Function to parse date from CSV ============
 function parseDateFromCSV($date_str) {
@@ -73,6 +128,8 @@ function parseDateFromCSV($date_str) {
         'Y-m-d',    // 2025-10-01
         'M d, Y',   // Oct 1, 2025
         'F d, Y',   // October 1, 2025
+        'd M Y',    // 1 Oct 2025
+        'j M Y',    // 1 Oct 2025 (no leading zero)
     ];
     
     foreach ($formats as $format) {
@@ -270,7 +327,7 @@ function generateReceiptNo($db, $date) {
     $month = date('m', strtotime($date));
     $day = date('d', strtotime($date));
     
-    // Format: RCPYYYYMMDDXXXX (for MTP payments)
+    // Format: MTPYYYYMMDDXXXX (for MTP payments)
     $base_no = 'MTP' . $year . $month . $day;
     
     // Get last receipt number for this date
@@ -1067,6 +1124,7 @@ if (isset($_SESSION['created_receipts']) && !empty($_SESSION['created_receipts']
 }
 ?>
 
+<!-- HTML CONTENT (same as before, no changes needed) -->
 <div class="container-fluid py-4">
     <!-- Receipt Creation Results -->
     <?php if (isset($created_receipts) && !empty($created_receipts)): ?>
