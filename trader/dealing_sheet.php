@@ -1,12 +1,10 @@
 <?php
 // ============================================
-// FIXED VERSION - Handles ONLY_FULL_GROUP_BY
+// SIMPLE NUMERIC REFERENCE RECEIPT UPLOAD
 // ============================================
 
-// Enable full error reporting
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
 ini_set('log_errors', 1);
 ini_set('error_log', __DIR__ . '/numeric_receipt_errors.log');
 
@@ -31,7 +29,7 @@ $user_name = $current_user['username'] ?? 'System';
 $user_id = $current_user['id'] ?? null;
 
 // ============================================
-// HANDLE ACTIONS (Traders only - no approval)
+// HANDLE ACTIONS
 // ============================================
 
 // Handle Receipt Upload
@@ -212,7 +210,6 @@ $search = $_GET['search'] ?? '';
 
 // ============================================
 // FETCH TRADES WITH ADDITIONAL_REFERENCE = NUMBER ONLY
-// FIXED: Added proper GROUP BY with all columns
 // ============================================
 function getNumericTrades($db, $filter = 'pending', $asset_class_filter = 'all', $search = '') {
     $sql = "
@@ -301,7 +298,7 @@ function getNumericTrades($db, $filter = 'pending', $asset_class_filter = 'all',
 }
 
 // ============================================
-// GET STATS - FIXED
+// GET STATS
 // ============================================
 function getNumericStats($db) {
     $stats = [
@@ -390,98 +387,171 @@ $page_title = 'Numeric Reference Receipt Upload';
 include '../includes/header.php';
 ?>
 
+<style>
+    .receipt-thumbnails {
+        display: flex;
+        gap: 3px;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+    .receipt-thumbnails img {
+        max-width: 40px;
+        max-height: 35px;
+        object-fit: cover;
+        border: 1px solid #ddd;
+        border-radius: 3px;
+        cursor: pointer;
+    }
+    .receipt-thumbnails img:hover {
+        border-color: #0d6efd;
+    }
+    .receipt-thumbnails .pdf-badge {
+        background: #dc3545;
+        color: white;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-size: 10px;
+        cursor: pointer;
+    }
+    .receipt-count {
+        background: #0d6efd;
+        color: white;
+        border-radius: 50%;
+        padding: 0 5px;
+        font-size: 10px;
+        margin-left: 2px;
+    }
+    .comment-bubble {
+        background: #f8f9fa;
+        border-left: 3px solid #0d6efd;
+        padding: 4px 8px;
+        border-radius: 3px;
+        font-size: 12px;
+        max-width: 200px;
+    }
+    .comment-bubble .author {
+        font-weight: bold;
+        font-size: 10px;
+        color: #6c757d;
+    }
+    .upload-form-inline {
+        display: inline-block;
+    }
+    .upload-form-inline input[type="file"] {
+        display: none;
+    }
+    .action-btn {
+        padding: 2px 6px;
+        font-size: 12px;
+    }
+    .modal-lg {
+        max-width: 600px;
+    }
+    .receipt-preview-container img {
+        max-width: 80px;
+        max-height: 60px;
+        object-fit: cover;
+        border: 1px solid #ddd;
+        border-radius: 3px;
+        margin: 2px;
+    }
+    .file-item {
+        display: flex;
+        justify-content: space-between;
+        padding: 4px 8px;
+        background: #f8f9fa;
+        border-radius: 3px;
+        margin-bottom: 2px;
+        font-size: 13px;
+    }
+    .file-item .size {
+        color: #6c757d;
+        font-size: 11px;
+    }
+</style>
+
 <div class="container-fluid">
     <!-- Page Header -->
-    <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
-        <div>
-            <h1 class="h3 mb-0 fw-bold">
-                <i class="bi bi-receipt-cutoff me-2" style="color: var(--primary);"></i>
-                Numeric Reference Receipt Upload
-            </h1>
-            <p class="text-muted mb-0 small">
-                Upload payment receipts for trades where <strong>Additional Reference is a number only</strong>
+    <div class="row mb-3">
+        <div class="col-12">
+            <h2>
+                <i class="bi bi-receipt"></i> Numeric Reference Receipt Upload
+                <small class="text-muted">(Additional Reference = Number only)</small>
+            </h2>
+            <p class="text-muted">
+                <span class="badge bg-info">Bonds: All trades</span>
+                <span class="badge bg-success">Equities/ETFs: BUY only</span>
             </p>
-        </div>
-        <div>
-            <a href="trades.php" class="btn btn-secondary">
-                <i class="bi bi-arrow-left"></i> Back to Trades
-            </a>
         </div>
     </div>
 
-    <!-- Display any errors -->
-    <?php if (!empty($error_message)): ?>
-        <div class="alert alert-danger">
-            <i class="bi bi-exclamation-triangle me-2"></i>
-            <?php echo htmlspecialchars($error_message); ?>
-        </div>
-    <?php endif; ?>
-
     <!-- Alert Messages -->
     <?php if (isset($_SESSION['alert'])): ?>
-        <div class="alert alert-<?php echo $_SESSION['alert'][1]; ?> alert-dismissible fade show mb-4">
-            <i class="bi <?php echo $_SESSION['alert'][1] === 'success' ? 'bi-check-circle' : ($_SESSION['alert'][1] === 'warning' ? 'bi-exclamation-triangle' : 'bi-x-circle'); ?> me-2"></i>
+        <div class="alert alert-<?php echo $_SESSION['alert'][1]; ?> alert-dismissible fade show">
             <?php echo htmlspecialchars($_SESSION['alert'][0]); ?>
             <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
         </div>
         <?php unset($_SESSION['alert']); ?>
     <?php endif; ?>
 
-    <!-- Stats Cards -->
-    <div class="row g-3 mb-4">
+    <?php if (!empty($error_message)): ?>
+        <div class="alert alert-danger"><?php echo htmlspecialchars($error_message); ?></div>
+    <?php endif; ?>
+
+    <!-- Stats -->
+    <div class="row mb-3">
         <div class="col-md-2">
-            <div class="card bg-primary text-white">
-                <div class="card-body">
-                    <div class="small">Total</div>
-                    <div class="fs-3 fw-bold"><?php echo number_format($stats['total']); ?></div>
+            <div class="card">
+                <div class="card-body text-center">
+                    <h5><?php echo number_format($stats['total']); ?></h5>
+                    <small class="text-muted">Total</small>
                 </div>
             </div>
         </div>
         <div class="col-md-2">
-            <div class="card bg-warning text-dark">
-                <div class="card-body">
-                    <div class="small">Pending</div>
-                    <div class="fs-3 fw-bold"><?php echo number_format($stats['pending']); ?></div>
+            <div class="card border-warning">
+                <div class="card-body text-center">
+                    <h5><?php echo number_format($stats['pending']); ?></h5>
+                    <small class="text-muted">Pending</small>
                 </div>
             </div>
         </div>
         <div class="col-md-2">
-            <div class="card bg-success text-white">
-                <div class="card-body">
-                    <div class="small">Approved</div>
-                    <div class="fs-3 fw-bold"><?php echo number_format($stats['approved']); ?></div>
+            <div class="card border-success">
+                <div class="card-body text-center">
+                    <h5><?php echo number_format($stats['approved']); ?></h5>
+                    <small class="text-muted">Approved</small>
                 </div>
             </div>
         </div>
         <div class="col-md-2">
-            <div class="card bg-danger text-white">
-                <div class="card-body">
-                    <div class="small">Rejected</div>
-                    <div class="fs-3 fw-bold"><?php echo number_format($stats['rejected']); ?></div>
+            <div class="card border-danger">
+                <div class="card-body text-center">
+                    <h5><?php echo number_format($stats['rejected']); ?></h5>
+                    <small class="text-muted">Rejected</small>
                 </div>
             </div>
         </div>
         <div class="col-md-4">
-            <div class="card bg-info text-white">
-                <div class="card-body">
-                    <div class="small">Breakdown</div>
-                    <div class="fs-4 fw-bold">
+            <div class="card">
+                <div class="card-body text-center">
+                    <h5>
                         <span class="badge bg-primary">B: <?php echo $stats['bond']; ?></span>
-                        <span class="badge bg-success ms-1">E: <?php echo $stats['equity']; ?></span>
-                        <span class="badge bg-warning ms-1 text-dark">F: <?php echo $stats['etf']; ?></span>
-                    </div>
+                        <span class="badge bg-success">E: <?php echo $stats['equity']; ?></span>
+                        <span class="badge bg-warning">F: <?php echo $stats['etf']; ?></span>
+                    </h5>
+                    <small class="text-muted">Breakdown</small>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Filter Section -->
-    <div class="card mb-4">
+    <!-- Filters -->
+    <div class="card mb-3">
         <div class="card-body">
-            <form method="GET" class="row g-3">
+            <form method="GET" class="row g-2">
                 <div class="col-md-3">
-                    <label class="form-label small fw-semibold">Status</label>
-                    <select class="form-select" name="filter" onchange="this.form.submit()">
+                    <select class="form-select form-select-sm" name="filter" onchange="this.form.submit()">
                         <option value="pending" <?php echo $filter === 'pending' ? 'selected' : ''; ?>>Pending</option>
                         <option value="approved" <?php echo $filter === 'approved' ? 'selected' : ''; ?>>Approved</option>
                         <option value="rejected" <?php echo $filter === 'rejected' ? 'selected' : ''; ?>>Rejected</option>
@@ -489,49 +559,39 @@ include '../includes/header.php';
                     </select>
                 </div>
                 <div class="col-md-3">
-                    <label class="form-label small fw-semibold">Asset Class</label>
-                    <select class="form-select" name="asset_class" onchange="this.form.submit()">
-                        <option value="all" <?php echo $asset_class_filter === 'all' ? 'selected' : ''; ?>>All</option>
+                    <select class="form-select form-select-sm" name="asset_class" onchange="this.form.submit()">
+                        <option value="all" <?php echo $asset_class_filter === 'all' ? 'selected' : ''; ?>>All Assets</option>
                         <option value="bond" <?php echo $asset_class_filter === 'bond' ? 'selected' : ''; ?>>Bond</option>
                         <option value="equity" <?php echo $asset_class_filter === 'equity' ? 'selected' : ''; ?>>Equity</option>
                         <option value="etf" <?php echo $asset_class_filter === 'etf' ? 'selected' : ''; ?>>ETF</option>
                     </select>
                 </div>
                 <div class="col-md-3">
-                    <label class="form-label small fw-semibold">Search</label>
-                    <input type="text" class="form-control" name="search" placeholder="Client, Security, Ref..." 
-                           value="<?php echo htmlspecialchars($search); ?>">
+                    <input type="text" class="form-control form-control-sm" name="search" placeholder="Search..." value="<?php echo htmlspecialchars($search); ?>">
                 </div>
-                <div class="col-md-3 d-flex align-items-end gap-2">
-                    <button type="submit" class="btn btn-primary w-100">Apply</button>
-                    <a href="numeric_receipt_upload.php" class="btn btn-secondary w-100">Reset</a>
+                <div class="col-md-3">
+                    <button type="submit" class="btn btn-primary btn-sm w-100">Apply</button>
                 </div>
             </form>
         </div>
     </div>
 
-    <!-- Table -->
+    <!-- Trades Table -->
     <div class="card">
         <div class="card-header">
-            <h6 class="mb-0">
-                <i class="bi bi-table me-2"></i>
-                Numeric Reference Trades
-                <span class="badge bg-primary ms-2"><?php echo count($trades); ?> trades</span>
-            </h6>
+            <h6 class="mb-0">Numeric Reference Trades (<?php echo count($trades); ?>)</h6>
         </div>
         <div class="card-body p-0">
             <?php if (empty($trades)): ?>
                 <div class="text-center py-5">
-                    <i class="bi bi-inbox" style="font-size: 3rem; color: #ccc;"></i>
-                    <h5 class="mt-3 text-muted">No trades with numeric Additional Reference found</h5>
-                    <p class="text-muted">Try adjusting your filters.</p>
+                    <p class="text-muted">No trades found with numeric Additional Reference.</p>
                 </div>
             <?php else: ?>
                 <div class="table-responsive">
-                    <table class="table table-hover mb-0">
+                    <table class="table table-sm table-hover mb-0">
                         <thead class="table-light">
                             <tr>
-                                <th>Reference</th>
+                                <th>Ref</th>
                                 <th>Client</th>
                                 <th>Security</th>
                                 <th>Asset</th>
@@ -541,7 +601,7 @@ include '../includes/header.php';
                                 <th class="text-end">Value</th>
                                 <th>Date</th>
                                 <th>Add Ref</th>
-                                <th>Receipts</th>
+                                <th>Receipt</th>
                                 <th>Status</th>
                                 <th>Comments</th>
                                 <th class="text-end">Actions</th>
@@ -553,8 +613,8 @@ include '../includes/header.php';
                                 $receipts = !empty($trade['payment_receipt']) ? explode(',', $trade['payment_receipt']) : [];
                                 $hasReceipt = !empty($receipts) && !empty($receipts[0]);
                                 $isApproved = isset($trade['is_approved']) ? (int)$trade['is_approved'] : 0;
-                                $isApprovedText = $isApproved === 1 ? 'Approved' : ($isApproved === 2 ? 'Rejected' : 'Pending');
-                                $isApprovedClass = $isApproved === 1 ? 'success' : ($isApproved === 2 ? 'danger' : 'warning');
+                                $statusText = $isApproved === 1 ? 'Approved' : ($isApproved === 2 ? 'Rejected' : 'Pending');
+                                $statusClass = $isApproved === 1 ? 'success' : ($isApproved === 2 ? 'danger' : 'warning');
                                 
                                 if ($isBond) {
                                     $displayQty = 'TZS ' . number_format(floatval($trade['quantity'] ?? 0), 2);
@@ -575,13 +635,13 @@ include '../includes/header.php';
                                 if (!empty($trade['comments'])) {
                                     $comment_parts = explode('|||', $trade['comments']);
                                     $author_parts = !empty($trade['comment_authors']) ? explode('|||', $trade['comment_authors']) : [];
-                                    $commentText = htmlspecialchars(substr($comment_parts[0] ?? '', 0, 40));
-                                    if (strlen($comment_parts[0] ?? '') > 40) $commentText .= '...';
+                                    $commentText = htmlspecialchars(substr($comment_parts[0] ?? '', 0, 50));
+                                    if (strlen($comment_parts[0] ?? '') > 50) $commentText .= '...';
                                     $commentAuthor = $author_parts[0] ?? 'Unknown';
                                 }
                             ?>
                                 <tr>
-                                    <td><span class="fw-semibold"><?php echo htmlspecialchars($trade['trade_reference'] ?? ''); ?></span></td>
+                                    <td><span class="fw-semibold small"><?php echo htmlspecialchars($trade['trade_reference'] ?? ''); ?></span></td>
                                     <td><?php echo htmlspecialchars($trade['client_name'] ?? ''); ?></td>
                                     <td><?php echo htmlspecialchars($trade['security_id'] ?? ''); ?></td>
                                     <td><span class="badge bg-secondary"><?php echo $assetClass; ?></span></td>
@@ -590,41 +650,64 @@ include '../includes/header.php';
                                     <td class="text-end"><?php echo $displayPrice; ?></td>
                                     <td class="text-end fw-bold"><?php echo $displayValue; ?></td>
                                     <td><?php echo date('d/m/Y', strtotime($trade['trade_date'] ?? '')); ?></td>
-                                    <td><code><?php echo htmlspecialchars($trade['additional_reference'] ?? ''); ?></code></td>
+                                    <td><code class="small"><?php echo htmlspecialchars($trade['additional_reference'] ?? ''); ?></code></td>
                                     <td>
                                         <?php if ($hasReceipt): ?>
-                                            <span class="badge bg-success">Has Receipt</span>
-                                            <span class="badge bg-secondary"><?php echo count($receipts); ?> files</span>
+                                            <div class="receipt-thumbnails">
+                                                <?php 
+                                                $count = 0;
+                                                foreach ($receipts as $receiptFile):
+                                                    $receiptFile = trim($receiptFile);
+                                                    if (empty($receiptFile)) continue;
+                                                    $count++;
+                                                    $filepath = '../uploads/numeric_receipts/' . $receiptFile;
+                                                    $ext = strtolower(pathinfo($receiptFile, PATHINFO_EXTENSION));
+                                                    if (in_array($ext, ['jpg', 'jpeg', 'png', 'gif']) && file_exists($filepath)):
+                                                ?>
+                                                    <img src="<?php echo $filepath; ?>" alt="Receipt" onclick="window.open('<?php echo $filepath; ?>', '_blank')" title="Click to view">
+                                                <?php else: ?>
+                                                    <span class="pdf-badge" onclick="window.open('<?php echo $filepath; ?>', '_blank')">PDF</span>
+                                                <?php endif; ?>
+                                                <?php endforeach; ?>
+                                                <?php if (count($receipts) > 3): ?>
+                                                    <span class="receipt-count">+<?php echo count($receipts) - 3; ?></span>
+                                                <?php endif; ?>
+                                                <?php if ($isApproved !== 1): ?>
+                                                    <a href="numeric_receipt_upload.php?delete_receipt=1&trade_id=<?php echo $trade['id']; ?>&file=<?php echo urlencode($receipts[0]); ?>&filter=<?php echo urlencode($filter); ?>&asset_class=<?php echo urlencode($asset_class_filter); ?>&search=<?php echo urlencode($search); ?>" 
+                                                       class="text-danger small" onclick="return confirm('Delete this receipt?')">
+                                                        <i class="bi bi-x-circle"></i>
+                                                    </a>
+                                                <?php endif; ?>
+                                            </div>
                                         <?php else: ?>
-                                            <button class="btn btn-outline-success btn-sm" onclick="openReceiptUpload(<?php echo $trade['id']; ?>)">
+                                            <button class="btn btn-outline-success btn-sm" onclick="openUploadModal(<?php echo $trade['id']; ?>)">
                                                 <i class="bi bi-upload"></i> Upload
                                             </button>
                                         <?php endif; ?>
                                     </td>
-                                    <td><span class="badge bg-<?php echo $isApprovedClass; ?>"><?php echo $isApprovedText; ?></span></td>
+                                    <td><span class="badge bg-<?php echo $statusClass; ?>"><?php echo $statusText; ?></span></td>
                                     <td>
                                         <?php if (!empty($commentText)): ?>
-                                            <div class="small text-muted">
-                                                <strong><?php echo $commentAuthor; ?>:</strong> <?php echo $commentText; ?>
+                                            <div class="comment-bubble">
+                                                <div class="author"><?php echo $commentAuthor; ?>:</div>
+                                                <?php echo $commentText; ?>
                                             </div>
                                         <?php else: ?>
-                                            <span class="text-muted">No comments</span>
+                                            <span class="text-muted small">No comments</span>
                                         <?php endif; ?>
                                         <button class="btn btn-outline-secondary btn-sm mt-1" onclick="openCommentModal(<?php echo $trade['id']; ?>)">
                                             <i class="bi bi-chat"></i>
                                         </button>
                                     </td>
                                     <td class="text-end">
-                                        <div class="d-flex gap-1 justify-content-end">
-                                            <?php if ($isApproved !== 1): ?>
-                                                <button class="btn btn-outline-success btn-sm" onclick="openReceiptUpload(<?php echo $trade['id']; ?>)" title="Upload Receipt">
-                                                    <i class="bi bi-upload"></i>
-                                                </button>
-                                            <?php endif; ?>
-                                            <button class="btn btn-outline-info btn-sm" onclick="viewTradeDetails(<?php echo htmlspecialchars(json_encode($trade)); ?>)" title="View Details">
-                                                <i class="bi bi-eye"></i>
+                                        <?php if ($isApproved !== 1): ?>
+                                            <button class="btn btn-outline-success btn-sm" onclick="openUploadModal(<?php echo $trade['id']; ?>)" title="Upload Receipt">
+                                                <i class="bi bi-upload"></i>
                                             </button>
-                                        </div>
+                                        <?php endif; ?>
+                                        <button class="btn btn-outline-secondary btn-sm" onclick="openCommentModal(<?php echo $trade['id']; ?>)" title="Add Comment">
+                                            <i class="bi bi-chat"></i>
+                                        </button>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
@@ -636,38 +719,35 @@ include '../includes/header.php';
     </div>
 </div>
 
-<!-- Modals -->
-<!-- Receipt Upload Modal -->
-<div class="modal fade" id="receiptModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-md">
+<!-- Upload Modal -->
+<div class="modal fade" id="uploadModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header bg-success text-white">
-                <h5 class="modal-title"><i class="bi bi-upload me-2"></i>Upload Payment Receipts</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-upload"></i> Upload Receipt</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <form method="POST" enctype="multipart/form-data" action="numeric_receipt_upload.php">
                 <div class="modal-body">
-                    <input type="hidden" name="trade_id" id="receipt_trade_id" value="">
+                    <input type="hidden" name="trade_id" id="upload_trade_id" value="">
                     <input type="hidden" name="upload_receipt" value="1">
                     <input type="hidden" name="filter" value="<?php echo htmlspecialchars($filter); ?>">
                     <input type="hidden" name="asset_class" value="<?php echo htmlspecialchars($asset_class_filter); ?>">
                     <input type="hidden" name="search" value="<?php echo htmlspecialchars($search); ?>">
                     
                     <div class="mb-3">
-                        <label class="form-label fw-semibold">Select Receipt Files</label>
+                        <label class="form-label">Select Receipt Files</label>
                         <input type="file" class="form-control" name="payment_receipts[]" accept="image/*,.pdf" multiple required>
                         <div class="form-text">Allowed: JPG, PNG, GIF, PDF (Max 5MB each)</div>
                     </div>
                     
                     <div class="alert alert-info">
-                        <i class="bi bi-info-circle me-2"></i>
-                        Upload clear copies of payment receipts or confirmations.
-                        <br><small class="text-muted">Multiple files can be selected at once.</small>
+                        <i class="bi bi-info-circle"></i> Upload clear copies of payment receipts or confirmations. Multiple files allowed.
                     </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-success">Upload Receipts</button>
+                    <button type="submit" class="btn btn-success">Upload</button>
                 </div>
             </form>
         </div>
@@ -676,11 +756,11 @@ include '../includes/header.php';
 
 <!-- Comment Modal -->
 <div class="modal fade" id="commentModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-md">
+    <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header bg-info text-white">
-                <h5 class="modal-title"><i class="bi bi-chat-dots me-2"></i>Add Comment</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-chat"></i> Add Comment</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <form method="POST" action="numeric_receipt_upload.php">
                 <div class="modal-body">
@@ -691,13 +771,13 @@ include '../includes/header.php';
                     <input type="hidden" name="search" value="<?php echo htmlspecialchars($search); ?>">
                     
                     <div class="mb-3">
-                        <label class="form-label fw-semibold">Your Comment</label>
+                        <label class="form-label">Your Comment</label>
                         <textarea class="form-control" name="trader_comment" rows="4" placeholder="Enter your comment about this trade..." required></textarea>
                     </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-info text-white">Add Comment</button>
+                    <button type="submit" class="btn btn-primary">Add Comment</button>
                 </div>
             </form>
         </div>
@@ -705,32 +785,16 @@ include '../includes/header.php';
 </div>
 
 <script>
-// ============================================
-// RECEIPT UPLOAD FUNCTIONS
-// ============================================
-function openReceiptUpload(tradeId) {
-    document.getElementById('receipt_trade_id').value = tradeId;
-    const modal = new bootstrap.Modal(document.getElementById('receiptModal'));
+function openUploadModal(tradeId) {
+    document.getElementById('upload_trade_id').value = tradeId;
+    const modal = new bootstrap.Modal(document.getElementById('uploadModal'));
     modal.show();
 }
 
 function openCommentModal(tradeId) {
     document.getElementById('comment_trade_id').value = tradeId;
-    document.getElementById('trader_comment').value = '';
     const modal = new bootstrap.Modal(document.getElementById('commentModal'));
     modal.show();
-}
-
-function viewTradeDetails(trade) {
-    // Simple alert for now
-    alert('Trade Details:\n' + 
-          'Reference: ' + trade.trade_reference + '\n' +
-          'Client: ' + trade.client_name + '\n' +
-          'Security: ' + trade.security_id + '\n' +
-          'Quantity: ' + trade.quantity + '\n' +
-          'Price: ' + trade.price + '\n' +
-          'Consideration: ' + trade.consideration + '\n' +
-          'Additional Reference: ' + trade.additional_reference);
 }
 </script>
 
