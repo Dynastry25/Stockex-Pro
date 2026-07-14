@@ -1,6 +1,6 @@
 <?php
 // ============================================
-// TRADER - NUMERIC REFERENCE RECEIPT UPLOAD (WORKING)
+// TRADER - NUMERIC REFERENCE RECEIPT UPLOAD (FIXED - MIRRORS WORKING VERSION)
 // ============================================
 
 error_reporting(E_ALL);
@@ -22,7 +22,7 @@ $current_user = get_logged_in_user() ?: get_session_user();
 $user_name = $current_user['username'] ?? 'System';
 
 // ============================================
-// HANDLE UPLOAD
+// HANDLE UPLOAD - MIRRORS WORKING PUBLIC FORM
 // ============================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_receipt'])) {
     
@@ -35,87 +35,69 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_receipt'])) {
     }
     
     $uploaded_files = [];
-    $errors = [];
     
+    // Create upload directory
     $upload_dir = __DIR__ . '/../uploads/numeric_receipts/';
     if (!file_exists($upload_dir)) {
         mkdir($upload_dir, 0777, true);
     }
     
-    // Check if files were uploaded
+    // Handle file uploads - same as working public form
     if (isset($_FILES['payment_receipts']) && !empty($_FILES['payment_receipts']['name'][0])) {
-        
-        $files = $_FILES['payment_receipts'];
-        $total_files = count($files['name']);
         $allowed_exts = ['jpg', 'jpeg', 'png', 'gif', 'pdf'];
         $max_size = 5 * 1024 * 1024;
         
+        $files = $_FILES['payment_receipts'];
+        $total_files = count($files['name']);
+        
         for ($i = 0; $i < $total_files; $i++) {
-            if ($files['error'][$i] !== UPLOAD_ERR_OK) {
-                $errors[] = "File '{$files['name'][$i]}' upload error: " . $files['error'][$i];
-                continue;
+            if ($files['error'][$i] === UPLOAD_ERR_OK) {
+                $file_ext = strtolower(pathinfo($files['name'][$i], PATHINFO_EXTENSION));
+                if (in_array($file_ext, $allowed_exts) && $files['size'][$i] <= $max_size) {
+                    $filename = 'receipt_' . $trade_id . '_' . date('Ymd_His') . '_' . ($i + 1) . '.' . $file_ext;
+                    $filepath = $upload_dir . $filename;
+                    
+                    if (move_uploaded_file($files['tmp_name'][$i], $filepath)) {
+                        $uploaded_files[] = $filename;
+                    }
+                }
             }
-            
-            $file_ext = strtolower(pathinfo($files['name'][$i], PATHINFO_EXTENSION));
-            if (!in_array($file_ext, $allowed_exts)) {
-                $errors[] = "File '{$files['name'][$i]}' - Invalid type. Allowed: JPG, PNG, GIF, PDF";
-                continue;
-            }
-            
-            if ($files['size'][$i] > $max_size) {
-                $errors[] = "File '{$files['name'][$i]}' exceeds 5MB limit";
-                continue;
-            }
-            
-            $filename = 'receipt_' . $trade_id . '_' . date('Ymd_His') . '_' . ($i + 1) . '.' . $file_ext;
-            $filepath = $upload_dir . $filename;
-            
-            if (move_uploaded_file($files['tmp_name'][$i], $filepath)) {
-                $uploaded_files[] = $filename;
-            } else {
-                $errors[] = "Failed to upload file '{$files['name'][$i]}'";
-            }
+        }
+    }
+    
+    if (!empty($uploaded_files)) {
+        // Get existing receipts
+        $stmt = $db->prepare("SELECT payment_receipt FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+        $stmt->execute([$trade_id]);
+        $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+        $existing_receipts = !empty($existing['payment_receipt']) ? explode(',', $existing['payment_receipt']) : [];
+        
+        $all_receipts = array_merge($existing_receipts, $uploaded_files);
+        $receipts_str = implode(',', $all_receipts);
+        
+        // Check if record exists
+        $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+        $stmt->execute([$trade_id]);
+        
+        if ($stmt->fetch()) {
+            $stmt = $db->prepare("UPDATE numeric_trade_receipts SET payment_receipt = ?, updated_at = NOW(), uploaded_by = ? WHERE trade_id = ? AND trade_type = 'trade'");
+            $result = $stmt->execute([$receipts_str, $user_name, $trade_id]);
+        } else {
+            $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, payment_receipt, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, NOW(), NOW())");
+            $result = $stmt->execute([$trade_id, $receipts_str, $user_name]);
         }
         
-        if (!empty($uploaded_files)) {
-            // Get existing receipts
-            $stmt = $db->prepare("SELECT payment_receipt FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
-            $stmt->execute([$trade_id]);
-            $existing = $stmt->fetch(PDO::FETCH_ASSOC);
-            $existing_receipts = !empty($existing['payment_receipt']) ? explode(',', $existing['payment_receipt']) : [];
-            
-            $all_receipts = array_merge($existing_receipts, $uploaded_files);
-            $receipts_str = implode(',', $all_receipts);
-            
-            // Check if record exists
-            $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
-            $stmt->execute([$trade_id]);
-            
-            if ($stmt->fetch()) {
-                // Update existing
-                $stmt = $db->prepare("UPDATE numeric_trade_receipts SET payment_receipt = ?, updated_at = NOW(), uploaded_by = ? WHERE trade_id = ? AND trade_type = 'trade'");
-                $result = $stmt->execute([$receipts_str, $user_name, $trade_id]);
-            } else {
-                // Insert new
-                $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, payment_receipt, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, NOW(), NOW())");
-                $result = $stmt->execute([$trade_id, $receipts_str, $user_name]);
-            }
-            
-            if ($result) {
-                $_SESSION['alert'] = [count($uploaded_files) . ' receipt(s) uploaded successfully!', 'success'];
-            } else {
-                $errorInfo = $stmt->errorInfo();
-                $_SESSION['alert'] = ['Database error: ' . $errorInfo[2], 'danger'];
-            }
+        if ($result) {
+            $_SESSION['alert'] = [count($uploaded_files) . ' receipt(s) uploaded successfully!', 'success'];
         } else {
-            $msg = 'No files were uploaded successfully.';
-            if (!empty($errors)) {
-                $msg .= ' Errors: ' . implode('; ', $errors);
-            }
-            $_SESSION['alert'] = [$msg, 'danger'];
+            $_SESSION['alert'] = ['Failed to save to database.', 'danger'];
         }
     } else {
-        $_SESSION['alert'] = ['No files selected for upload.', 'danger'];
+        if (isset($_FILES['payment_receipts']) && !empty($_FILES['payment_receipts']['name'][0])) {
+            $_SESSION['alert'] = ['No valid files uploaded. Allowed: JPG, PNG, GIF, PDF (Max 5MB).', 'danger'];
+        } else {
+            $_SESSION['alert'] = ['No files selected for upload.', 'danger'];
+        }
     }
     
     // Redirect back with filters
@@ -256,10 +238,7 @@ function getNumericTrades($db, $filter, $asset_class_filter, $search) {
     $sql .= " AND t.additional_reference != ''";
     
     if ($asset_class_filter === 'all') {
-        $sql .= " AND (
-            (t.asset_class = 'bond') OR 
-            (t.asset_class IN ('equity', 'Exchange Traded Funds') AND LOWER(t.trade_side) = 'buy')
-        )";
+        $sql .= " AND ((t.asset_class = 'bond') OR (t.asset_class IN ('equity', 'Exchange Traded Funds') AND LOWER(t.trade_side) = 'buy'))";
     } elseif ($asset_class_filter === 'bond') {
         $sql .= " AND t.asset_class = 'bond'";
     } elseif ($asset_class_filter === 'equity') {
@@ -311,10 +290,7 @@ function getNumericStats($db) {
             WHERE t.additional_reference REGEXP '^[0-9]+$'
             AND t.additional_reference IS NOT NULL
             AND t.additional_reference != ''
-            AND (
-                (t.asset_class = 'bond') OR 
-                (t.asset_class IN ('equity', 'Exchange Traded Funds') AND LOWER(t.trade_side) = 'buy')
-            )
+            AND ((t.asset_class = 'bond') OR (t.asset_class IN ('equity', 'Exchange Traded Funds') AND LOWER(t.trade_side) = 'buy'))
         ");
         $result = $stmt->fetch(PDO::FETCH_ASSOC);
         if ($result) {
@@ -333,10 +309,7 @@ function getNumericStats($db) {
             WHERE t.additional_reference REGEXP '^[0-9]+$'
             AND t.additional_reference IS NOT NULL
             AND t.additional_reference != ''
-            AND (
-                (t.asset_class = 'bond') OR 
-                (t.asset_class IN ('equity', 'Exchange Traded Funds') AND LOWER(t.trade_side) = 'buy')
-            )
+            AND ((t.asset_class = 'bond') OR (t.asset_class IN ('equity', 'Exchange Traded Funds') AND LOWER(t.trade_side) = 'buy'))
             GROUP BY asset_class
         ");
         while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
@@ -357,76 +330,29 @@ include '../includes/header.php';
 ?>
 
 <style>
-    .receipt-thumbnails {
-        display: flex;
-        gap: 3px;
-        flex-wrap: wrap;
-        align-items: center;
-    }
-    .receipt-thumbnails img {
-        max-width: 40px;
-        max-height: 35px;
-        object-fit: cover;
-        border: 1px solid #ddd;
-        border-radius: 3px;
-        cursor: pointer;
-    }
-    .receipt-thumbnails .pdf-badge {
-        background: #dc3545;
-        color: white;
-        padding: 2px 6px;
-        border-radius: 3px;
-        font-size: 10px;
-        cursor: pointer;
-    }
-    .receipt-count {
-        background: #0d6efd;
-        color: white;
-        border-radius: 50%;
-        padding: 0 5px;
-        font-size: 10px;
-        margin-left: 2px;
-    }
-    .comment-bubble {
-        background: #f8f9fa;
-        border-left: 3px solid #0d6efd;
-        padding: 4px 8px;
-        border-radius: 3px;
-        font-size: 12px;
-        max-width: 200px;
-    }
-    .comment-bubble .author {
-        font-weight: bold;
-        font-size: 10px;
-        color: #6c757d;
-    }
-    .trade-row-pending { border-left: 3px solid #ffc107; }
-    .trade-row-approved { border-left: 3px solid #198754; }
-    .trade-row-rejected { border-left: 3px solid #dc3545; }
+    .receipt-thumbnails { display: flex; gap: 3px; flex-wrap: wrap; align-items: center; }
+    .receipt-thumbnails img { max-width: 40px; max-height: 35px; object-fit: cover; border: 1px solid #ddd; border-radius: 3px; cursor: pointer; }
+    .receipt-thumbnails img:hover { border-color: #0d6efd; }
+    .receipt-thumbnails .pdf-badge { background: #dc3545; color: white; padding: 2px 6px; border-radius: 3px; font-size: 10px; cursor: pointer; }
+    .receipt-count { background: #0d6efd; color: white; border-radius: 50%; padding: 0 5px; font-size: 10px; margin-left: 2px; }
+    .comment-bubble { background: #f8f9fa; border-left: 3px solid #0d6efd; padding: 4px 8px; border-radius: 3px; font-size: 12px; max-width: 200px; }
+    .comment-bubble .author { font-weight: bold; font-size: 10px; color: #6c757d; }
+    .trade-pending { border-left: 3px solid #ffc107; }
+    .trade-approved { border-left: 3px solid #198754; }
+    .trade-rejected { border-left: 3px solid #dc3545; }
     .status-badge { font-size: 11px; padding: 3px 8px; }
-    .receipt-count-badge { 
-        background: #0d6efd; 
-        color: white; 
-        border-radius: 50%; 
-        padding: 0 5px; 
-        font-size: 10px; 
-        margin-left: 2px; 
-    }
+    .file-item { display: flex; justify-content: space-between; padding: 4px 8px; background: #f8f9fa; border-radius: 3px; margin-bottom: 2px; font-size: 13px; }
+    .file-item .size { color: #6c757d; font-size: 11px; }
+    .file-item .remove-file { cursor: pointer; color: #dc3545; font-weight: bold; padding: 0 5px; }
+    .file-item .remove-file:hover { color: #a71d2a; }
 </style>
 
 <div class="container-fluid">
     <!-- Page Header -->
     <div class="row mb-3">
         <div class="col-12">
-            <h2>
-                <i class="bi bi-receipt"></i> Numeric Reference Receipt Upload
-                <small class="text-muted">(Additional Reference = Number only)</small>
-            </h2>
-            <p class="text-muted">
-                <span class="badge bg-info">Bonds: All trades</span>
-                <span class="badge bg-success">Equities/ETFs: BUY only</span>
-                <span class="badge bg-warning">Upload receipts for pending trades</span>
-            </p>
+            <h2><i class="bi bi-receipt"></i> Numeric Reference Receipt Upload</h2>
+            <p class="text-muted">Upload receipts for trades where Additional Reference is a number only</p>
         </div>
     </div>
 
@@ -441,21 +367,11 @@ include '../includes/header.php';
 
     <!-- Stats -->
     <div class="row mb-3">
-        <div class="col-md-2">
-            <div class="card"><div class="card-body text-center"><h5><?php echo number_format($stats['total']); ?></h5><small class="text-muted">Total</small></div></div>
-        </div>
-        <div class="col-md-2">
-            <div class="card border-warning"><div class="card-body text-center"><h5><?php echo number_format($stats['pending']); ?></h5><small class="text-muted">Pending</small></div></div>
-        </div>
-        <div class="col-md-2">
-            <div class="card border-success"><div class="card-body text-center"><h5><?php echo number_format($stats['approved']); ?></h5><small class="text-muted">Approved</small></div></div>
-        </div>
-        <div class="col-md-2">
-            <div class="card border-danger"><div class="card-body text-center"><h5><?php echo number_format($stats['rejected']); ?></h5><small class="text-muted">Rejected</small></div></div>
-        </div>
-        <div class="col-md-4">
-            <div class="card"><div class="card-body text-center"><h5><span class="badge bg-primary">B: <?php echo $stats['bond']; ?></span> <span class="badge bg-success">E: <?php echo $stats['equity']; ?></span> <span class="badge bg-warning">F: <?php echo $stats['etf']; ?></span></h5><small class="text-muted">Breakdown</small></div></div>
-        </div>
+        <div class="col-md-2"><div class="card"><div class="card-body text-center"><h5><?php echo number_format($stats['total']); ?></h5><small class="text-muted">Total</small></div></div></div>
+        <div class="col-md-2"><div class="card border-warning"><div class="card-body text-center"><h5><?php echo number_format($stats['pending']); ?></h5><small class="text-muted">Pending</small></div></div></div>
+        <div class="col-md-2"><div class="card border-success"><div class="card-body text-center"><h5><?php echo number_format($stats['approved']); ?></h5><small class="text-muted">Approved</small></div></div></div>
+        <div class="col-md-2"><div class="card border-danger"><div class="card-body text-center"><h5><?php echo number_format($stats['rejected']); ?></h5><small class="text-muted">Rejected</small></div></div></div>
+        <div class="col-md-4"><div class="card"><div class="card-body text-center"><h5><span class="badge bg-primary">B: <?php echo $stats['bond']; ?></span> <span class="badge bg-success">E: <?php echo $stats['equity']; ?></span> <span class="badge bg-warning">F: <?php echo $stats['etf']; ?></span></h5><small class="text-muted">Breakdown</small></div></div></div>
     </div>
 
     <!-- Filters -->
@@ -524,8 +440,8 @@ include '../includes/header.php';
                                 $hasReceipt = !empty($receipts) && !empty($receipts[0]);
                                 $isApproved = isset($trade['is_approved']) ? (int)$trade['is_approved'] : 0;
                                 $statusText = $isApproved === 1 ? 'Approved' : ($isApproved === 2 ? 'Rejected' : 'Pending');
-                                $statusClass = $isApproved === 1 ? 'success' : ($isApproved === 2 ? 'danger' : 'warning');
-                                $rowClass = $isApproved === 1 ? 'trade-row-approved' : ($isApproved === 2 ? 'trade-row-rejected' : 'trade-row-pending');
+                                $statusClass = $isApproved === 1 ? 'approved' : ($isApproved === 2 ? 'rejected' : 'pending');
+                                $rowClass = $isApproved === 1 ? 'trade-approved' : ($isApproved === 2 ? 'trade-rejected' : 'trade-pending');
                                 
                                 if ($isBond) {
                                     $displayQty = 'TZS ' . number_format(floatval($trade['quantity'] ?? 0), 2);
@@ -564,23 +480,22 @@ include '../includes/header.php';
                                     <td>
                                         <?php if ($hasReceipt): ?>
                                             <div class="receipt-thumbnails">
-                                                <?php 
-                                                foreach ($receipts as $receiptFile):
+                                                <?php foreach ($receipts as $receiptFile):
                                                     $receiptFile = trim($receiptFile);
                                                     if (empty($receiptFile)) continue;
                                                     $filepath = '../uploads/numeric_receipts/' . $receiptFile;
                                                     $ext = strtolower(pathinfo($receiptFile, PATHINFO_EXTENSION));
                                                     if (in_array($ext, ['jpg', 'jpeg', 'png', 'gif']) && file_exists($filepath)):
                                                 ?>
-                                                    <img src="<?php echo $filepath; ?>" alt="Receipt" onclick="window.open('<?php echo $filepath; ?>', '_blank')" style="max-width:40px;max-height:35px;object-fit:cover;border:1px solid #ddd;border-radius:3px;cursor:pointer;">
+                                                    <img src="<?php echo $filepath; ?>" alt="Receipt" onclick="window.open('<?php echo $filepath; ?>', '_blank')" title="Click to view">
                                                 <?php else: ?>
                                                     <span class="pdf-badge" onclick="window.open('<?php echo $filepath; ?>', '_blank')">PDF</span>
                                                 <?php endif; ?>
                                                 <?php endforeach; ?>
                                                 <?php if (count($receipts) > 3): ?>
-                                                    <span class="receipt-count-badge">+<?php echo count($receipts) - 3; ?></span>
+                                                    <span class="receipt-count">+<?php echo count($receipts) - 3; ?></span>
                                                 <?php endif; ?>
-                                                <?php if ($isApproved !== 1): ?>
+                                                <?php if ($statusClass !== 'approved'): ?>
                                                     <a href="numeric_receipt_upload.php?delete_receipt=1&trade_id=<?php echo $trade['id']; ?>&file=<?php echo urlencode($receipts[0]); ?>&filter=<?php echo urlencode($filter); ?>&asset_class=<?php echo urlencode($asset_class_filter); ?>&search=<?php echo urlencode($search); ?>" 
                                                        class="text-danger small" onclick="return confirm('Delete this receipt?')">
                                                         <i class="bi bi-x-circle"></i>
@@ -594,7 +509,7 @@ include '../includes/header.php';
                                         <?php endif; ?>
                                     </td>
                                     <td>
-                                        <span class="badge bg-<?php echo $statusClass; ?> status-badge"><?php echo $statusText; ?></span>
+                                        <span class="badge bg-<?php echo $statusClass === 'approved' ? 'success' : ($statusClass === 'rejected' ? 'danger' : 'warning'); ?> status-badge"><?php echo $statusText; ?></span>
                                         <?php if ($isApproved === 1 && !empty($trade['approved_by'])): ?>
                                             <br><small class="text-muted">by <?php echo htmlspecialchars($trade['approved_by']); ?></small>
                                         <?php endif; ?>
@@ -613,7 +528,7 @@ include '../includes/header.php';
                                         </button>
                                     </td>
                                     <td class="text-end">
-                                        <?php if ($isApproved !== 1): ?>
+                                        <?php if ($statusClass !== 'approved'): ?>
                                             <button class="btn btn-outline-success btn-sm" onclick="openUploadModal(<?php echo $trade['id']; ?>)" title="Upload Receipt">
                                                 <i class="bi bi-upload"></i>
                                             </button>
@@ -650,11 +565,14 @@ include '../includes/header.php';
                     
                     <div class="mb-3">
                         <label class="form-label">Select Receipt Files</label>
-                        <input type="file" class="form-control" name="payment_receipts[]" accept="image/*,.pdf" multiple required>
+                        <input type="file" class="form-control" name="payment_receipts[]" accept="image/*,.pdf" multiple>
                         <div class="form-text">Allowed: JPG, PNG, GIF, PDF (Max 5MB each)</div>
                     </div>
                     
-                    <div class="alert alert-info">
+                    <div id="fileList"></div>
+                    <div id="receiptPreviews" class="receipt-thumbnails"></div>
+                    
+                    <div class="alert alert-info mt-2">
                         <i class="bi bi-info-circle"></i> Upload clear copies of payment receipts or confirmations. Multiple files allowed.
                     </div>
                 </div>
@@ -700,6 +618,10 @@ include '../includes/header.php';
 <script>
 function openUploadModal(tradeId) {
     document.getElementById('upload_trade_id').value = tradeId;
+    document.getElementById('receiptPreviews').innerHTML = '';
+    document.getElementById('fileList').innerHTML = '';
+    document.getElementById('uploadBtn').disabled = false;
+    document.getElementById('uploadBtn').innerHTML = 'Upload';
     const modal = new bootstrap.Modal(document.getElementById('uploadModal'));
     modal.show();
 }
@@ -710,7 +632,71 @@ function openCommentModal(tradeId) {
     modal.show();
 }
 
-// Form validation
+// File preview - same as working public form
+document.getElementById('uploadModal')?.addEventListener('change', function(e) {
+    if (e.target && e.target.id === 'receipt_files') {
+        const files = e.target.files;
+        const fileList = document.getElementById('fileList');
+        const previewContainer = document.getElementById('receiptPreviews');
+        
+        fileList.innerHTML = '';
+        previewContainer.innerHTML = '';
+        
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            
+            const fileItem = document.createElement('div');
+            fileItem.className = 'file-item';
+            fileItem.innerHTML = `
+                <span class="file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
+                <span class="size">${(file.size / 1024).toFixed(1)} KB</span>
+                <span class="remove-file" onclick="removeFile(${i})">&times;</span>
+            `;
+            fileList.appendChild(fileItem);
+            
+            if (file.type.startsWith('image/')) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const img = document.createElement('img');
+                    img.src = e.target.result;
+                    img.style.maxWidth = '60px';
+                    img.style.maxHeight = '50px';
+                    img.style.objectFit = 'cover';
+                    img.style.border = '1px solid #ddd';
+                    img.style.borderRadius = '3px';
+                    img.style.margin = '2px';
+                    previewContainer.appendChild(img);
+                };
+                reader.readAsDataURL(file);
+            }
+        }
+    }
+});
+
+function removeFile(index) {
+    const input = document.getElementById('receipt_files');
+    const dt = new DataTransfer();
+    const files = input.files;
+    
+    for (let i = 0; i < files.length; i++) {
+        if (i !== index) {
+            dt.items.add(files[i]);
+        }
+    }
+    input.files = dt.files;
+    
+    const event = new Event('change');
+    input.dispatchEvent(event);
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Form submit - disable button
 document.querySelector('form[enctype="multipart/form-data"]')?.addEventListener('submit', function(e) {
     const fileInput = this.querySelector('input[type="file"]');
     if (fileInput && fileInput.files.length === 0) {
@@ -722,7 +708,7 @@ document.querySelector('form[enctype="multipart/form-data"]')?.addEventListener(
     const btn = document.getElementById('uploadBtn');
     if (btn) {
         btn.disabled = true;
-        btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Uploading...';
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> Uploading...';
     }
 });
 </script>
