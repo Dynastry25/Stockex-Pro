@@ -1,10 +1,10 @@
 <?php
 // ============================================
-// TRADER - NUMERIC REFERENCE RECEIPT UPLOAD (FIXED)
+// TRADER - NUMERIC REFERENCE RECEIPT UPLOAD
 // ============================================
 
 error_reporting(E_ALL);
-ini_set('display_errors', 1); // Show errors for debugging
+ini_set('display_errors', 0);
 ini_set('log_errors', 1);
 ini_set('error_log', __DIR__ . '/numeric_receipt_errors.log');
 
@@ -29,11 +29,6 @@ $user_name = $current_user['username'] ?? 'System';
 $user_id = $current_user['id'] ?? null;
 
 // ============================================
-// DEBUG: Check if upload is working
-// ============================================
-$debug_message = '';
-
-// ============================================
 // HANDLE ACTIONS
 // ============================================
 
@@ -47,24 +42,8 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
     $max_size = 5 * 1024 * 1024;
     
     $upload_dir = __DIR__ . '/../uploads/numeric_receipts/';
-    
-    // Create directory if it doesn't exist
     if (!file_exists($upload_dir)) {
-        if (mkdir($upload_dir, 0777, true)) {
-            $debug_message .= "Directory created: $upload_dir\n";
-        } else {
-            $debug_message .= "Failed to create directory: $upload_dir\n";
-        }
-    } else {
-        $debug_message .= "Directory exists: $upload_dir\n";
-    }
-    
-    // Check if directory is writable
-    if (!is_writable($upload_dir)) {
-        $debug_message .= "Directory is NOT writable: $upload_dir\n";
-        chmod($upload_dir, 0777);
-    } else {
-        $debug_message .= "Directory is writable: $upload_dir\n";
+        mkdir($upload_dir, 0777, true);
     }
     
     // Get existing receipts
@@ -73,49 +52,34 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
     $existing = $stmt->fetch(PDO::FETCH_ASSOC);
     $existing_receipts = !empty($existing['payment_receipt']) ? explode(',', $existing['payment_receipt']) : [];
     
-    $debug_message .= "Existing receipts: " . print_r($existing_receipts, true) . "\n";
-    
-    // Check if files were uploaded
     if (isset($_FILES['payment_receipts']) && !empty($_FILES['payment_receipts']['name'][0])) {
         $files = $_FILES['payment_receipts'];
         $total_files = count($files['name']);
         
-        $debug_message .= "Total files: $total_files\n";
-        
         for ($i = 0; $i < $total_files; $i++) {
-            $debug_message .= "Processing file $i: " . $files['name'][$i] . "\n";
-            
             if ($files['error'][$i] !== UPLOAD_ERR_OK) {
                 $errors[] = "File '{$files['name'][$i]}' upload error: " . $files['error'][$i];
-                $debug_message .= "Error: " . $files['error'][$i] . "\n";
                 continue;
             }
             
             $file_ext = strtolower(pathinfo($files['name'][$i], PATHINFO_EXTENSION));
             if (!in_array($file_ext, $allowed_exts)) {
                 $errors[] = "File '{$files['name'][$i]}' - Invalid type. Allowed: JPG, PNG, GIF, PDF";
-                $debug_message .= "Invalid extension: $file_ext\n";
                 continue;
             }
             
             if ($files['size'][$i] > $max_size) {
                 $errors[] = "File '{$files['name'][$i]}' exceeds 5MB limit";
-                $debug_message .= "File too large: " . $files['size'][$i] . "\n";
                 continue;
             }
             
             $filename = 'receipt_' . $trade_id . '_' . date('Ymd_His') . '_' . ($i + 1) . '.' . $file_ext;
             $filepath = $upload_dir . $filename;
             
-            $debug_message .= "Saving to: $filepath\n";
-            
             if (move_uploaded_file($files['tmp_name'][$i], $filepath)) {
                 $uploaded_files[] = $filename;
-                $debug_message .= "File uploaded successfully: $filename\n";
             } else {
                 $errors[] = "Failed to upload file '{$files['name'][$i]}'";
-                $debug_message .= "Failed to move uploaded file\n";
-                $debug_message .= "Temp path: " . $files['tmp_name'][$i] . "\n";
             }
         }
         
@@ -123,47 +87,32 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
             $all_receipts = array_merge($existing_receipts, $uploaded_files);
             $receipts_str = implode(',', $all_receipts);
             
-            $debug_message .= "All receipts: " . $receipts_str . "\n";
-            
             // Check if record exists
             $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
             $stmt->execute([$trade_id]);
             if ($stmt->fetch()) {
                 $stmt = $db->prepare("UPDATE numeric_trade_receipts SET payment_receipt = ?, updated_at = NOW(), uploaded_by = ? WHERE trade_id = ? AND trade_type = 'trade'");
                 $result = $stmt->execute([$receipts_str, $user_name, $trade_id]);
-                $debug_message .= "Updated existing record\n";
             } else {
                 $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, payment_receipt, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, NOW(), NOW())");
                 $result = $stmt->execute([$trade_id, $receipts_str, $user_name]);
-                $debug_message .= "Inserted new record\n";
             }
             
             if ($result) {
                 $_SESSION['alert'] = [count($uploaded_files) . ' receipt(s) uploaded successfully!', 'success'];
-                $debug_message .= "Database update successful\n";
             } else {
-                $error_info = $stmt->errorInfo();
-                $_SESSION['alert'] = ['Failed to update database: ' . $error_info[2], 'danger'];
-                $debug_message .= "Database error: " . print_r($error_info, true) . "\n";
+                $_SESSION['alert'] = ['Failed to update database', 'danger'];
             }
         } else {
             $_SESSION['alert'] = ['No files were uploaded successfully. Errors: ' . implode('; ', $errors), 'danger'];
-            $debug_message .= "No files uploaded. Errors: " . implode('; ', $errors) . "\n";
         }
     } else {
         $_SESSION['alert'] = ['No files selected for upload', 'danger'];
-        $debug_message .= "No files in POST\n";
-        $debug_message .= "FILES array: " . print_r($_FILES, true) . "\n";
     }
-    
-    // Save debug info to session
-    $_SESSION['upload_debug'] = $debug_message;
-    
     header('Location: numeric_receipt_upload.php?' . http_build_query(array_filter([
         'filter' => $_GET['filter'] ?? 'pending',
         'asset_class' => $_GET['asset_class'] ?? 'all',
-        'search' => $_GET['search'] ?? '',
-        'debug' => 1
+        'search' => $_GET['search'] ?? ''
     ])));
     exit;
 }
@@ -173,7 +122,7 @@ if (isset($_GET['delete_receipt']) && isset($_GET['trade_id']) && isset($_GET['f
     $trade_id = (int) $_GET['trade_id'];
     $file_to_delete = $_GET['file'];
     
-    // Check if receipt is already approved - if approved, traders cannot delete
+    // Check if receipt is already approved
     $stmt = $db->prepare("SELECT is_approved FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
     $stmt->execute([$trade_id]);
     $record = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -258,7 +207,6 @@ if (isset($_POST['add_comment']) && isset($_POST['trade_id'])) {
 $filter = $_GET['filter'] ?? 'pending';
 $asset_class_filter = $_GET['asset_class'] ?? 'all';
 $search = $_GET['search'] ?? '';
-$show_debug = isset($_GET['debug']);
 
 // ============================================
 // FETCH TRADES WITH ADDITIONAL_REFERENCE = NUMBER ONLY
@@ -486,34 +434,6 @@ include '../includes/header.php';
         font-size: 10px;
         color: #6c757d;
     }
-    .action-btn {
-        padding: 2px 6px;
-        font-size: 12px;
-    }
-    .modal-lg {
-        max-width: 600px;
-    }
-    .receipt-preview-container img {
-        max-width: 80px;
-        max-height: 60px;
-        object-fit: cover;
-        border: 1px solid #ddd;
-        border-radius: 3px;
-        margin: 2px;
-    }
-    .file-item {
-        display: flex;
-        justify-content: space-between;
-        padding: 4px 8px;
-        background: #f8f9fa;
-        border-radius: 3px;
-        margin-bottom: 2px;
-        font-size: 13px;
-    }
-    .file-item .size {
-        color: #6c757d;
-        font-size: 11px;
-    }
     .trade-row-pending {
         border-left: 3px solid #ffc107;
     }
@@ -526,18 +446,6 @@ include '../includes/header.php';
     .status-badge {
         font-size: 11px;
         padding: 3px 8px;
-    }
-    .debug-box {
-        background: #f8f9fa;
-        border: 1px solid #ddd;
-        padding: 10px;
-        margin: 10px 0;
-        font-family: monospace;
-        font-size: 12px;
-        max-height: 300px;
-        overflow: auto;
-        white-space: pre-wrap;
-        word-break: break-all;
     }
 </style>
 
@@ -556,24 +464,6 @@ include '../includes/header.php';
             </p>
         </div>
     </div>
-
-    <!-- Debug Info -->
-    <?php if ($show_debug && isset($_SESSION['upload_debug'])): ?>
-        <div class="card mb-3">
-            <div class="card-header bg-info text-white">
-                <h6 class="mb-0">Debug Information</h6>
-            </div>
-            <div class="card-body">
-                <div class="debug-box"><?php echo htmlspecialchars($_SESSION['upload_debug']); ?></div>
-                <a href="numeric_receipt_upload.php?<?php echo http_build_query(array_filter([
-                    'filter' => $filter,
-                    'asset_class' => $asset_class_filter,
-                    'search' => $search
-                ])); ?>" class="btn btn-secondary btn-sm mt-2">Hide Debug</a>
-            </div>
-        </div>
-        <?php unset($_SESSION['upload_debug']); ?>
-    <?php endif; ?>
 
     <!-- Alert Messages -->
     <?php if (isset($_SESSION['alert'])): ?>
@@ -804,9 +694,6 @@ include '../includes/header.php';
                                         <button class="btn btn-outline-secondary btn-sm" onclick="openCommentModal(<?php echo $trade['id']; ?>)" title="Add Comment">
                                             <i class="bi bi-chat"></i>
                                         </button>
-                                        <a href="numeric_receipt_upload.php?<?php echo http_build_query(array_merge($_GET, ['debug' => 1])); ?>" class="btn btn-outline-info btn-sm" title="Debug">
-                                            <i class="bi bi-bug"></i>
-                                        </a>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
@@ -826,7 +713,7 @@ include '../includes/header.php';
                 <h5 class="modal-title"><i class="bi bi-upload"></i> Upload Receipt</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form method="POST" enctype="multipart/form-data" action="numeric_receipt_upload.php" id="uploadForm">
+            <form method="POST" enctype="multipart/form-data" action="numeric_receipt_upload.php">
                 <div class="modal-body">
                     <input type="hidden" name="trade_id" id="upload_trade_id" value="">
                     <input type="hidden" name="upload_receipt" value="1">
@@ -836,7 +723,7 @@ include '../includes/header.php';
                     
                     <div class="mb-3">
                         <label class="form-label">Select Receipt Files</label>
-                        <input type="file" class="form-control" name="payment_receipts[]" id="receipt_files" accept="image/*,.pdf" multiple required>
+                        <input type="file" class="form-control" name="payment_receipts[]" accept="image/*,.pdf" multiple required>
                         <div class="form-text">Allowed: JPG, PNG, GIF, PDF (Max 5MB each)</div>
                     </div>
                     
@@ -846,7 +733,7 @@ include '../includes/header.php';
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-success" id="uploadSubmitBtn">Upload</button>
+                    <button type="submit" class="btn btn-success">Upload</button>
                 </div>
             </form>
         </div>
@@ -871,7 +758,7 @@ include '../includes/header.php';
                     
                     <div class="mb-3">
                         <label class="form-label">Your Comment</label>
-                        <textarea class="form-control" name="trader_comment" id="trader_comment" rows="4" placeholder="Enter your comment about this trade..." required></textarea>
+                        <textarea class="form-control" name="trader_comment" rows="4" placeholder="Enter your comment about this trade..." required></textarea>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -886,31 +773,15 @@ include '../includes/header.php';
 <script>
 function openUploadModal(tradeId) {
     document.getElementById('upload_trade_id').value = tradeId;
-    document.getElementById('receipt_files').value = '';
     const modal = new bootstrap.Modal(document.getElementById('uploadModal'));
     modal.show();
 }
 
 function openCommentModal(tradeId) {
     document.getElementById('comment_trade_id').value = tradeId;
-    document.getElementById('trader_comment').value = '';
     const modal = new bootstrap.Modal(document.getElementById('commentModal'));
     modal.show();
 }
-
-// Debug: Log form submission
-document.getElementById('uploadForm')?.addEventListener('submit', function(e) {
-    const fileInput = document.getElementById('receipt_files');
-    if (fileInput.files.length === 0) {
-        e.preventDefault();
-        alert('Please select at least one file to upload.');
-        return false;
-    }
-    
-    const btn = document.getElementById('uploadSubmitBtn');
-    btn.disabled = true;
-    btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Uploading...';
-});
 </script>
 
 <?php include '../includes/footer.php'; ?>
