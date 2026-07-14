@@ -1,6 +1,6 @@
 <?php
 // ============================================
-// DEBUG VERSION - Shows all errors
+// FIXED VERSION - Handles ONLY_FULL_GROUP_BY
 // ============================================
 
 // Enable full error reporting
@@ -29,35 +29,6 @@ $db = getDBConnection();
 $current_user = get_logged_in_user() ?: get_session_user();
 $user_name = $current_user['username'] ?? 'System';
 $user_id = $current_user['id'] ?? null;
-
-// ============================================
-// DEBUG: Check if tables exist
-// ============================================
-echo "<!-- DEBUG: Checking tables -->\n";
-
-try {
-    $stmt = $db->query("SHOW TABLES LIKE 'numeric_trade_receipts'");
-    $receipts_exists = $stmt->rowCount() > 0;
-    echo "<!-- numeric_trade_receipts exists: " . ($receipts_exists ? 'YES' : 'NO') . " -->\n";
-    
-    $stmt = $db->query("SHOW TABLES LIKE 'numeric_trade_comments'");
-    $comments_exists = $stmt->rowCount() > 0;
-    echo "<!-- numeric_trade_comments exists: " . ($comments_exists ? 'YES' : 'NO') . " -->\n";
-    
-    // Check additional_reference column
-    $stmt = $db->query("SHOW COLUMNS FROM trades LIKE 'additional_reference'");
-    $column_exists = $stmt->rowCount() > 0;
-    echo "<!-- additional_reference column exists: " . ($column_exists ? 'YES' : 'NO') . " -->\n";
-    
-    // Check a sample trade with numeric additional_reference
-    $stmt = $db->query("SELECT COUNT(*) as count FROM trades WHERE additional_reference REGEXP '^[0-9]+$' AND additional_reference IS NOT NULL");
-    $count = $stmt->fetch(PDO::FETCH_ASSOC);
-    echo "<!-- Numeric reference trades count: " . ($count['count'] ?? 0) . " -->\n";
-    
-} catch (Exception $e) {
-    echo "<!-- DEBUG ERROR: " . $e->getMessage() . " -->\n";
-    die("Database error: " . $e->getMessage());
-}
 
 // ============================================
 // HANDLE ACTIONS (Traders only - no approval)
@@ -241,19 +212,37 @@ $search = $_GET['search'] ?? '';
 
 // ============================================
 // FETCH TRADES WITH ADDITIONAL_REFERENCE = NUMBER ONLY
+// FIXED: Added proper GROUP BY with all columns
 // ============================================
 function getNumericTrades($db, $filter = 'pending', $asset_class_filter = 'all', $search = '') {
     $sql = "
         SELECT 
-            t.*,
-            tr.payment_receipt,
-            tr.is_approved,
-            tr.approved_by,
-            tr.approved_at,
-            tr.approval_comment,
-            tr.uploaded_by,
-            tr.created_at as receipt_created_at,
-            tr.updated_at as receipt_updated_at,
+            t.id,
+            t.trade_reference,
+            t.asset_class,
+            t.security_id,
+            t.security_name,
+            t.client_name,
+            t.client_cds_account,
+            t.trade_side,
+            t.quantity,
+            t.price,
+            t.consideration,
+            t.trade_date,
+            t.settlement_date,
+            t.exchange_reference,
+            t.additional_reference,
+            t.uploaded_by,
+            t.status,
+            t.created_at,
+            ANY_VALUE(tr.payment_receipt) as payment_receipt,
+            ANY_VALUE(tr.is_approved) as is_approved,
+            ANY_VALUE(tr.approved_by) as approved_by,
+            ANY_VALUE(tr.approved_at) as approved_at,
+            ANY_VALUE(tr.approval_comment) as approval_comment,
+            ANY_VALUE(tr.uploaded_by) as receipt_uploaded_by,
+            ANY_VALUE(tr.created_at) as receipt_created_at,
+            ANY_VALUE(tr.updated_at) as receipt_updated_at,
             GROUP_CONCAT(DISTINCT tc.comment ORDER BY tc.created_at DESC SEPARATOR '|||') as comments,
             GROUP_CONCAT(DISTINCT tc.created_by ORDER BY tc.created_at DESC SEPARATOR '|||') as comment_authors,
             GROUP_CONCAT(DISTINCT tc.created_at ORDER BY tc.created_at DESC SEPARATOR '|||') as comment_dates
@@ -312,7 +301,7 @@ function getNumericTrades($db, $filter = 'pending', $asset_class_filter = 'all',
 }
 
 // ============================================
-// GET STATS
+// GET STATS - FIXED
 // ============================================
 function getNumericStats($db) {
     $stats = [
@@ -427,18 +416,6 @@ include '../includes/header.php';
             <?php echo htmlspecialchars($error_message); ?>
         </div>
     <?php endif; ?>
-
-    <!-- Debug Info (remove after fixing) -->
-    <div class="alert alert-info">
-        <i class="bi bi-info-circle me-2"></i>
-        <strong>Debug Info:</strong>
-        <ul class="mb-0 mt-1">
-            <li>numeric_trade_receipts table: <?php echo $db->query("SHOW TABLES LIKE 'numeric_trade_receipts'")->rowCount() > 0 ? '✅ Exists' : '❌ Missing'; ?></li>
-            <li>numeric_trade_comments table: <?php echo $db->query("SHOW TABLES LIKE 'numeric_trade_comments'")->rowCount() > 0 ? '✅ Exists' : '❌ Missing'; ?></li>
-            <li>additional_reference column: <?php echo $db->query("SHOW COLUMNS FROM trades LIKE 'additional_reference'")->rowCount() > 0 ? '✅ Exists' : '❌ Missing'; ?></li>
-            <li>Trades found: <?php echo count($trades); ?></li>
-        </ul>
-    </div>
 
     <!-- Alert Messages -->
     <?php if (isset($_SESSION['alert'])): ?>
@@ -594,6 +571,7 @@ include '../includes/header.php';
                                 
                                 // Get comments
                                 $commentText = '';
+                                $commentAuthor = '';
                                 if (!empty($trade['comments'])) {
                                     $comment_parts = explode('|||', $trade['comments']);
                                     $author_parts = !empty($trade['comment_authors']) ? explode('|||', $trade['comment_authors']) : [];
