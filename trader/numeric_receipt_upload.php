@@ -1,10 +1,10 @@
 <?php
 // ============================================
-// TRADER - NUMERIC REFERENCE RECEIPT UPLOAD (FIXED DATABASE INSERT)
+// TRADER - NUMERIC REFERENCE RECEIPT UPLOAD (SIMPLIFIED & WORKING)
 // ============================================
 
 error_reporting(E_ALL);
-ini_set('display_errors', 1); // Enable for debugging
+ini_set('display_errors', 1);
 ini_set('log_errors', 1);
 ini_set('error_log', __DIR__ . '/numeric_receipt_errors.log');
 
@@ -22,7 +22,7 @@ $current_user = get_logged_in_user() ?: get_session_user();
 $user_name = $current_user['username'] ?? 'System';
 
 // ============================================
-// HANDLE UPLOAD
+// HANDLE UPLOAD - SIMPLE VERSION
 // ============================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_receipt'])) {
     
@@ -35,7 +35,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_receipt'])) {
     }
     
     $uploaded_files = [];
-    $debug_info = [];
+    $errors = [];
     
     // Create upload directory
     $upload_dir = __DIR__ . '/../uploads/numeric_receipts/';
@@ -43,11 +43,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_receipt'])) {
         mkdir($upload_dir, 0777, true);
     }
     
-    $debug_info[] = "Upload directory: $upload_dir";
-    $debug_info[] = "Trade ID: $trade_id";
-    $debug_info[] = "User: $user_name";
-    
-    // Handle file uploads
+    // Handle file uploads - same as working public form
     if (isset($_FILES['payment_receipts']) && !empty($_FILES['payment_receipts']['name'][0])) {
         $allowed_exts = ['jpg', 'jpeg', 'png', 'gif', 'pdf'];
         $max_size = 5 * 1024 * 1024;
@@ -55,11 +51,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_receipt'])) {
         $files = $_FILES['payment_receipts'];
         $total_files = count($files['name']);
         
-        $debug_info[] = "Total files: $total_files";
-        
         for ($i = 0; $i < $total_files; $i++) {
-            $debug_info[] = "File $i: " . $files['name'][$i] . " (" . $files['size'][$i] . " bytes)";
-            
             if ($files['error'][$i] === UPLOAD_ERR_OK) {
                 $file_ext = strtolower(pathinfo($files['name'][$i], PATHINFO_EXTENSION));
                 if (in_array($file_ext, $allowed_exts) && $files['size'][$i] <= $max_size) {
@@ -68,79 +60,57 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_receipt'])) {
                     
                     if (move_uploaded_file($files['tmp_name'][$i], $filepath)) {
                         $uploaded_files[] = $filename;
-                        $debug_info[] = "✅ Uploaded: $filename";
-                    } else {
-                        $debug_info[] = "❌ Failed to move uploaded file";
                     }
-                } else {
-                    $debug_info[] = "❌ Invalid file type or size";
                 }
-            } else {
-                $debug_info[] = "❌ Upload error: " . $files['error'][$i];
             }
         }
-    } else {
-        $debug_info[] = "No files uploaded";
     }
     
-    $debug_info[] = "Uploaded files: " . implode(', ', $uploaded_files);
-    
-    // Save to database if files were uploaded
+    // Save to database - SIMPLIFIED
     if (!empty($uploaded_files)) {
         try {
             // Get existing receipts
             $stmt = $db->prepare("SELECT payment_receipt FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
             $stmt->execute([$trade_id]);
             $existing = $stmt->fetch(PDO::FETCH_ASSOC);
-            $debug_info[] = "Existing record: " . ($existing ? 'Found' : 'Not found');
             
             $existing_receipts = !empty($existing['payment_receipt']) ? explode(',', $existing['payment_receipt']) : [];
             $all_receipts = array_merge($existing_receipts, $uploaded_files);
             $receipts_str = implode(',', $all_receipts);
             
-            $debug_info[] = "Receipts string: $receipts_str";
-            
             // Check if record exists
             $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
             $stmt->execute([$trade_id]);
-            $record_exists = $stmt->fetch();
             
-            if ($record_exists) {
-                $debug_info[] = "Updating existing record";
+            if ($stmt->fetch()) {
                 $stmt = $db->prepare("UPDATE numeric_trade_receipts SET payment_receipt = ?, uploaded_by = ?, updated_at = NOW() WHERE trade_id = ? AND trade_type = 'trade'");
                 $result = $stmt->execute([$receipts_str, $user_name, $trade_id]);
             } else {
-                $debug_info[] = "Inserting new record";
                 $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, payment_receipt, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, NOW(), NOW())");
                 $result = $stmt->execute([$trade_id, $receipts_str, $user_name]);
             }
             
             if ($result) {
                 $_SESSION['alert'] = [count($uploaded_files) . ' receipt(s) uploaded successfully!', 'success'];
-                $debug_info[] = "✅ Database insert/update successful";
             } else {
-                $errorInfo = $stmt->errorInfo();
-                $debug_info[] = "❌ Database error: " . $errorInfo[2];
-                $_SESSION['alert'] = ['Database error: ' . $errorInfo[2], 'danger'];
+                $_SESSION['alert'] = ['Failed to save to database.', 'danger'];
             }
         } catch (Exception $e) {
-            $debug_info[] = "❌ Exception: " . $e->getMessage();
             $_SESSION['alert'] = ['Error: ' . $e->getMessage(), 'danger'];
         }
     } else {
-        $_SESSION['alert'] = ['No valid files uploaded.', 'danger'];
-        $debug_info[] = "❌ No valid files to save";
+        if (isset($_FILES['payment_receipts']) && !empty($_FILES['payment_receipts']['name'][0])) {
+            $_SESSION['alert'] = ['No valid files uploaded. Allowed: JPG, PNG, GIF, PDF (Max 5MB).', 'danger'];
+        } else {
+            $_SESSION['alert'] = ['No files selected for upload.', 'danger'];
+        }
     }
-    
-    // Save debug info
-    $_SESSION['upload_debug'] = implode("\n", $debug_info);
     
     // Redirect back with filters
     $redirect_params = array_filter([
         'filter' => $_POST['filter'] ?? 'pending',
         'asset_class' => $_POST['asset_class'] ?? 'all',
-        'search' => $_POST['search'] ?? '',
-        'debug' => 1
+        'search' => $_POST['search'] ?? ''
     ]);
     header('Location: numeric_receipt_upload.php?' . http_build_query($redirect_params));
     exit;
@@ -225,10 +195,9 @@ if (isset($_POST['add_comment']) && isset($_POST['trade_id'])) {
 $filter = $_GET['filter'] ?? 'pending';
 $asset_class_filter = $_GET['asset_class'] ?? 'all';
 $search = $_GET['search'] ?? '';
-$show_debug = isset($_GET['debug']);
 
 // ============================================
-// GET TRADES
+// GET TRADES - SIMPLIFIED
 // ============================================
 function getNumericTrades($db, $filter, $asset_class_filter, $search) {
     $sql = "
@@ -251,14 +220,14 @@ function getNumericTrades($db, $filter, $asset_class_filter, $search) {
             t.uploaded_by,
             t.status,
             t.created_at,
-            ANY_VALUE(tr.payment_receipt) as payment_receipt,
-            ANY_VALUE(tr.is_approved) as is_approved,
-            ANY_VALUE(tr.approved_by) as approved_by,
-            ANY_VALUE(tr.approved_at) as approved_at,
-            ANY_VALUE(tr.approval_comment) as approval_comment,
-            ANY_VALUE(tr.uploaded_by) as receipt_uploaded_by,
-            ANY_VALUE(tr.created_at) as receipt_created_at,
-            ANY_VALUE(tr.updated_at) as receipt_updated_at,
+            tr.payment_receipt,
+            tr.is_approved,
+            tr.approved_by,
+            tr.approved_at,
+            tr.approval_comment,
+            tr.uploaded_by as receipt_uploaded_by,
+            tr.created_at as receipt_created_at,
+            tr.updated_at as receipt_updated_at,
             GROUP_CONCAT(DISTINCT tc.comment ORDER BY tc.created_at DESC SEPARATOR '|||') as comments,
             GROUP_CONCAT(DISTINCT tc.created_by ORDER BY tc.created_at DESC SEPARATOR '|||') as comment_authors,
             GROUP_CONCAT(DISTINCT tc.created_at ORDER BY tc.created_at DESC SEPARATOR '|||') as comment_dates
@@ -293,15 +262,14 @@ function getNumericTrades($db, $filter, $asset_class_filter, $search) {
     }
     
     if (!empty($search)) {
-        $sql .= " AND (t.client_name LIKE ? OR t.security_id LIKE ? OR t.trade_reference LIKE ? OR t.exchange_reference LIKE ? OR t.additional_reference LIKE ?)";
+        $sql .= " AND (t.client_name LIKE ? OR t.security_id LIKE ? OR t.trade_reference LIKE ?)";
         $search_param = "%$search%";
-        $params[] = $search_param;
-        $params[] = $search_param;
         $params[] = $search_param;
         $params[] = $search_param;
         $params[] = $search_param;
     }
     
+    // GROUP BY with t.id only, and use ANY_VALUE for other columns or list them all
     $sql .= " GROUP BY t.id ORDER BY t.trade_date DESC, t.id DESC";
     
     $stmt = $db->prepare($sql);
@@ -310,7 +278,7 @@ function getNumericTrades($db, $filter, $asset_class_filter, $search) {
 }
 
 // ============================================
-// GET STATS
+// GET STATS - SIMPLIFIED
 // ============================================
 function getNumericStats($db) {
     $stats = ['total' => 0, 'pending' => 0, 'approved' => 0, 'rejected' => 0, 'bond' => 0, 'equity' => 0, 'etf' => 0];
@@ -382,28 +350,9 @@ include '../includes/header.php';
     .file-item .size { color: #6c757d; font-size: 11px; }
     .file-item .remove-file { cursor: pointer; color: #dc3545; font-weight: bold; padding: 0 5px; }
     .file-item .remove-file:hover { color: #a71d2a; }
-    .debug-box { background: #1a1a2e; color: #00ff41; padding: 15px; font-family: monospace; font-size: 12px; white-space: pre-wrap; max-height: 400px; overflow: auto; border-radius: 5px; }
 </style>
 
 <div class="container-fluid">
-    <!-- Debug Info -->
-    <?php if ($show_debug && isset($_SESSION['upload_debug'])): ?>
-        <div class="card mb-3 border-info">
-            <div class="card-header bg-info text-white">
-                <h6 class="mb-0">🔍 Debug Information</h6>
-            </div>
-            <div class="card-body">
-                <div class="debug-box"><?php echo htmlspecialchars($_SESSION['upload_debug']); ?></div>
-                <a href="numeric_receipt_upload.php?<?php echo http_build_query(array_filter([
-                    'filter' => $filter,
-                    'asset_class' => $asset_class_filter,
-                    'search' => $search
-                ])); ?>" class="btn btn-secondary btn-sm mt-2">Hide Debug</a>
-            </div>
-        </div>
-        <?php unset($_SESSION['upload_debug']); ?>
-    <?php endif; ?>
-
     <!-- Page Header -->
     <div class="row mb-3">
         <div class="col-12">
@@ -455,15 +404,6 @@ include '../includes/header.php';
                 </div>
                 <div class="col-md-3">
                     <button type="submit" class="btn btn-primary btn-sm w-100">Apply</button>
-                    <?php if ($show_debug): ?>
-                        <a href="numeric_receipt_upload.php?<?php echo http_build_query(array_filter([
-                            'filter' => $filter,
-                            'asset_class' => $asset_class_filter,
-                            'search' => $search
-                        ])); ?>" class="btn btn-secondary btn-sm w-100 mt-1">Hide Debug</a>
-                    <?php else: ?>
-                        <a href="numeric_receipt_upload.php?<?php echo http_build_query(array_merge($_GET, ['debug' => 1])); ?>" class="btn btn-outline-info btn-sm w-100 mt-1">Show Debug</a>
-                    <?php endif; ?>
                 </div>
             </form>
         </div>
@@ -698,7 +638,7 @@ function openCommentModal(tradeId) {
 }
 
 // File preview
-document.getElementById('uploadModal')?.addEventListener('change', function(e) {
+document.addEventListener('change', function(e) {
     if (e.target && e.target.id === 'receipt_files') {
         const files = e.target.files;
         const fileList = document.getElementById('fileList');
