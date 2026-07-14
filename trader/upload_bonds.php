@@ -174,6 +174,14 @@ class DealingSheetPDF extends TCPDF {
         $order_datetime = ($sheet['order_date'] ?? date('Y-m-d')) . ' ' . ($sheet['order_time'] ?? '');
         $this->Cell(0, 7, date('d/m/Y H:i', strtotime($order_datetime)), 0, 1);
         
+        // NEW: Display Additional Reference if present
+        if (!empty($sheet['additional_reference'])) {
+            $this->SetFont('helvetica', '', 10);
+            $this->Cell(50, 7, 'Additional Reference:', 0, 0);
+            $this->SetFont('helvetica', 'B', 10);
+            $this->Cell(0, 7, $sheet['additional_reference'], 0, 1);
+        }
+        
         $this->Ln(4);
         
         // ============================================
@@ -609,8 +617,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
             $data['order_value'] = $qty * $price;
         }
         
+        // ============================================
+        // NEW: Get additional_reference from form data
+        // ============================================
+        $additional_reference = isset($data['additional_reference']) ? trim($data['additional_reference']) : '';
+        
         if (!empty($data['id'])) {
-            // Update existing
+            // Update existing - ADDED additional_reference
             $sql = "UPDATE dealing_sheets SET 
                 client_name = :client_name,
                 client_cds_account = :client_cds_account,
@@ -631,6 +644,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
                 trade_date = :trade_date,
                 settlement_date = :settlement_date,
                 execution_time = :execution_time,
+                additional_reference = :additional_reference,
                 updated_at = NOW()
                 WHERE id = :id";
             
@@ -655,22 +669,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
                 ':executed_price' => !empty($data['executed_price']) ? $data['executed_price'] : null,
                 ':trade_date' => !empty($data['trade_date']) ? $data['trade_date'] : null,
                 ':settlement_date' => !empty($data['settlement_date']) ? $data['settlement_date'] : null,
-                ':execution_time' => !empty($data['execution_time']) ? $data['execution_time'] : null
+                ':execution_time' => !empty($data['execution_time']) ? $data['execution_time'] : null,
+                ':additional_reference' => $additional_reference
             ]);
         } else {
-            // Insert new
+            // Insert new - ADDED additional_reference
             $sql = "INSERT INTO dealing_sheets (
                 sheet_reference, client_name, client_cds_account, security_id, security_name,
                 order_type, asset_class, quantity, order_price, order_value, order_date, order_time,
                 priority, remarks, broker_code, executed_quantity, executed_price,
                 trade_date, settlement_date, execution_time, lifecycle_stage, execution_status,
-                recorded_at, created_at, dealer_name
+                additional_reference, recorded_at, created_at, dealer_name
             ) VALUES (
                 :sheet_reference, :client_name, :client_cds_account, :security_id, :security_name,
                 :order_type, :asset_class, :quantity, :order_price, :order_value, :order_date, :order_time,
                 :priority, :remarks, :broker_code, :executed_quantity, :executed_price,
                 :trade_date, :settlement_date, :execution_time, 'order', 'pending',
-                NOW(), NOW(), :dealer_name
+                :additional_reference, NOW(), NOW(), :dealer_name
             )";
             
             $stmt = $db->prepare($sql);
@@ -695,6 +710,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
                 ':trade_date' => !empty($data['trade_date']) ? $data['trade_date'] : null,
                 ':settlement_date' => !empty($data['settlement_date']) ? $data['settlement_date'] : null,
                 ':execution_time' => !empty($data['execution_time']) ? $data['execution_time'] : null,
+                ':additional_reference' => $additional_reference,
                 ':dealer_name' => dealingSheetGetCurrentUserDisplayName($current_user)
             ]);
         }
@@ -906,6 +922,14 @@ include '../includes/header.php';
         background-color: #e3f2fd; 
         border-left: 3px solid #1976d2 !important;
     }
+    .additional-ref-badge {
+        background-color: #e8f5e9;
+        color: #2e7d32;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 11px;
+        border: 1px solid #a5d6a7;
+    }
 </style>
 
 <!-- Modal for Order Entry -->
@@ -984,6 +1008,14 @@ include '../includes/header.php';
                         <div class="col-md-3">
                             <label class="form-label fw-semibold">Broker Code</label>
                             <input class="form-control" name="broker_code" id="broker_code" value="<?php echo htmlspecialchars($company['company_code'] ?? ''); ?>">
+                        </div>
+                        
+                        <!-- NEW: Additional Reference Field -->
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Additional Reference</label>
+                            <input type="text" class="form-control" name="additional_reference" id="additional_reference" 
+                                   placeholder="Enter reference number or MTP..." maxlength="100">
+                            <small class="text-muted">Optional: Can contain a number, be empty, or contain "MTP"</small>
                         </div>
                         
                         <div class="col-12">
@@ -1083,13 +1115,14 @@ include '../includes/header.php';
                             <th class="text-end">Price</th>
                             <th class="text-end">Value</th>
                             <th>Date</th>
+                            <th>Additional Ref</th>
                             <th>Status</th>
                             <th class="text-end">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
                         <?php if (empty($sheets)): ?>
-                            <tr><td colspan="11" class="text-center py-5 text-muted">No orders found</td></tr>
+                            <tr><td colspan="12" class="text-center py-5 text-muted">No orders found</td></tr>
                         <?php else: ?>
                             <?php foreach ($sheets as $sheet): 
                                 $isOldOrder = strtotime($sheet['order_date'] ?? '') < strtotime(date('Y-m-d'));
@@ -1112,6 +1145,11 @@ include '../includes/header.php';
                                     $displayValue = 'TZS ' . number_format(floatval($sheet['order_value'] ?? 0), 2);
                                     $assetClassDisplay = '<span class="badge bg-secondary">' . ucfirst($sheet['asset_class'] ?? 'Equity') . '</span>';
                                 }
+                                
+                                // Display Additional Reference
+                                $additionalRef = !empty($sheet['additional_reference']) ? 
+                                    '<span class="additional-ref-badge">' . htmlspecialchars($sheet['additional_reference']) . '</span>' : 
+                                    '<span class="text-muted">-</span>';
                             ?>
                                 <tr class="<?php echo $rowClass; ?>">
                                     <td><span class="fw-semibold"><?php echo htmlspecialchars($sheet['sheet_reference'] ?? 'N/A'); ?></span></td>
@@ -1123,6 +1161,7 @@ include '../includes/header.php';
                                     <td class="text-end"><?php echo $displayPrice; ?></td>
                                     <td class="text-end"><?php echo $displayValue; ?></td>
                                     <td><?php echo htmlspecialchars($sheet['order_date'] ?? ''); ?></td>
+                                    <td><?php echo $additionalRef; ?></td>
                                     <td>
                                         <?php if (($sheet['execution_status'] ?? '') === 'executed'): ?>
                                             <span class="badge bg-success">Executed</span>
@@ -1169,6 +1208,7 @@ function resetOrderForm() {
     document.getElementById('security_name').value = '';
     document.getElementById('security_search').value = '';
     document.getElementById('security_info').innerHTML = '';
+    document.getElementById('additional_reference').value = ''; // NEW: Reset additional reference
     document.getElementById('order_date').value = '<?php echo date('Y-m-d'); ?>';
     document.getElementById('trade_date').value = '<?php echo date('Y-m-d'); ?>';
     document.getElementById('settlement_date').value = '<?php echo date('Y-m-d', strtotime('+2 days')); ?>';
@@ -1194,6 +1234,8 @@ function editOrder(sheet) {
     document.getElementById('security_search').value = sheet.security_name || '';
     document.getElementById('order_type').value = sheet.order_type || 'buy';
     document.getElementById('asset_class').value = sheet.asset_class || 'equity';
+    // NEW: Set additional reference
+    document.getElementById('additional_reference').value = sheet.additional_reference || '';
     let priorityVal = 'normal';
     if (sheet.priority === 'Urgent') priorityVal = 'urgent';
     else if (sheet.priority === 'Most Important') priorityVal = 'most_important';
