@@ -56,7 +56,6 @@ try {
         error_log("Created numeric_trade_receipts table");
     }
     
-    // Add comment column if it doesn't exist
     $checkColumn = $db->query("SHOW COLUMNS FROM numeric_trade_receipts LIKE 'comment'");
     if ($checkColumn->rowCount() == 0) {
         $db->exec("ALTER TABLE numeric_trade_receipts ADD COLUMN comment TEXT AFTER payment_receipt");
@@ -85,14 +84,12 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
         mkdir($upload_dir, 0777, true);
     }
     
-    // Get existing receipts and comment
     $stmt = $db->prepare("SELECT payment_receipt, comment FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
     $stmt->execute([$trade_id]);
     $existing = $stmt->fetch(PDO::FETCH_ASSOC);
     $existing_receipts = !empty($existing['payment_receipt']) ? explode(',', $existing['payment_receipt']) : [];
     $existing_comment = $existing['comment'] ?? '';
     
-    // Handle file uploads
     if (isset($_FILES['payment_receipts']) && !empty($_FILES['payment_receipts']['name'][0])) {
         $files = $_FILES['payment_receipts'];
         $total_files = count($files['name']);
@@ -125,7 +122,6 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
         }
     }
     
-    // Combine comment
     $full_comment = $existing_comment;
     if (!empty($comment)) {
         $timestamp = date('Y-m-d H:i:s');
@@ -134,7 +130,6 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
             : "[" . $timestamp . "] " . $user_name . ": " . $comment;
     }
     
-    // Update database
     $receipts_str = !empty($uploaded_files) ? implode(',', array_merge($existing_receipts, $uploaded_files)) : $existing['payment_receipt'] ?? null;
     
     $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
@@ -410,7 +405,7 @@ include '../includes/header.php';
 ?>
 
 <style>
-    /* Simple clean styles - like dealing_sheet.php */
+    /* Simple clean styles - NO COLORS */
     .receipt-thumbnails {
         display: flex;
         gap: 5px;
@@ -421,14 +416,13 @@ include '../includes/header.php';
         position: relative;
         width: 50px;
         height: 50px;
-        border: 2px solid #e9ecef;
-        border-radius: 6px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
         overflow: hidden;
         cursor: pointer;
-        transition: border-color 0.2s;
     }
     .receipt-thumbnails .thumbnail:hover {
-        border-color: #0d6efd;
+        border-color: #666;
     }
     .receipt-thumbnails .thumbnail img {
         width: 100%;
@@ -443,7 +437,7 @@ include '../includes/header.php';
         justify-content: center;
         font-size: 24px;
         background: #f8f9fa;
-        color: #6c757d;
+        color: #666;
     }
     .receipt-thumbnails .delete-btn {
         position: absolute;
@@ -459,15 +453,14 @@ include '../includes/header.php';
         justify-content: center;
         font-size: 12px;
         text-decoration: none;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-        transition: transform 0.2s;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.3);
     }
     .receipt-thumbnails .delete-btn:hover {
         transform: scale(1.1);
         color: white;
     }
     .receipt-thumbnails .more-badge {
-        background: #0d6efd;
+        background: #6c757d;
         color: white;
         border-radius: 50%;
         width: 30px;
@@ -481,9 +474,9 @@ include '../includes/header.php';
     
     .comment-display {
         background: #f8f9fa;
-        border-left: 3px solid #0d6efd;
+        border-left: 2px solid #6c757d;
         padding: 6px 10px;
-        border-radius: 4px;
+        border-radius: 3px;
         font-size: 12px;
         max-width: 200px;
         margin-top: 4px;
@@ -501,8 +494,8 @@ include '../includes/header.php';
     
     /* Drop Zone */
     .drop-zone {
-        border: 2px dashed #dee2e6;
-        border-radius: 8px;
+        border: 2px dashed #ddd;
+        border-radius: 6px;
         padding: 30px;
         text-align: center;
         transition: border-color 0.3s, background-color 0.3s;
@@ -510,24 +503,24 @@ include '../includes/header.php';
         margin-bottom: 15px;
     }
     .drop-zone:hover {
-        border-color: #0d6efd;
+        border-color: #666;
         background-color: #f8f9fa;
     }
     .drop-zone.dragover {
-        border-color: #0d6efd;
-        background-color: #e7f1ff;
+        border-color: #666;
+        background-color: #f0f0f0;
     }
     .drop-zone .icon {
         font-size: 40px;
-        color: #6c757d;
+        color: #999;
         margin-bottom: 10px;
     }
     .drop-zone .text {
-        color: #6c757d;
+        color: #666;
         font-size: 14px;
     }
     .drop-zone .text strong {
-        color: #0d6efd;
+        color: #333;
     }
     
     .file-list {
@@ -560,7 +553,7 @@ include '../includes/header.php';
         max-width: 200px;
     }
     .file-item .file-info .size {
-        color: #6c757d;
+        color: #999;
         font-size: 12px;
         white-space: nowrap;
     }
@@ -586,8 +579,8 @@ include '../includes/header.php';
     .file-preview-thumbnails .thumb {
         width: 70px;
         height: 70px;
-        border: 2px solid #dee2e6;
-        border-radius: 6px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
         overflow: hidden;
         display: flex;
         align-items: center;
@@ -602,7 +595,7 @@ include '../includes/header.php';
     }
     .file-preview-thumbnails .thumb .file-icon-big {
         font-size: 30px;
-        color: #6c757d;
+        color: #999;
     }
     .file-preview-thumbnails .thumb .thumb-remove {
         position: absolute;
@@ -625,27 +618,31 @@ include '../includes/header.php';
         background: #a71d2a;
     }
     
-    .stat-card {
-        transition: transform 0.2s, box-shadow 0.2s;
+    /* Small Stat Boxes - NO COLORS */
+    .stat-box {
+        background: #f8f9fa;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        padding: 8px 12px;
+        text-align: center;
     }
-    .stat-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    .stat-box .stat-number {
+        font-size: 20px;
+        font-weight: 600;
+        color: #333;
     }
-    .stat-card .stat-number {
-        font-size: 24px;
-        font-weight: bold;
-    }
-    .stat-card .stat-label {
-        font-size: 13px;
-        color: #6c757d;
+    .stat-box .stat-label {
+        font-size: 11px;
+        color: #666;
+        margin-top: 2px;
     }
     
     .filter-section {
         background: #f8f9fa;
         padding: 15px;
-        border-radius: 6px;
+        border-radius: 4px;
         margin-bottom: 20px;
+        border: 1px solid #e9ecef;
     }
     .filter-section .form-label {
         font-size: 12px;
@@ -658,6 +655,36 @@ include '../includes/header.php';
         padding: 6px 8px;
         font-size: 13px;
     }
+    
+    .badge-status {
+        font-size: 11px;
+        padding: 3px 8px;
+        border-radius: 3px;
+    }
+    .badge-status.pending {
+        background: #f8f9fa;
+        color: #856404;
+        border: 1px solid #ffc107;
+    }
+    .badge-status.approved {
+        background: #f8f9fa;
+        color: #155724;
+        border: 1px solid #28a745;
+    }
+    .badge-status.rejected {
+        background: #f8f9fa;
+        color: #721c24;
+        border: 1px solid #dc3545;
+    }
+    
+    .badge-asset {
+        font-size: 11px;
+        padding: 3px 8px;
+        border-radius: 3px;
+        background: #f8f9fa;
+        border: 1px solid #ddd;
+        color: #333;
+    }
 </style>
 
 <div class="container-fluid">
@@ -666,10 +693,10 @@ include '../includes/header.php';
         <div class="col-12">
             <div class="d-flex justify-content-between align-items-center">
                 <div>
-                    <h4>
+                    <h4 class="mb-0">
                         <i class="bi bi-receipt"></i> Numeric Reference Receipt Upload
-                        <small class="text-muted">(Additional Reference = Number only)</small>
                     </h4>
+                    <small class="text-muted">Additional Reference = Number only</small>
                 </div>
             </div>
         </div>
@@ -678,7 +705,6 @@ include '../includes/header.php';
     <!-- Alert Messages -->
     <?php if (isset($_SESSION['alert'])): ?>
         <div class="alert alert-<?php echo $_SESSION['alert'][1]; ?> alert-dismissible fade show">
-            <i class="bi <?php echo $_SESSION['alert'][1] === 'success' ? 'bi-check-circle' : 'bi-exclamation-triangle'; ?>"></i>
             <?php echo htmlspecialchars($_SESSION['alert'][0]); ?>
             <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
         </div>
@@ -689,50 +715,40 @@ include '../includes/header.php';
         <div class="alert alert-danger"><?php echo htmlspecialchars($error_message); ?></div>
     <?php endif; ?>
 
-    <!-- Stats -->
+    <!-- Small Stat Boxes -->
     <div class="row mb-3 g-2">
-        <div class="col-md-2 col-6">
-            <div class="card stat-card border-primary">
-                <div class="card-body text-center">
-                    <div class="stat-number text-primary"><?php echo number_format($stats['total']); ?></div>
-                    <div class="stat-label">Total</div>
-                </div>
+        <div class="col-md-2 col-4">
+            <div class="stat-box">
+                <div class="stat-number"><?php echo number_format($stats['total']); ?></div>
+                <div class="stat-label">Total</div>
             </div>
         </div>
-        <div class="col-md-2 col-6">
-            <div class="card stat-card border-warning">
-                <div class="card-body text-center">
-                    <div class="stat-number text-warning"><?php echo number_format($stats['pending']); ?></div>
-                    <div class="stat-label">Pending</div>
-                </div>
+        <div class="col-md-2 col-4">
+            <div class="stat-box">
+                <div class="stat-number"><?php echo number_format($stats['pending']); ?></div>
+                <div class="stat-label">Pending</div>
             </div>
         </div>
-        <div class="col-md-2 col-6">
-            <div class="card stat-card border-success">
-                <div class="card-body text-center">
-                    <div class="stat-number text-success"><?php echo number_format($stats['approved']); ?></div>
-                    <div class="stat-label">Approved</div>
-                </div>
+        <div class="col-md-2 col-4">
+            <div class="stat-box">
+                <div class="stat-number"><?php echo number_format($stats['approved']); ?></div>
+                <div class="stat-label">Approved</div>
             </div>
         </div>
-        <div class="col-md-2 col-6">
-            <div class="card stat-card border-danger">
-                <div class="card-body text-center">
-                    <div class="stat-number text-danger"><?php echo number_format($stats['rejected']); ?></div>
-                    <div class="stat-label">Rejected</div>
-                </div>
+        <div class="col-md-2 col-4">
+            <div class="stat-box">
+                <div class="stat-number"><?php echo number_format($stats['rejected']); ?></div>
+                <div class="stat-label">Rejected</div>
             </div>
         </div>
-        <div class="col-md-4 col-12">
-            <div class="card stat-card">
-                <div class="card-body text-center">
-                    <div>
-                        <span class="badge bg-secondary">B: <?php echo $stats['bond']; ?></span>
-                        <span class="badge bg-secondary">E: <?php echo $stats['equity']; ?></span>
-                        <span class="badge bg-secondary">F: <?php echo $stats['etf']; ?></span>
-                    </div>
-                    <div class="stat-label">Breakdown</div>
+        <div class="col-md-4 col-8">
+            <div class="stat-box">
+                <div class="stat-number">
+                    <span class="badge-asset">B: <?php echo $stats['bond']; ?></span>
+                    <span class="badge-asset">E: <?php echo $stats['equity']; ?></span>
+                    <span class="badge-asset">F: <?php echo $stats['etf']; ?></span>
                 </div>
+                <div class="stat-label">Breakdown</div>
             </div>
         </div>
     </div>
@@ -812,7 +828,7 @@ include '../includes/header.php';
                                 
                                 $isApproved = isset($trade['is_approved']) ? (int)$trade['is_approved'] : 0;
                                 $statusText = $isApproved === 1 ? 'Approved' : ($isApproved === 2 ? 'Rejected' : 'Pending');
-                                $statusClass = $isApproved === 1 ? 'success' : ($isApproved === 2 ? 'danger' : 'warning');
+                                $statusClass = $isApproved === 1 ? 'approved' : ($isApproved === 2 ? 'rejected' : 'pending');
                                 
                                 if ($isBond) {
                                     $displayQty = 'TZS ' . number_format(floatval($trade['quantity'] ?? 0), 2);
@@ -829,7 +845,7 @@ include '../includes/header.php';
                                     <td><span class="fw-semibold small"><?php echo htmlspecialchars($trade['trade_reference'] ?? ''); ?></span></td>
                                     <td><?php echo htmlspecialchars($trade['client_name'] ?? ''); ?></td>
                                     <td><?php echo htmlspecialchars($trade['security_id'] ?? ''); ?></td>
-                                    <td><span class="badge bg-secondary"><?php echo $assetClass; ?></span></td>
+                                    <td><span class="badge-asset"><?php echo $assetClass; ?></span></td>
                                     <td>
                                         <span class="badge <?php echo strtolower($trade['trade_side'] ?? '') === 'buy' ? 'bg-success' : 'bg-danger'; ?>">
                                             <?php echo strtoupper($trade['trade_side'] ?? ''); ?>
@@ -891,15 +907,15 @@ include '../includes/header.php';
                                             </div>
                                         <?php endif; ?>
                                     </td>
-                                    <td><span class="badge bg-<?php echo $statusClass; ?>"><?php echo $statusText; ?></span></td>
+                                    <td><span class="badge-status <?php echo $statusClass; ?>"><?php echo $statusText; ?></span></td>
                                     <td class="text-end">
                                         <div class="btn-group btn-group-sm" role="group">
                                             <?php if ($isApproved !== 1): ?>
-                                                <button class="btn btn-outline-primary" onclick="openUploadModal(<?php echo $trade['id']; ?>)" title="Upload Files / Add Comment">
+                                                <button class="btn btn-outline-secondary" onclick="openUploadModal(<?php echo $trade['id']; ?>)" title="Upload Files / Add Comment">
                                                     <i class="bi bi-upload"></i>
                                                 </button>
                                             <?php endif; ?>
-                                            <button class="btn btn-outline-info" onclick="viewTrade(<?php echo $trade['id']; ?>)" title="View Details">
+                                            <button class="btn btn-outline-secondary" onclick="viewTrade(<?php echo $trade['id']; ?>)" title="View Details">
                                                 <i class="bi bi-eye"></i>
                                             </button>
                                         </div>
@@ -983,7 +999,7 @@ include '../includes/header.php';
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary" id="uploadBtn" disabled>
+                    <button type="submit" class="btn btn-secondary" id="uploadBtn" disabled>
                         <i class="bi bi-upload"></i> Upload <span id="fileCount">0</span> Files
                     </button>
                 </div>
@@ -1004,10 +1020,10 @@ include '../includes/header.php';
             </div>
             <div class="modal-body" id="tradeDetails">
                 <div class="text-center py-3">
-                    <div class="spinner-border text-primary" role="status">
+                    <div class="spinner-border text-secondary" role="status">
                         <span class="visually-hidden">Loading...</span>
                     </div>
-                    <p class="mt-2">Loading trade details...</p>
+                    <p class="text-muted mt-2">Loading trade details...</p>
                 </div>
             </div>
         </div>
@@ -1016,20 +1032,20 @@ include '../includes/header.php';
 
 <script>
 // ============================================
-// FILE UPLOAD HANDLING
+// FILE UPLOAD HANDLING - FIXED
 // ============================================
 
 let selectedFiles = [];
 
-// File input change handler
+// File input change handler - FIXED: Properly track files
 document.getElementById('fileInput').addEventListener('change', function(e) {
     const files = Array.from(e.target.files);
+    selectedFiles = []; // Clear existing selection
     files.forEach(file => {
-        if (!selectedFiles.some(f => f.name === file.name && f.size === file.size)) {
-            selectedFiles.push(file);
-        }
+        selectedFiles.push(file);
     });
     updateFileList();
+    console.log('Files selected:', selectedFiles.length);
 });
 
 // Drag and drop
@@ -1050,16 +1066,16 @@ dropZone.addEventListener('drop', function(e) {
     this.classList.remove('dragover');
     
     const files = Array.from(e.dataTransfer.files);
+    selectedFiles = [];
     files.forEach(file => {
-        if (!selectedFiles.some(f => f.name === file.name && f.size === file.size)) {
-            selectedFiles.push(file);
-        }
+        selectedFiles.push(file);
     });
     updateFileList();
     
     const dataTransfer = new DataTransfer();
     selectedFiles.forEach(file => dataTransfer.items.add(file));
     document.getElementById('fileInput').files = dataTransfer.files;
+    console.log('Files dropped:', selectedFiles.length);
 });
 
 dropZone.addEventListener('click', function() {
@@ -1175,10 +1191,10 @@ function viewTrade(tradeId) {
     const container = document.getElementById('tradeDetails');
     container.innerHTML = `
         <div class="text-center py-3">
-            <div class="spinner-border text-primary" role="status">
+            <div class="spinner-border text-secondary" role="status">
                 <span class="visually-hidden">Loading...</span>
             </div>
-            <p class="mt-2">Loading trade details...</p>
+            <p class="text-muted mt-2">Loading trade details...</p>
         </div>
     `;
     modal.show();
@@ -1219,7 +1235,7 @@ function viewTrade(tradeId) {
                     </div>
                     <div class="border-bottom pb-2 mb-2">
                         <small class="text-muted">Status</small>
-                        <div><span class="badge bg-warning">Pending</span></div>
+                        <div><span class="badge-status pending">Pending</span></div>
                     </div>
                 </div>
                 <div class="col-12">
@@ -1237,7 +1253,6 @@ function viewTrade(tradeId) {
 // ============================================
 
 document.getElementById('uploadForm').addEventListener('submit', function(e) {
-    // Allow submission if files are selected OR comment is entered
     const comment = document.getElementById('receiptComment').value.trim();
     
     if (selectedFiles.length === 0 && !comment) {
@@ -1246,7 +1261,6 @@ document.getElementById('uploadForm').addEventListener('submit', function(e) {
         return false;
     }
     
-    // If files are selected, ensure the file input has them
     if (selectedFiles.length > 0) {
         const fileInput = document.getElementById('fileInput');
         const dataTransfer = new DataTransfer();
