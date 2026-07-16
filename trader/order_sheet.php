@@ -50,6 +50,7 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
     error_log("=== Upload Debug ===");
     error_log("POST: " . print_r($_POST, true));
     error_log("FILES: " . print_r($_FILES, true));
+    error_log("FILES['receipt_files']: " . print_r($_FILES['receipt_files'] ?? 'NOT SET', true));
     
     // Get existing receipts
     $stmt = $db->prepare("SELECT receipt_files FROM trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
@@ -57,6 +58,7 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
     $existing = $stmt->fetch(PDO::FETCH_ASSOC);
     $existing_receipts = !empty($existing['receipt_files']) ? explode(',', $existing['receipt_files']) : [];
     
+    // Check if files were uploaded
     if (isset($_FILES['receipt_files']) && !empty($_FILES['receipt_files']['name'][0])) {
         $files = $_FILES['receipt_files'];
         $total_files = count($files['name']);
@@ -603,7 +605,7 @@ include '../includes/header.php';
         white-space: nowrap;
     }
     
-    /* Selected files preview in modal */
+    /* File preview thumbnails */
     .file-preview-thumbnails {
         display: flex;
         gap: 8px;
@@ -650,6 +652,12 @@ include '../includes/header.php';
     }
     .file-preview-thumbnails .thumb .thumb-remove:hover {
         background: #a71d2a;
+    }
+    
+    /* Upload button disabled state */
+    #uploadBtn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
     }
 </style>
 
@@ -1089,22 +1097,24 @@ include '../includes/header.php';
 
 <script>
 // ============================================
-// FILE UPLOAD HANDLING - FIXED AND IMPROVED
+// FILE UPLOAD HANDLING - FIXED
 // ============================================
 
 let selectedFiles = [];
 
-// File input change handler - FIXED: Don't clear the input
+// ============================================
+// CRITICAL FIX: Don't clear the file input!
+// ============================================
 document.getElementById('fileInput').addEventListener('change', function(e) {
     const files = Array.from(e.target.files);
     files.forEach(file => {
-        // Check if file already selected (by name and size)
+        // Check if file already selected
         if (!selectedFiles.some(f => f.name === file.name && f.size === file.size)) {
             selectedFiles.push(file);
         }
     });
     updateFileList();
-    // DO NOT clear e.target.value here - let the form handle it
+    // REMOVED: e.target.value = ''; // This was the bug!
 });
 
 // Drag and drop
@@ -1142,16 +1152,18 @@ dropZone.addEventListener('click', function() {
     document.getElementById('fileInput').click();
 });
 
-// Update file list display
+// Update file list display with thumbnails
 function updateFileList() {
     const container = document.getElementById('fileList');
     const fileCount = document.getElementById('fileCount');
     const uploadBtn = document.getElementById('uploadBtn');
     const thumbnailsContainer = document.getElementById('filePreviewThumbnails');
     
+    // Clear thumbnails
+    thumbnailsContainer.innerHTML = '';
+    
     if (selectedFiles.length === 0) {
         container.innerHTML = '<p class="text-muted small">No files selected</p>';
-        thumbnailsContainer.innerHTML = '';
         fileCount.textContent = '0';
         uploadBtn.disabled = true;
         uploadBtn.innerHTML = '<i class="bi bi-upload"></i> Upload 0 Files';
@@ -1182,7 +1194,6 @@ function updateFileList() {
     container.innerHTML = html;
     
     // Build thumbnails for images
-    let thumbHtml = '';
     selectedFiles.forEach((file, index) => {
         if (file.type.startsWith('image/')) {
             const reader = new FileReader();
@@ -1232,6 +1243,7 @@ function clearSelectedFiles() {
     selectedFiles = [];
     updateFileList();
     document.getElementById('fileInput').value = '';
+    document.getElementById('filePreviewThumbnails').innerHTML = '';
 }
 
 // ============================================
@@ -1350,7 +1362,7 @@ document.getElementById('uploadForm').addEventListener('submit', function(e) {
         return false;
     }
     
-    // Ensure the file input has the files
+    // CRITICAL FIX: Ensure the file input has the files
     const fileInput = document.getElementById('fileInput');
     const dataTransfer = new DataTransfer();
     selectedFiles.forEach(file => dataTransfer.items.add(file));
