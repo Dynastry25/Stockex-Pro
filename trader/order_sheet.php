@@ -29,6 +29,48 @@ $user_name = $current_user['username'] ?? 'System';
 $user_id = $current_user['id'] ?? null;
 
 // ============================================
+// CHECK AND CREATE TABLE IF NOT EXISTS
+// ============================================
+try {
+    // Check if trade_receipts table exists, if not create it
+    $checkTable = $db->query("SHOW TABLES LIKE 'trade_receipts'");
+    if ($checkTable->rowCount() == 0) {
+        $createTable = "
+            CREATE TABLE trade_receipts (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                trade_id INT NOT NULL,
+                trade_type VARCHAR(50) DEFAULT 'trade',
+                receipt_files TEXT,
+                comment TEXT,
+                uploaded_by VARCHAR(100),
+                created_at DATETIME,
+                updated_at DATETIME,
+                INDEX idx_trade_id (trade_id),
+                INDEX idx_trade_type (trade_type)
+            )
+        ";
+        $db->exec($createTable);
+        error_log("Created trade_receipts table");
+    }
+    
+    // Check if comment column exists in trade_receipts, if not add it
+    $checkColumn = $db->query("SHOW COLUMNS FROM trade_receipts LIKE 'comment'");
+    if ($checkColumn->rowCount() == 0) {
+        $db->exec("ALTER TABLE trade_receipts ADD COLUMN comment TEXT AFTER receipt_files");
+        error_log("Added comment column to trade_receipts");
+    }
+    
+    // Check if uploaded_by column exists, if not add it
+    $checkUploadedBy = $db->query("SHOW COLUMNS FROM trade_receipts LIKE 'uploaded_by'");
+    if ($checkUploadedBy->rowCount() == 0) {
+        $db->exec("ALTER TABLE trade_receipts ADD COLUMN uploaded_by VARCHAR(100) AFTER comment");
+        error_log("Added uploaded_by column to trade_receipts");
+    }
+} catch (Exception $e) {
+    error_log("Table setup error: " . $e->getMessage());
+}
+
+// ============================================
 // HANDLE FILE UPLOADS
 // ============================================
 
@@ -37,6 +79,7 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
     $trade_id = (int) $_POST['trade_id'];
     $uploaded_files = [];
     $errors = [];
+    $comment = trim($_POST['receipt_comment'] ?? '');
     
     $allowed_exts = ['jpg', 'jpeg', 'png', 'gif', 'pdf', 'doc', 'docx', 'xls', 'xlsx'];
     $max_size = 10 * 1024 * 1024; // 10MB
@@ -46,19 +89,13 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
         mkdir($upload_dir, 0777, true);
     }
     
-    // Debug logging
-    error_log("=== Upload Debug ===");
-    error_log("POST: " . print_r($_POST, true));
-    error_log("FILES: " . print_r($_FILES, true));
-    error_log("FILES['receipt_files']: " . print_r($_FILES['receipt_files'] ?? 'NOT SET', true));
-    
     // Get existing receipts
-    $stmt = $db->prepare("SELECT receipt_files FROM trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+    $stmt = $db->prepare("SELECT receipt_files, comment FROM trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
     $stmt->execute([$trade_id]);
     $existing = $stmt->fetch(PDO::FETCH_ASSOC);
     $existing_receipts = !empty($existing['receipt_files']) ? explode(',', $existing['receipt_files']) : [];
+    $existing_comment = $existing['comment'] ?? '';
     
-    // Check if files were uploaded
     if (isset($_FILES['receipt_files']) && !empty($_FILES['receipt_files']['name'][0])) {
         $files = $_FILES['receipt_files'];
         $total_files = count($files['name']);
@@ -66,7 +103,6 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
         for ($i = 0; $i < $total_files; $i++) {
             if ($files['error'][$i] !== UPLOAD_ERR_OK) {
                 $errors[] = "File '{$files['name'][$i]}' upload error: " . $files['error'][$i];
-                error_log("Upload error for {$files['name'][$i]}: " . $files['error'][$i]);
                 continue;
             }
             
@@ -86,10 +122,8 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
             
             if (move_uploaded_file($files['tmp_name'][$i], $filepath)) {
                 $uploaded_files[] = $filename;
-                error_log("Successfully uploaded: $filename");
             } else {
                 $errors[] = "Failed to upload file '{$files['name'][$i]}'";
-                error_log("Failed to move uploaded file: {$files['tmp_name'][$i]} to $filepath");
             }
         }
         
@@ -97,29 +131,61 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
             $all_receipts = array_merge($existing_receipts, $uploaded_files);
             $receipts_str = implode(',', $all_receipts);
             
+            // Combine comments
+            $full_comment = $existing_comment;
+            if (!empty($comment)) {
+                $timestamp = date('Y-m-d H:i:s');
+                $full_comment = $existing_comment 
+                    ? $existing_comment . "\n---\n[" . $timestamp . "] " . $user_name . ": " . $comment 
+                    : "[" . $timestamp . "] " . $user_name . ": " . $comment;
+            }
+            
             // Check if record exists
             $stmt = $db->prepare("SELECT id FROM trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
             $stmt->execute([$trade_id]);
             if ($stmt->fetch()) {
-                $stmt = $db->prepare("UPDATE trade_receipts SET receipt_files = ?, updated_at = NOW(), uploaded_by = ? WHERE trade_id = ? AND trade_type = 'trade'");
-                $result = $stmt->execute([$receipts_str, $user_name, $trade_id]);
+                $stmt = $db->prepare("UPDATE trade_receipts SET receipt_files = ?, comment = ?, updated_at = NOW(), uploaded_by = ? WHERE trade_id = ? AND trade_type = 'trade'");
+                $result = $stmt->execute([$receipts_str, $full_comment, $user_name, $trade_id]);
             } else {
-                $stmt = $db->prepare("INSERT INTO trade_receipts (trade_id, trade_type, receipt_files, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, NOW(), NOW())");
-                $result = $stmt->execute([$trade_id, $receipts_str, $user_name]);
+                $stmt = $db->prepare("INSERT INTO trade_receipts (trade_id, trade_type, receipt_files, comment, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, ?, NOW(), NOW())");
+                $result = $stmt->execute([$trade_id, $receipts_str, $full_comment, $user_name]);
             }
             
             if ($result) {
                 $_SESSION['alert'] = [count($uploaded_files) . ' receipt(s) uploaded successfully!', 'success'];
             } else {
                 $_SESSION['alert'] = ['Failed to update database', 'danger'];
-                error_log("Database update failed for trade_id: $trade_id");
             }
         } else {
             $_SESSION['alert'] = ['No files were uploaded successfully. Errors: ' . implode('; ', $errors), 'danger'];
         }
     } else {
-        $_SESSION['alert'] = ['No files selected for upload', 'danger'];
-        error_log("No files in FILES array or empty name");
+        // If no files but comment only
+        if (!empty($comment)) {
+            $full_comment = $existing_comment;
+            $timestamp = date('Y-m-d H:i:s');
+            $full_comment = $existing_comment 
+                ? $existing_comment . "\n---\n[" . $timestamp . "] " . $user_name . ": " . $comment 
+                : "[" . $timestamp . "] " . $user_name . ": " . $comment;
+            
+            $stmt = $db->prepare("SELECT id FROM trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+            $stmt->execute([$trade_id]);
+            if ($stmt->fetch()) {
+                $stmt = $db->prepare("UPDATE trade_receipts SET comment = ?, updated_at = NOW(), uploaded_by = ? WHERE trade_id = ? AND trade_type = 'trade'");
+                $result = $stmt->execute([$full_comment, $user_name, $trade_id]);
+            } else {
+                $stmt = $db->prepare("INSERT INTO trade_receipts (trade_id, trade_type, comment, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, NOW(), NOW())");
+                $result = $stmt->execute([$trade_id, $full_comment, $user_name]);
+            }
+            
+            if ($result) {
+                $_SESSION['alert'] = ['Comment added successfully!', 'success'];
+            } else {
+                $_SESSION['alert'] = ['Failed to add comment', 'danger'];
+            }
+        } else {
+            $_SESSION['alert'] = ['No files selected for upload', 'danger'];
+        }
     }
     header('Location: trade_upload.php?' . http_build_query(array_filter([
         'filter' => $_GET['filter'] ?? 'all',
@@ -138,7 +204,7 @@ if (isset($_GET['delete_receipt']) && isset($_GET['trade_id']) && isset($_GET['f
     $trade_id = (int) $_GET['trade_id'];
     $file_to_delete = $_GET['file'];
     
-    $stmt = $db->prepare("SELECT receipt_files FROM trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+    $stmt = $db->prepare("SELECT receipt_files, comment FROM trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
     $stmt->execute([$trade_id]);
     $record = $stmt->fetch(PDO::FETCH_ASSOC);
     
@@ -169,33 +235,16 @@ if (isset($_GET['delete_receipt']) && isset($_GET['trade_id']) && isset($_GET['f
 }
 
 // ============================================
-// HANDLE COMMENTS
+// HANDLE COMMENT DELETE
 // ============================================
 
-// Handle Trader Comment Upload
-if (isset($_POST['add_comment']) && isset($_POST['trade_id'])) {
-    $trade_id = (int) $_POST['trade_id'];
-    $comment = trim($_POST['trader_comment'] ?? '');
+// Handle Comment Delete
+if (isset($_GET['delete_comment']) && isset($_GET['trade_id'])) {
+    $trade_id = (int) $_GET['trade_id'];
     
-    if (empty($comment)) {
-        $_SESSION['alert'] = ['Please enter a comment.', 'danger'];
-        header('Location: trade_upload.php?' . http_build_query(array_filter([
-            'filter' => $_GET['filter'] ?? 'all',
-            'type' => $_GET['type'] ?? 'all',
-            'search' => $_GET['search'] ?? ''
-        ])));
-        exit;
-    }
-    
-    $stmt = $db->prepare("
-        INSERT INTO trade_comments (trade_id, comment, created_by, created_at) 
-        VALUES (?, ?, ?, NOW())
-    ");
-    
-    if ($stmt->execute([$trade_id, $comment, $user_name])) {
-        $_SESSION['alert'] = ['Comment added successfully.', 'success'];
-    } else {
-        $_SESSION['alert'] = ['Failed to add comment.', 'danger'];
+    $stmt = $db->prepare("UPDATE trade_receipts SET comment = NULL, updated_at = NOW() WHERE trade_id = ? AND trade_type = 'trade'");
+    if ($stmt->execute([$trade_id])) {
+        $_SESSION['alert'] = ['Comment deleted successfully.', 'success'];
     }
     
     header('Location: trade_upload.php?' . http_build_query(array_filter([
@@ -238,15 +287,12 @@ function getTrades($db, $filter = 'all', $type_filter = 'all', $search = '') {
             t.status,
             t.created_at,
             ANY_VALUE(tr.receipt_files) as receipt_files,
+            ANY_VALUE(tr.comment) as receipt_comment,
             ANY_VALUE(tr.uploaded_by) as receipt_uploaded_by,
             ANY_VALUE(tr.created_at) as receipt_created_at,
-            ANY_VALUE(tr.updated_at) as receipt_updated_at,
-            GROUP_CONCAT(DISTINCT tc.comment ORDER BY tc.created_at DESC SEPARATOR '|||') as comments,
-            GROUP_CONCAT(DISTINCT tc.created_by ORDER BY tc.created_at DESC SEPARATOR '|||') as comment_authors,
-            GROUP_CONCAT(DISTINCT tc.created_at ORDER BY tc.created_at DESC SEPARATOR '|||') as comment_dates
+            ANY_VALUE(tr.updated_at) as receipt_updated_at
         FROM trades t
         LEFT JOIN trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
-        LEFT JOIN trade_comments tc ON t.id = tc.trade_id
         WHERE 1=1
     ";
     
@@ -266,6 +312,10 @@ function getTrades($db, $filter = 'all', $type_filter = 'all', $search = '') {
         $sql .= " AND tr.receipt_files IS NOT NULL AND tr.receipt_files != ''";
     } elseif ($filter === 'no_receipt') {
         $sql .= " AND (tr.receipt_files IS NULL OR tr.receipt_files = '')";
+    } elseif ($filter === 'has_comment') {
+        $sql .= " AND tr.comment IS NOT NULL AND tr.comment != ''";
+    } elseif ($filter === 'no_comment') {
+        $sql .= " AND (tr.comment IS NULL OR tr.comment = '')";
     }
     
     // Search filter
@@ -286,67 +336,13 @@ function getTrades($db, $filter = 'all', $type_filter = 'all', $search = '') {
 }
 
 // ============================================
-// GET STATS
-// ============================================
-function getStats($db) {
-    $stats = [
-        'total' => 0,
-        'has_receipt' => 0,
-        'no_receipt' => 0,
-        'bond' => 0,
-        'equity' => 0,
-        'etf' => 0
-    ];
-    
-    try {
-        $stmt = $db->query("
-            SELECT 
-                COUNT(*) as total,
-                SUM(CASE WHEN tr.receipt_files IS NOT NULL AND tr.receipt_files != '' THEN 1 ELSE 0 END) as has_receipt,
-                SUM(CASE WHEN tr.receipt_files IS NULL OR tr.receipt_files = '' THEN 1 ELSE 0 END) as no_receipt
-            FROM trades t
-            LEFT JOIN trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
-        ");
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ($result) {
-            $stats['total'] = (int)$result['total'];
-            $stats['has_receipt'] = (int)$result['has_receipt'];
-            $stats['no_receipt'] = (int)$result['no_receipt'];
-        }
-    } catch (Exception $e) {
-        error_log("Error getting stats: " . $e->getMessage());
-    }
-    
-    try {
-        $stmt = $db->query("
-            SELECT 
-                asset_class,
-                COUNT(*) as count
-            FROM trades
-            GROUP BY asset_class
-        ");
-        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-            if ($row['asset_class'] === 'bond') $stats['bond'] = (int)$row['count'];
-            elseif ($row['asset_class'] === 'equity') $stats['equity'] = (int)$row['count'];
-            elseif ($row['asset_class'] === 'Exchange Traded Funds') $stats['etf'] = (int)$row['count'];
-        }
-    } catch (Exception $e) {
-        error_log("Error getting asset stats: " . $e->getMessage());
-    }
-    
-    return $stats;
-}
-
-// ============================================
 // GET DATA
 // ============================================
 $trades = [];
-$stats = ['total' => 0, 'has_receipt' => 0, 'no_receipt' => 0, 'bond' => 0, 'equity' => 0, 'etf' => 0];
 $error_message = '';
 
 try {
     $trades = getTrades($db, $filter, $type_filter, $search);
-    $stats = getStats($db);
 } catch (Exception $e) {
     $error_message = "Error loading data: " . $e->getMessage();
     error_log("Trade upload page error: " . $e->getMessage());
@@ -427,29 +423,38 @@ include '../includes/header.php';
         font-weight: bold;
     }
     
-    /* Comment Styles */
-    .comment-bubble {
+    /* Comment Display */
+    .comment-display {
         background: #f8f9fa;
         border-left: 3px solid #0d6efd;
-        padding: 6px 10px;
+        padding: 8px 10px;
         border-radius: 4px;
-        font-size: 13px;
-        max-width: 200px;
-        margin-bottom: 4px;
-    }
-    .comment-bubble .author {
-        font-weight: 600;
-        font-size: 11px;
-        color: #495057;
-    }
-    .comment-bubble .time {
-        font-size: 10px;
-        color: #6c757d;
-        margin-left: 5px;
-    }
-    .comment-bubble .comment-text {
+        font-size: 12px;
+        max-width: 250px;
+        max-height: 100px;
+        overflow-y: auto;
+        white-space: pre-wrap;
         word-wrap: break-word;
+    }
+    .comment-display .comment-meta {
+        font-weight: 600;
+        font-size: 10px;
+        color: #495057;
+        margin-bottom: 2px;
+    }
+    .comment-display .comment-text {
         margin-top: 2px;
+    }
+    .comment-display .comment-empty {
+        color: #6c757d;
+        font-style: italic;
+    }
+    .comment-actions {
+        margin-top: 4px;
+    }
+    .comment-actions .btn-sm {
+        font-size: 10px;
+        padding: 1px 6px;
     }
     
     /* Status Badges */
@@ -536,24 +541,6 @@ include '../includes/header.php';
         color: #a71d2a;
     }
     
-    /* Stats Cards */
-    .stat-card {
-        transition: transform 0.2s, box-shadow 0.2s;
-        cursor: default;
-    }
-    .stat-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-    }
-    .stat-card .stat-number {
-        font-size: 24px;
-        font-weight: bold;
-    }
-    .stat-card .stat-label {
-        font-size: 13px;
-        color: #6c757d;
-    }
-    
     /* Table Row Hover */
     .trade-row {
         transition: background-color 0.2s;
@@ -575,34 +562,6 @@ include '../includes/header.php';
     /* Modal Enhancements */
     .modal-header .modal-title i {
         margin-right: 8px;
-    }
-    
-    /* Preview in Modal */
-    .preview-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
-        gap: 8px;
-        margin-top: 10px;
-    }
-    .preview-grid .preview-item {
-        border: 1px solid #dee2e6;
-        border-radius: 4px;
-        overflow: hidden;
-        position: relative;
-    }
-    .preview-grid .preview-item img {
-        width: 100%;
-        height: 80px;
-        object-fit: cover;
-    }
-    .preview-grid .preview-item .file-name {
-        font-size: 10px;
-        text-align: center;
-        padding: 2px;
-        background: #f8f9fa;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
     }
     
     /* File preview thumbnails */
@@ -659,6 +618,37 @@ include '../includes/header.php';
         opacity: 0.6;
         cursor: not-allowed;
     }
+    
+    /* Simple clean table */
+    .table-condensed td, .table-condensed th {
+        padding: 6px 8px;
+        font-size: 13px;
+    }
+    .table-condensed thead th {
+        border-bottom: 2px solid #dee2e6;
+        font-weight: 600;
+        color: #495057;
+    }
+    
+    /* Filter section */
+    .filter-section {
+        background: #f8f9fa;
+        padding: 15px;
+        border-radius: 6px;
+        margin-bottom: 20px;
+    }
+    .filter-section .form-label {
+        font-size: 12px;
+        font-weight: 600;
+        color: #495057;
+        margin-bottom: 4px;
+    }
+    
+    /* Alert styling */
+    .alert {
+        border-radius: 4px;
+        font-size: 14px;
+    }
 </style>
 
 <div class="container-fluid">
@@ -667,13 +657,13 @@ include '../includes/header.php';
         <div class="col-12">
             <div class="d-flex justify-content-between align-items-center">
                 <div>
-                    <h2>
+                    <h4>
                         <i class="bi bi-file-earmark-arrow-up"></i> Trade Receipt Upload
-                        <small class="text-muted fs-6">Upload files, photos & comments</small>
-                    </h2>
+                        <small class="text-muted fs-6">Upload files & add comments</small>
+                    </h4>
                 </div>
                 <div>
-                    <button class="btn btn-primary btn-sm" onclick="refreshPage()">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="refreshPage()">
                         <i class="bi bi-arrow-clockwise"></i> Refresh
                     </button>
                 </div>
@@ -697,95 +687,50 @@ include '../includes/header.php';
         </div>
     <?php endif; ?>
 
-    <!-- Stats -->
-    <div class="row mb-3 g-2">
-        <div class="col-md-2 col-6">
-            <div class="card stat-card border-primary">
-                <div class="card-body text-center">
-                    <div class="stat-number text-primary"><?php echo number_format($stats['total']); ?></div>
-                    <div class="stat-label">Total Trades</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-2 col-6">
-            <div class="card stat-card border-success">
-                <div class="card-body text-center">
-                    <div class="stat-number text-success"><?php echo number_format($stats['has_receipt']); ?></div>
-                    <div class="stat-label">With Receipt</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-2 col-6">
-            <div class="card stat-card border-warning">
-                <div class="card-body text-center">
-                    <div class="stat-number text-warning"><?php echo number_format($stats['no_receipt']); ?></div>
-                    <div class="stat-label">No Receipt</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-2 col-6">
-            <div class="card stat-card border-info">
-                <div class="card-body text-center">
-                    <div class="stat-number text-info"><?php echo number_format($stats['bond']); ?></div>
-                    <div class="stat-label">Bonds</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-2 col-6">
-            <div class="card stat-card border-secondary">
-                <div class="card-body text-center">
-                    <div class="stat-number text-secondary"><?php echo number_format($stats['equity']); ?></div>
-                    <div class="stat-label">Equities</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-2 col-6">
-            <div class="card stat-card border-dark">
-                <div class="card-body text-center">
-                    <div class="stat-number text-dark"><?php echo number_format($stats['etf']); ?></div>
-                    <div class="stat-label">ETFs</div>
-                </div>
-            </div>
-        </div>
-    </div>
-
     <!-- Filters -->
-    <div class="card mb-3">
-        <div class="card-body">
-            <form method="GET" class="row g-2 align-items-end">
-                <div class="col-md-3">
-                    <label class="form-label small text-muted">Status</label>
-                    <select class="form-select form-select-sm" name="filter" onchange="this.form.submit()">
-                        <option value="all" <?php echo $filter === 'all' ? 'selected' : ''; ?>>All Trades</option>
-                        <option value="has_receipt" <?php echo $filter === 'has_receipt' ? 'selected' : ''; ?>>With Receipt</option>
-                        <option value="no_receipt" <?php echo $filter === 'no_receipt' ? 'selected' : ''; ?>>No Receipt</option>
-                    </select>
+    <div class="filter-section">
+        <form method="GET" class="row g-2 align-items-end">
+            <div class="col-md-2">
+                <label class="form-label">Status</label>
+                <select class="form-select form-select-sm" name="filter" onchange="this.form.submit()">
+                    <option value="all" <?php echo $filter === 'all' ? 'selected' : ''; ?>>All Trades</option>
+                    <option value="has_receipt" <?php echo $filter === 'has_receipt' ? 'selected' : ''; ?>>With Receipt</option>
+                    <option value="no_receipt" <?php echo $filter === 'no_receipt' ? 'selected' : ''; ?>>No Receipt</option>
+                    <option value="has_comment" <?php echo $filter === 'has_comment' ? 'selected' : ''; ?>>With Comment</option>
+                    <option value="no_comment" <?php echo $filter === 'no_comment' ? 'selected' : ''; ?>>No Comment</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">Asset Type</label>
+                <select class="form-select form-select-sm" name="type" onchange="this.form.submit()">
+                    <option value="all" <?php echo $type_filter === 'all' ? 'selected' : ''; ?>>All Types</option>
+                    <option value="bond" <?php echo $type_filter === 'bond' ? 'selected' : ''; ?>>Bond</option>
+                    <option value="equity" <?php echo $type_filter === 'equity' ? 'selected' : ''; ?>>Equity</option>
+                    <option value="etf" <?php echo $type_filter === 'etf' ? 'selected' : ''; ?>>ETF</option>
+                </select>
+            </div>
+            <div class="col-md-5">
+                <label class="form-label">Search</label>
+                <div class="input-group input-group-sm">
+                    <input type="text" class="form-control" name="search" placeholder="Client, Security, Reference..." value="<?php echo htmlspecialchars($search); ?>">
+                    <button type="submit" class="btn btn-secondary">
+                        <i class="bi bi-search"></i>
+                    </button>
                 </div>
-                <div class="col-md-3">
-                    <label class="form-label small text-muted">Asset Type</label>
-                    <select class="form-select form-select-sm" name="type" onchange="this.form.submit()">
-                        <option value="all" <?php echo $type_filter === 'all' ? 'selected' : ''; ?>>All Types</option>
-                        <option value="bond" <?php echo $type_filter === 'bond' ? 'selected' : ''; ?>>Bond</option>
-                        <option value="equity" <?php echo $type_filter === 'equity' ? 'selected' : ''; ?>>Equity</option>
-                        <option value="etf" <?php echo $type_filter === 'etf' ? 'selected' : ''; ?>>ETF</option>
-                    </select>
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label small text-muted">Search</label>
-                    <div class="input-group input-group-sm">
-                        <input type="text" class="form-control" name="search" placeholder="Client, Security, Reference..." value="<?php echo htmlspecialchars($search); ?>">
-                        <button type="submit" class="btn btn-primary">
-                            <i class="bi bi-search"></i>
-                        </button>
-                    </div>
-                </div>
-                <div class="col-md-2">
-                    <a href="trade_upload.php" class="btn btn-outline-secondary btn-sm w-100">
-                        <i class="bi bi-eraser"></i> Clear
-                    </a>
-                </div>
-            </form>
-        </div>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">&nbsp;</label>
+                <a href="trade_upload.php" class="btn btn-outline-secondary btn-sm w-100">
+                    <i class="bi bi-eraser"></i> Clear
+                </a>
+            </div>
+            <div class="col-md-1">
+                <label class="form-label">&nbsp;</label>
+                <button class="btn btn-primary btn-sm w-100" onclick="openUploadModal(0)" type="button">
+                    <i class="bi bi-plus-circle"></i> New
+                </button>
+            </div>
+        </form>
     </div>
 
     <!-- Trades Table -->
@@ -795,11 +740,6 @@ include '../includes/header.php';
                 <i class="bi bi-table"></i> Trades 
                 <span class="badge bg-secondary ms-2"><?php echo count($trades); ?></span>
             </h6>
-            <div>
-                <button class="btn btn-outline-primary btn-sm" onclick="openUploadModal(0)" title="Upload for New Trade">
-                    <i class="bi bi-plus-circle"></i> New Trade
-                </button>
-            </div>
         </div>
         <div class="card-body p-0">
             <?php if (empty($trades)): ?>
@@ -809,7 +749,7 @@ include '../includes/header.php';
                 </div>
             <?php else: ?>
                 <div class="table-responsive">
-                    <table class="table table-sm table-hover mb-0">
+                    <table class="table table-sm table-hover mb-0 table-condensed">
                         <thead class="table-light">
                             <tr>
                                 <th>Ref</th>
@@ -820,8 +760,7 @@ include '../includes/header.php';
                                 <th class="text-end">Qty</th>
                                 <th class="text-end">Value</th>
                                 <th>Date</th>
-                                <th>Files</th>
-                                <th>Comments</th>
+                                <th>Files / Comments</th>
                                 <th class="text-end">Actions</th>
                             </tr>
                         </thead>
@@ -829,22 +768,11 @@ include '../includes/header.php';
                             <?php foreach ($trades as $trade): 
                                 $receipts = !empty($trade['receipt_files']) ? explode(',', $trade['receipt_files']) : [];
                                 $hasReceipt = !empty($receipts) && !empty($receipts[0]);
+                                $hasComment = !empty($trade['receipt_comment']);
+                                $commentText = $trade['receipt_comment'] ?? '';
                                 
                                 $assetClass = $trade['asset_class'] ?? 'Unknown';
                                 if ($assetClass === 'Exchange Traded Funds') $assetClass = 'ETF';
-                                
-                                // Get latest comment
-                                $commentText = '';
-                                $commentAuthor = '';
-                                $commentTime = '';
-                                if (!empty($trade['comments'])) {
-                                    $comment_parts = explode('|||', $trade['comments']);
-                                    $author_parts = !empty($trade['comment_authors']) ? explode('|||', $trade['comment_authors']) : [];
-                                    $date_parts = !empty($trade['comment_dates']) ? explode('|||', $trade['comment_dates']) : [];
-                                    $commentText = htmlspecialchars($comment_parts[0] ?? '');
-                                    $commentAuthor = $author_parts[0] ?? 'Unknown';
-                                    $commentTime = isset($date_parts[0]) ? date('d/m/Y H:i', strtotime($date_parts[0])) : '';
-                                }
                             ?>
                                 <tr class="trade-row">
                                     <td>
@@ -881,8 +809,9 @@ include '../includes/header.php';
                                     </td>
                                     <td><?php echo date('d/m/Y', strtotime($trade['trade_date'] ?? '')); ?></td>
                                     <td>
+                                        <!-- Files -->
                                         <?php if ($hasReceipt): ?>
-                                            <div class="receipt-thumbnails">
+                                            <div class="receipt-thumbnails mb-1">
                                                 <?php 
                                                 $displayCount = 0;
                                                 foreach ($receipts as $receiptFile):
@@ -915,29 +844,26 @@ include '../includes/header.php';
                                         <?php else: ?>
                                             <span class="text-muted small">No files</span>
                                         <?php endif; ?>
-                                    </td>
-                                    <td>
-                                        <?php if (!empty($commentText)): ?>
-                                            <div class="comment-bubble">
-                                                <div>
-                                                    <span class="author"><?php echo $commentAuthor; ?></span>
-                                                    <span class="time"><?php echo $commentTime; ?></span>
-                                                </div>
-                                                <div class="comment-text"><?php echo $commentText; ?></div>
+                                        
+                                        <!-- Comment -->
+                                        <?php if ($hasComment): ?>
+                                            <div class="comment-display">
+                                                <div class="comment-text"><?php echo nl2br(htmlspecialchars($commentText)); ?></div>
                                             </div>
-                                        <?php else: ?>
-                                            <span class="text-muted small">No comments</span>
+                                            <div class="comment-actions">
+                                                <a href="trade_upload.php?delete_comment=1&trade_id=<?php echo $trade['id']; ?>&filter=<?php echo urlencode($filter); ?>&type=<?php echo urlencode($type_filter); ?>&search=<?php echo urlencode($search); ?>" 
+                                                   class="text-danger small" onclick="return confirm('Delete this comment?')">
+                                                    <i class="bi bi-trash"></i> Delete
+                                                </a>
+                                            </div>
                                         <?php endif; ?>
-                                        <button class="btn btn-outline-secondary btn-sm mt-1" onclick="openCommentModal(<?php echo $trade['id']; ?>)">
-                                            <i class="bi bi-chat"></i> Add
-                                        </button>
                                     </td>
                                     <td class="text-end">
                                         <div class="btn-group btn-group-sm" role="group">
-                                            <button class="btn btn-outline-primary" onclick="openUploadModal(<?php echo $trade['id']; ?>)" title="Upload Files">
+                                            <button class="btn btn-outline-primary" onclick="openUploadModal(<?php echo $trade['id']; ?>)" title="Upload Files / Add Comment">
                                                 <i class="bi bi-upload"></i>
                                             </button>
-                                            <button class="btn btn-outline-secondary" onclick="openCommentModal(<?php echo $trade['id']; ?>)" title="Add Comment">
+                                            <button class="btn btn-outline-secondary" onclick="openCommentOnlyModal(<?php echo $trade['id']; ?>)" title="Add Comment Only">
                                                 <i class="bi bi-chat-dots"></i>
                                             </button>
                                             <button class="btn btn-outline-info" onclick="viewTrade(<?php echo $trade['id']; ?>)" title="View Details">
@@ -965,7 +891,7 @@ include '../includes/header.php';
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">
-                    <i class="bi bi-upload text-primary"></i> Upload Files
+                    <i class="bi bi-upload text-primary"></i> Upload Files & Add Comment
                 </h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
@@ -1007,6 +933,12 @@ include '../includes/header.php';
                         </div>
                     </div>
                     
+                    <!-- Comment Section -->
+                    <div class="mt-3">
+                        <label class="form-label fw-bold">Add Comment (Optional)</label>
+                        <textarea class="form-control" name="receipt_comment" id="receiptComment" rows="3" placeholder="Add a comment about this trade..."></textarea>
+                    </div>
+                    
                     <div class="mt-3">
                         <button type="button" class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('fileInput').click()">
                             <i class="bi bi-plus-circle"></i> Add More Files
@@ -1027,8 +959,8 @@ include '../includes/header.php';
     </div>
 </div>
 
-<!-- Comment Modal -->
-<div class="modal fade" id="commentModal" tabindex="-1" aria-hidden="true">
+<!-- Comment Only Modal -->
+<div class="modal fade" id="commentOnlyModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
@@ -1037,10 +969,10 @@ include '../includes/header.php';
                 </h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form method="POST" action="trade_upload.php">
+            <form method="POST" enctype="multipart/form-data" action="trade_upload.php">
                 <div class="modal-body">
                     <input type="hidden" name="trade_id" id="comment_trade_id" value="">
-                    <input type="hidden" name="add_comment" value="1">
+                    <input type="hidden" name="upload_receipt" value="1">
                     <input type="hidden" name="filter" value="<?php echo htmlspecialchars($filter); ?>">
                     <input type="hidden" name="type" value="<?php echo htmlspecialchars($type_filter); ?>">
                     <input type="hidden" name="search" value="<?php echo htmlspecialchars($search); ?>">
@@ -1052,14 +984,7 @@ include '../includes/header.php';
                     
                     <div class="mb-3">
                         <label class="form-label fw-bold">Your Comment</label>
-                        <textarea class="form-control" name="trader_comment" id="traderComment" rows="4" placeholder="Enter your comment about this trade..." required></textarea>
-                    </div>
-                    
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">Recent Comments</label>
-                        <div id="recentComments" class="border rounded p-2" style="max-height: 150px; overflow-y: auto;">
-                            <p class="text-muted small">No previous comments</p>
-                        </div>
+                        <textarea class="form-control" name="receipt_comment" id="traderComment" rows="4" placeholder="Enter your comment about this trade..." required></textarea>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -1097,24 +1022,20 @@ include '../includes/header.php';
 
 <script>
 // ============================================
-// FILE UPLOAD HANDLING - FIXED
+// FILE UPLOAD HANDLING
 // ============================================
 
 let selectedFiles = [];
 
-// ============================================
-// CRITICAL FIX: Don't clear the file input!
-// ============================================
+// File input change handler
 document.getElementById('fileInput').addEventListener('change', function(e) {
     const files = Array.from(e.target.files);
     files.forEach(file => {
-        // Check if file already selected
         if (!selectedFiles.some(f => f.name === file.name && f.size === file.size)) {
             selectedFiles.push(file);
         }
     });
     updateFileList();
-    // REMOVED: e.target.value = ''; // This was the bug!
 });
 
 // Drag and drop
@@ -1142,7 +1063,6 @@ dropZone.addEventListener('drop', function(e) {
     });
     updateFileList();
     
-    // Update the file input with dropped files
     const dataTransfer = new DataTransfer();
     selectedFiles.forEach(file => dataTransfer.items.add(file));
     document.getElementById('fileInput').files = dataTransfer.files;
@@ -1152,14 +1072,13 @@ dropZone.addEventListener('click', function() {
     document.getElementById('fileInput').click();
 });
 
-// Update file list display with thumbnails
+// Update file list display
 function updateFileList() {
     const container = document.getElementById('fileList');
     const fileCount = document.getElementById('fileCount');
     const uploadBtn = document.getElementById('uploadBtn');
     const thumbnailsContainer = document.getElementById('filePreviewThumbnails');
     
-    // Clear thumbnails
     thumbnailsContainer.innerHTML = '';
     
     if (selectedFiles.length === 0) {
@@ -1170,7 +1089,6 @@ function updateFileList() {
         return;
     }
     
-    // Build file list
     let html = '';
     selectedFiles.forEach((file, index) => {
         const size = (file.size / 1024 / 1024).toFixed(2);
@@ -1208,7 +1126,6 @@ function updateFileList() {
             };
             reader.readAsDataURL(file);
         } else {
-            // Non-image file icon
             const icon = file.type === 'application/pdf' ? 'bi-file-pdf' :
                         file.type.includes('word') ? 'bi-file-word' :
                         file.type.includes('excel') ? 'bi-file-excel' : 'bi-file';
@@ -1232,7 +1149,6 @@ function removeFile(index) {
     selectedFiles.splice(index, 1);
     updateFileList();
     
-    // Update the file input with remaining files
     const dataTransfer = new DataTransfer();
     selectedFiles.forEach(file => dataTransfer.items.add(file));
     document.getElementById('fileInput').files = dataTransfer.files;
@@ -1251,11 +1167,11 @@ function clearSelectedFiles() {
 // ============================================
 
 function openUploadModal(tradeId) {
-    // Reset file selection
     selectedFiles = [];
     updateFileList();
     document.getElementById('fileInput').value = '';
     document.getElementById('filePreviewThumbnails').innerHTML = '';
+    document.getElementById('receiptComment').value = '';
     
     document.getElementById('upload_trade_id').value = tradeId;
     document.getElementById('tradeIdDisplay').textContent = tradeId === 0 ? 'New Trade' : tradeId;
@@ -1264,21 +1180,12 @@ function openUploadModal(tradeId) {
     modal.show();
 }
 
-function openCommentModal(tradeId) {
+function openCommentOnlyModal(tradeId) {
     document.getElementById('comment_trade_id').value = tradeId;
     document.getElementById('commentTradeRef').textContent = tradeId;
     document.getElementById('traderComment').value = '';
     
-    // Load recent comments (you can implement AJAX here)
-    const container = document.getElementById('recentComments');
-    container.innerHTML = '<p class="text-muted small">Loading comments...</p>';
-    
-    // Simulate loading - in production, use AJAX
-    setTimeout(() => {
-        container.innerHTML = '<p class="text-muted small">No previous comments for this trade.</p>';
-    }, 500);
-    
-    const modal = new bootstrap.Modal(document.getElementById('commentModal'));
+    const modal = new bootstrap.Modal(document.getElementById('commentOnlyModal'));
     modal.show();
 }
 
@@ -1290,12 +1197,11 @@ function viewTrade(tradeId) {
             <div class="spinner-border text-primary" role="status">
                 <span class="visually-hidden">Loading...</span>
             </div>
-            <p class="mt-2">Loading trade ${tradeId} details...</p>
+            <p class="mt-2">Loading trade details...</p>
         </div>
     `;
     modal.show();
     
-    // Simulate loading - in production, use AJAX
     setTimeout(() => {
         container.innerHTML = `
             <div class="row g-3">
@@ -1328,21 +1234,16 @@ function viewTrade(tradeId) {
                     </div>
                     <div class="border-bottom pb-2 mb-2">
                         <small class="text-muted">Consideration</small>
-                        <div class="fw-bold text-success">TZS 1,500,000.00</div>
+                        <div class="fw-bold">TZS 1,500,000.00</div>
                     </div>
                     <div class="border-bottom pb-2 mb-2">
                         <small class="text-muted">Status</small>
                         <div><span class="badge bg-warning">Pending</span></div>
                     </div>
                 </div>
-                <div class="col-12">
-                    <hr>
-                    <small class="text-muted">Additional Reference</small>
-                    <div><code>REF-${String(tradeId).padStart(4, '0')}</code></div>
-                </div>
             </div>
         `;
-    }, 800);
+    }, 500);
 }
 
 // Refresh page
@@ -1351,40 +1252,27 @@ function refreshPage() {
 }
 
 // ============================================
-// FORM SUBMISSION - FIXED
+// FORM SUBMISSION
 // ============================================
 
 document.getElementById('uploadForm').addEventListener('submit', function(e) {
-    // If no files selected, prevent submission
     if (selectedFiles.length === 0) {
-        e.preventDefault();
-        alert('Please select at least one file to upload.');
-        return false;
+        const comment = document.getElementById('receiptComment').value.trim();
+        if (!comment) {
+            e.preventDefault();
+            alert('Please select at least one file or add a comment.');
+            return false;
+        }
+        // If only comment, still submit
+        return true;
     }
     
-    // CRITICAL FIX: Ensure the file input has the files
     const fileInput = document.getElementById('fileInput');
     const dataTransfer = new DataTransfer();
     selectedFiles.forEach(file => dataTransfer.items.add(file));
     fileInput.files = dataTransfer.files;
     
-    // Let the form submit normally
     return true;
-});
-
-// Comment form validation
-document.querySelectorAll('form[action="trade_upload.php"]').forEach(form => {
-    if (form.querySelector('textarea[name="trader_comment"]')) {
-        form.addEventListener('submit', function(e) {
-            const comment = this.querySelector('textarea[name="trader_comment"]').value.trim();
-            if (!comment) {
-                e.preventDefault();
-                alert('Please enter a comment.');
-                return false;
-            }
-            return true;
-        });
-    }
 });
 
 // ============================================
@@ -1400,7 +1288,6 @@ document.querySelectorAll('.alert').forEach(alert => {
 });
 
 console.log('Trade Upload System initialized successfully.');
-console.log('Selected files:', selectedFiles.length);
 </script>
 
 <?php include '../includes/footer.php'; ?>
