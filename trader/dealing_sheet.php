@@ -1,12 +1,9 @@
 <?php
-// ============================================
-// TRADE RECEIPT UPLOAD & COMMENT SYSTEM
-// ============================================
-
+// Error reporting - log but don't display
 error_reporting(E_ALL);
-ini_set('display_errors', 1);
+ini_set('display_errors', 0);
 ini_set('log_errors', 1);
-ini_set('error_log', __DIR__ . '/trade_upload_errors.log');
+ini_set('error_log', __DIR__ . '/dealing_sheet_errors.log');
 
 // Start output buffering
 if (ob_get_level() == 0) {
@@ -15,46 +12,44 @@ if (ob_get_level() == 0) {
 
 require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
-
-// Check if session is started
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-}
+require_once '../includes/dealing_sheet_helpers.php';
+require_once '../tcpdf/tcpdf.php';
+require_once __DIR__ . '/../reports/traits/ReportHeaderTrait.php';
 
 require_trader();
+require_mandate();
 
 $db = getDBConnection();
 $current_user = get_logged_in_user() ?: get_session_user();
-$user_name = $current_user['username'] ?? 'System';
-$user_id = $current_user['id'] ?? null;
+$company = dealingSheetGetCompany($db);
+$view = $_GET['view'] ?? 'all';
 
 // ============================================
-// HANDLE FILE UPLOADS
+// PAYMENT RECEIPT UPLOAD HANDLER - MULTI-FILE
 // ============================================
-
-// Handle Receipt Upload
-if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
-    $trade_id = (int) $_POST['trade_id'];
+if (isset($_POST['upload_receipt']) && isset($_POST['sheet_id'])) {
+    $sheet_id = (int) $_POST['sheet_id'];
     $uploaded_files = [];
     $errors = [];
     
-    $allowed_exts = ['jpg', 'jpeg', 'png', 'gif', 'pdf', 'doc', 'docx', 'xls', 'xlsx'];
-    $max_size = 10 * 1024 * 1024; // 10MB
-    
-    $upload_dir = __DIR__ . '/../uploads/trade_receipts/';
-    if (!file_exists($upload_dir)) {
-        mkdir($upload_dir, 0777, true);
-    }
-    
-    // Get existing receipts
-    $stmt = $db->prepare("SELECT receipt_files FROM trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
-    $stmt->execute([$trade_id]);
-    $existing = $stmt->fetch(PDO::FETCH_ASSOC);
-    $existing_receipts = !empty($existing['receipt_files']) ? explode(',', $existing['receipt_files']) : [];
-    
-    if (isset($_FILES['receipt_files']) && !empty($_FILES['receipt_files']['name'][0])) {
-        $files = $_FILES['receipt_files'];
+    // Check if files were uploaded
+    if (isset($_FILES['payment_receipts']) && !empty($_FILES['payment_receipts']['name'][0])) {
+        $files = $_FILES['payment_receipts'];
         $total_files = count($files['name']);
+        $allowed_exts = ['jpg', 'jpeg', 'png', 'gif', 'pdf'];
+        $max_size = 5 * 1024 * 1024; // 5MB per file
+        
+        // Create upload directory if it doesn't exist
+        $upload_dir = __DIR__ . '/../uploads/payment_receipts/';
+        if (!file_exists($upload_dir)) {
+            mkdir($upload_dir, 0777, true);
+        }
+        
+        // Get existing receipts
+        $stmt = $db->prepare("SELECT payment_receipt FROM dealing_sheets WHERE id = ?");
+        $stmt->execute([$sheet_id]);
+        $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+        $existing_receipts = !empty($existing['payment_receipt']) ? explode(',', $existing['payment_receipt']) : [];
         
         for ($i = 0; $i < $total_files; $i++) {
             if ($files['error'][$i] !== UPLOAD_ERR_OK) {
@@ -64,16 +59,17 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
             
             $file_ext = strtolower(pathinfo($files['name'][$i], PATHINFO_EXTENSION));
             if (!in_array($file_ext, $allowed_exts)) {
-                $errors[] = "File '{$files['name'][$i]}' - Invalid type. Allowed: JPG, PNG, GIF, PDF, DOC, XLS";
+                $errors[] = "File '{$files['name'][$i]}' - Invalid type. Allowed: JPG, PNG, GIF, PDF";
                 continue;
             }
             
             if ($files['size'][$i] > $max_size) {
-                $errors[] = "File '{$files['name'][$i]}' exceeds 10MB limit";
+                $errors[] = "File '{$files['name'][$i]}' exceeds 5MB limit";
                 continue;
             }
             
-            $filename = 'receipt_' . $trade_id . '_' . date('Ymd_His') . '_' . ($i + 1) . '.' . $file_ext;
+            // Generate unique filename
+            $filename = 'receipt_' . $sheet_id . '_' . date('Ymd_His') . '_' . ($i + 1) . '.' . $file_ext;
             $filepath = $upload_dir . $filename;
             
             if (move_uploaded_file($files['tmp_name'][$i], $filepath)) {
@@ -84,21 +80,12 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
         }
         
         if (!empty($uploaded_files)) {
+            // Merge with existing receipts
             $all_receipts = array_merge($existing_receipts, $uploaded_files);
             $receipts_str = implode(',', $all_receipts);
             
-            // Check if record exists
-            $stmt = $db->prepare("SELECT id FROM trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
-            $stmt->execute([$trade_id]);
-            if ($stmt->fetch()) {
-                $stmt = $db->prepare("UPDATE trade_receipts SET receipt_files = ?, updated_at = NOW(), uploaded_by = ? WHERE trade_id = ? AND trade_type = 'trade'");
-                $result = $stmt->execute([$receipts_str, $user_name, $trade_id]);
-            } else {
-                $stmt = $db->prepare("INSERT INTO trade_receipts (trade_id, trade_type, receipt_files, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, NOW(), NOW())");
-                $result = $stmt->execute([$trade_id, $receipts_str, $user_name]);
-            }
-            
-            if ($result) {
+            $stmt = $db->prepare("UPDATE dealing_sheets SET payment_receipt = ? WHERE id = ?");
+            if ($stmt->execute([$receipts_str, $sheet_id])) {
                 $_SESSION['alert'] = [count($uploaded_files) . ' receipt(s) uploaded successfully!', 'success'];
             } else {
                 $_SESSION['alert'] = ['Failed to update database', 'danger'];
@@ -109,1152 +96,1883 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
     } else {
         $_SESSION['alert'] = ['No files selected for upload', 'danger'];
     }
-    header('Location: trade_upload.php?' . http_build_query(array_filter([
-        'filter' => $_GET['filter'] ?? 'all',
-        'type' => $_GET['type'] ?? 'all',
-        'search' => $_GET['search'] ?? ''
-    ])));
+    header('Location: dealing_sheet.php?view=' . urlencode($view));
     exit;
 }
 
 // ============================================
-// HANDLE FILE DELETE
+// DELETE PAYMENT RECEIPT
 // ============================================
-
-// Handle Receipt Delete
-if (isset($_GET['delete_receipt']) && isset($_GET['trade_id']) && isset($_GET['file'])) {
-    $trade_id = (int) $_GET['trade_id'];
+if (isset($_GET['delete_receipt']) && isset($_GET['id']) && isset($_GET['file'])) {
+    $sheet_id = (int) $_GET['id'];
     $file_to_delete = $_GET['file'];
     
-    $stmt = $db->prepare("SELECT receipt_files FROM trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
-    $stmt->execute([$trade_id]);
-    $record = $stmt->fetch(PDO::FETCH_ASSOC);
+    // Get existing receipts
+    $stmt = $db->prepare("SELECT payment_receipt FROM dealing_sheets WHERE id = ?");
+    $stmt->execute([$sheet_id]);
+    $sheet = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    if ($record && !empty($record['receipt_files'])) {
-        $receipts = explode(',', $record['receipt_files']);
+    if ($sheet && !empty($sheet['payment_receipt'])) {
+        $receipts = explode(',', $sheet['payment_receipt']);
         
+        // Remove the file from array
         if (($key = array_search($file_to_delete, $receipts)) !== false) {
             unset($receipts[$key]);
             
-            $filepath = __DIR__ . '/../uploads/trade_receipts/' . $file_to_delete;
+            // Delete file from server
+            $filepath = __DIR__ . '/../uploads/payment_receipts/' . $file_to_delete;
             if (file_exists($filepath)) {
                 unlink($filepath);
             }
             
+            // Update database with remaining receipts
             $receipts_str = !empty($receipts) ? implode(',', $receipts) : null;
-            $stmt = $db->prepare("UPDATE trade_receipts SET receipt_files = ?, updated_at = NOW() WHERE trade_id = ? AND trade_type = 'trade'");
-            if ($stmt->execute([$receipts_str, $trade_id])) {
+            $stmt = $db->prepare("UPDATE dealing_sheets SET payment_receipt = ? WHERE id = ?");
+            if ($stmt->execute([$receipts_str, $sheet_id])) {
                 $_SESSION['alert'] = ['Receipt deleted successfully.', 'success'];
             }
         }
     }
-    header('Location: trade_upload.php?' . http_build_query(array_filter([
-        'filter' => $_GET['filter'] ?? 'all',
-        'type' => $_GET['type'] ?? 'all',
-        'search' => $_GET['search'] ?? ''
-    ])));
+    header('Location: dealing_sheet.php?view=' . urlencode($view));
     exit;
 }
 
 // ============================================
-// HANDLE COMMENTS
+// DEALING SHEET PDF CLASS - REDUCED FONT SIZES
 // ============================================
-
-// Handle Trader Comment Upload
-if (isset($_POST['add_comment']) && isset($_POST['trade_id'])) {
-    $trade_id = (int) $_POST['trade_id'];
-    $comment = trim($_POST['trader_comment'] ?? '');
+class DealingSheetPDF extends TCPDF {
+    use ReportHeaderTrait;
     
-    if (empty($comment)) {
-        $_SESSION['alert'] = ['Please enter a comment.', 'danger'];
-        header('Location: trade_upload.php?' . http_build_query(array_filter([
-            'filter' => $_GET['filter'] ?? 'all',
-            'type' => $_GET['type'] ?? 'all',
-            'search' => $_GET['search'] ?? ''
-        ])));
+    private $company_name = '';
+    private $watermark_enabled = true;
+    
+    public function setCompanyName($name) {
+        $this->company_name = $name;
+    }
+    
+    public function setWatermarkEnabled($enabled) {
+        $this->watermark_enabled = $enabled;
+    }
+    
+    public function Header() {
+        // Render the report header (this appears at the top)
+        $this->renderReportHeader();
+        
+        // Get the Y position after header
+        $y = $this->GetY();
+        
+        // Add watermark if enabled
+        if ($this->watermark_enabled) {
+            $this->SetAlpha(0.05);
+            $this->SetFont('times', 'B', 45);
+            $this->SetTextColor(200, 200, 200);
+            $this->StartTransform();
+            $this->Rotate(45, 105, 150);
+            $this->Text(105, 150, $this->company_name);
+            $this->StopTransform();
+            $this->SetAlpha(1);
+            $this->SetTextColor(0, 0, 0);
+        }
+        
+        // Set Y position to start content AFTER the header
+        $this->SetY($y + 12);
+    }
+    
+    public function Footer() {
+        $this->SetY(-12);
+        $this->SetFont('helvetica', 'I', 7);
+        $this->SetTextColor(100, 100, 100);
+        $this->Cell(0, 5, 'Generated on: ' . date('d/m/Y H:i:s'), 0, 0, 'L');
+        $this->Cell(0, 5, 'Page ' . $this->getAliasNumPage() . ' of ' . $this->getAliasNbPages(), 0, 0, 'R');
+    }
+    
+    public function addDealingSheet($sheet, $fees, $exportedByName) {
+        $this->AddPage();
+        
+        $is_bond = ($sheet['asset_class'] === 'bond');
+        $trade_side = strtoupper($sheet['order_type'] ?? 'BUY');
+        
+        // ============================================
+        // TITLE - Starts after header
+        // ============================================
+        $this->Ln(12);
+        $this->SetFont('helvetica', 'B', 12);
+        $this->Cell(0, 6, 'ORDER SHEET', 0, 1, 'C');
+        $this->Ln(2);
+        
+        // ============================================
+        // COMPANY INFO - Smaller font
+        // ============================================
+        $this->SetFont('helvetica', '', 7);
+        $this->Cell(55, 4, 'Broker Code: ' . ($sheet['broker_code'] ?? 'N/A'), 0, 0, 'L');
+        $this->Cell(60, 4, 'Department: Operations', 0, 0, 'L');
+        $this->Cell(0, 4, 'Date: ' . date('d/m/Y', strtotime($sheet['order_date'] ?? date('Y-m-d'))), 0, 1, 'L');
+        $this->Ln(2);
+        
+        // ============================================
+        // 1. CLIENT DETAILS - Compact
+        // ============================================
+        $this->SetFont('helvetica', 'B', 8);
+        $this->SetFillColor(240, 240, 240);
+        $this->Cell(0, 5, '1. CLIENT DETAILS', 0, 1, 'L', true);
+        
+        $this->SetFont('helvetica', '', 7);
+        $this->Cell(35, 4, 'Client Name:', 0, 0);
+        $this->SetFont('helvetica', 'B', 7);
+        $this->Cell(0, 4, $sheet['client_name'], 0, 1);
+        
+        $this->SetFont('helvetica', '', 7);
+        $this->Cell(35, 4, 'CDS Account:', 0, 0);
+        $this->SetFont('helvetica', 'B', 7);
+        $this->Cell(0, 4, $sheet['client_cds_account'] ?? 'N/A', 0, 1);
+        
+        $this->Ln(2);
+        
+        // ============================================
+        // 2. ORDER DETAILS - Compact two-column
+        // ============================================
+        $this->SetFont('helvetica', 'B', 8);
+        $this->SetFillColor(240, 240, 240);
+        $this->Cell(0, 5, '2. ORDER DETAILS', 0, 1, 'L', true);
+        
+        $qty = floatval($sheet['quantity'] ?? 0);
+        $price = floatval($sheet['order_price'] ?? 0);
+        $order_value = $qty * $price;
+        
+        $this->SetFont('helvetica', '', 7);
+        
+        // Row 1
+        $this->Cell(40, 4, 'Order Type:', 0, 0);
+        $this->SetFont('helvetica', 'B', 7);
+        $this->Cell(50, 4, $trade_side, 0, 0);
+        $this->SetFont('helvetica', '', 7);
+        $this->Cell(30, 4, 'Priority:', 0, 0);
+        $this->SetFont('helvetica', 'B', 7);
+        $this->Cell(0, 4, $sheet['priority'] ?? 'Normal', 0, 1);
+        
+        // Row 2
+        $this->SetFont('helvetica', '', 7);
+        $this->Cell(40, 4, 'Asset Class:', 0, 0);
+        $this->SetFont('helvetica', 'B', 7);
+        $this->Cell(50, 4, ucfirst($sheet['asset_class']), 0, 0);
+        $this->SetFont('helvetica', '', 7);
+        $this->Cell(30, 4, 'Security:', 0, 0);
+        $this->SetFont('helvetica', 'B', 7);
+        $this->Cell(0, 4, $sheet['security_id'], 0, 1);
+        
+        // Row 3
+        $this->SetFont('helvetica', '', 7);
+        $this->Cell(40, 4, 'Quantity:', 0, 0);
+        $this->SetFont('helvetica', 'B', 7);
+        $this->Cell(50, 4, number_format($qty, ($is_bond ? 2 : 0)), 0, 0);
+        $this->SetFont('helvetica', '', 7);
+        $this->Cell(30, 4, 'Price:', 0, 0);
+        $this->SetFont('helvetica', 'B', 7);
+        if ($is_bond) {
+            $this->Cell(0, 4, number_format($price, 4) . '%', 0, 1);
+        } else {
+            $this->Cell(0, 4, 'TZS ' . number_format($price, 2), 0, 1);
+        }
+        
+        // Row 4
+        $this->SetFont('helvetica', '', 7);
+        $this->Cell(40, 4, 'Order Value:', 0, 0);
+        $this->SetFont('helvetica', 'B', 7);
+        $this->Cell(50, 4, 'TZS ' . number_format($order_value, 2), 0, 0);
+        $this->SetFont('helvetica', '', 7);
+        $this->Cell(30, 4, 'Order Date/Time:', 0, 0);
+        $this->SetFont('helvetica', 'B', 7);
+        $order_datetime = ($sheet['order_date'] ?? date('Y-m-d')) . ' ' . ($sheet['order_time'] ?? '');
+        $this->Cell(0, 4, date('d/m/Y H:i', strtotime($order_datetime)), 0, 1);
+        
+        $this->Ln(2);
+        
+        // ============================================
+        // 3. EXECUTION DETAILS - Compact
+        // ============================================
+        $this->SetFont('helvetica', 'B', 8);
+        $this->SetFillColor(240, 240, 240);
+        $this->Cell(0, 5, '3. EXECUTION DETAILS', 0, 1, 'L', true);
+        
+        $executed_qty = floatval($sheet['executed_quantity'] ?? 0);
+        $executed_price = floatval($sheet['executed_price'] ?? 0);
+        
+        if ($is_bond) {
+            $executed_value = ($executed_price / 100) * $executed_qty;
+            $exec_qty_display = $executed_qty > 0 ? 'TZS ' . number_format($executed_qty, 2) : 'Pending';
+            $exec_price_display = $executed_price > 0 ? number_format($executed_price, 4) . '%' : 'Pending';
+        } else {
+            $executed_value = $executed_qty * $executed_price;
+            $exec_qty_display = $executed_qty > 0 ? number_format($executed_qty, 0) : 'Pending';
+            $exec_price_display = $executed_price > 0 ? 'TZS ' . number_format($executed_price, 2) : 'Pending';
+        }
+        
+        $this->SetFont('helvetica', '', 7);
+        
+        // Row 1
+        $this->Cell(50, 4, 'Executed Quantity:', 0, 0);
+        $this->SetFont('helvetica', 'B', 7);
+        $this->Cell(50, 4, $exec_qty_display, 0, 0);
+        $this->SetFont('helvetica', '', 7);
+        $this->Cell(35, 4, 'Executed Price:', 0, 0);
+        $this->SetFont('helvetica', 'B', 7);
+        $this->Cell(0, 4, $exec_price_display, 0, 1);
+        
+        // Row 2
+        $this->SetFont('helvetica', '', 7);
+        $this->Cell(50, 4, 'Executed Value:', 0, 0);
+        $this->SetFont('helvetica', 'B', 7);
+        $this->Cell(50, 4, $executed_value > 0 ? 'TZS ' . number_format($executed_value, 2) : 'Pending', 0, 0);
+        $this->SetFont('helvetica', '', 7);
+        $this->Cell(35, 4, 'Execution Status:', 0, 0);
+        $this->SetFont('helvetica', 'B', 7);
+        $this->Cell(0, 4, ucfirst($sheet['execution_status'] ?? 'Pending'), 0, 1);
+        
+        if ($executed_qty > 0) {
+            $this->SetFont('helvetica', '', 7);
+            $this->Cell(50, 4, 'Trade Date:', 0, 0);
+            $this->SetFont('helvetica', 'B', 7);
+            $this->Cell(50, 4, $sheet['trade_date'] ? date('d/m/Y', strtotime($sheet['trade_date'])) : 'Pending', 0, 0);
+            $this->SetFont('helvetica', '', 7);
+            $this->Cell(35, 4, 'Settlement Date:', 0, 0);
+            $this->SetFont('helvetica', 'B', 7);
+            $this->Cell(0, 4, $sheet['settlement_date'] ? date('d/m/Y', strtotime($sheet['settlement_date'])) : 'Pending', 0, 1);
+            
+            $this->SetFont('helvetica', '', 7);
+            $this->Cell(50, 4, 'Trade Reference:', 0, 0);
+            $this->SetFont('helvetica', 'B', 7);
+            $this->Cell(0, 4, $sheet['trade_reference'] ?? 'Pending', 0, 1);
+        }
+        
+        $this->Ln(2);
+        
+        // ============================================
+        // 4. FEES AND CHARGES - Compact with smaller fonts
+        // ============================================
+        $this->SetFont('helvetica', 'B', 8);
+        $this->SetFillColor(240, 240, 240);
+        $this->Cell(0, 5, '4. FEES AND CHARGES', 0, 1, 'L', true);
+        
+        // Table header - smaller font
+        $this->SetFont('helvetica', 'B', 6.5);
+        $this->Cell(85, 4, 'Description', 0, 0, 'L');
+        $this->Cell(50, 4, 'Rate / Basis', 0, 0, 'R');
+        $this->Cell(35, 4, 'Amount (TZS)', 0, 1, 'R');
+        $this->SetLineWidth(0.2);
+        $this->Line(15, $this->GetY(), 195, $this->GetY());
+        
+        $this->SetFont('helvetica', '', 6.5);
+        
+        // Brokerage Commission
+        $this->Cell(85, 4, 'Brokerage Commission', 0, 0, 'L');
+        if ($is_bond) {
+            $this->Cell(50, 4, 'Tiered (0.063132% / 0.035%)', 0, 0, 'R');
+        } else {
+            $this->Cell(50, 4, 'Tiered (1.7% / 1.5% / 0.8%)', 0, 0, 'R');
+        }
+        $this->Cell(35, 4, number_format($fees['brokerage'], 2), 0, 1, 'R');
+        
+        // Show tier details - even smaller
+        if (!empty($fees['tier_details'])) {
+            $this->SetFont('helvetica', 'I', 5.5);
+            foreach ($fees['tier_details'] as $tier) {
+                $this->Cell(15, 3, '', 0, 0);
+                $this->Cell(70, 3, $tier['label'], 0, 0, 'L');
+                $this->Cell(50, 3, '', 0, 0, 'R');
+                $this->Cell(35, 3, number_format($tier['fee'], 2), 0, 1, 'R');
+            }
+            $this->SetFont('helvetica', '', 6.5);
+        }
+        
+        // VAT
+        $this->Cell(85, 4, 'VAT on Brokerage', 0, 0, 'L');
+        $this->Cell(50, 4, '@ 18.00%', 0, 0, 'R');
+        $this->Cell(35, 4, number_format($fees['vat'], 2), 0, 1, 'R');
+        
+        // CMSA - Only fee calculated from Consideration for Bonds
+        $cmsa_rate = $is_bond ? '0.0100%' : '0.1400%';
+        $cmsa_basis = $is_bond ? 'of Consideration' : 'of Consideration';
+        $this->Cell(85, 4, 'CMSA Transaction Fee', 0, 0, 'L');
+        $this->Cell(50, 4, '@ ' . $cmsa_rate . ' ' . $cmsa_basis, 0, 0, 'R');
+        $this->Cell(35, 4, number_format($fees['cmsa'], 2), 0, 1, 'R');
+        
+        // DSE - Calculated on Face Value for Bonds
+        $dse_rate = $is_bond ? '0.02006%' : '0.1652%';
+        $dse_basis = $is_bond ? 'of Face Value' : 'of Consideration';
+        $this->Cell(85, 4, 'DSE Transaction Fee', 0, 0, 'L');
+        $this->Cell(50, 4, '@ ' . $dse_rate . ' ' . $dse_basis, 0, 0, 'R');
+        $this->Cell(35, 4, number_format($fees['dse'], 2), 0, 1, 'R');
+        
+        // Fidelity (Equity/ETF only)
+        if (!$is_bond) {
+            $this->Cell(85, 4, 'Fidelity Fee', 0, 0, 'L');
+            $this->Cell(50, 4, '@ 0.0200% of Consideration', 0, 0, 'R');
+            $this->Cell(35, 4, number_format($fees['fidelity'] ?? 0, 2), 0, 1, 'R');
+        }
+        
+        // CDS/CSDR - Calculated on Face Value for Bonds
+        $cds_rate = $is_bond ? '0.0118%' : '0.0708%';
+        $cds_basis = $is_bond ? 'of Face Value' : 'of Consideration';
+        $cds_label = $is_bond ? 'CSDR Fee' : 'CDS Fee';
+        $this->Cell(85, 4, $cds_label, 0, 0, 'L');
+        $this->Cell(50, 4, '@ ' . $cds_rate . ' ' . $cds_basis, 0, 0, 'R');
+        $this->Cell(35, 4, number_format($fees['csd'], 2), 0, 1, 'R');
+        
+        // VRF (Equity/ETF only)
+        if (!$is_bond) {
+            $this->Cell(85, 4, 'VRF Fee', 0, 0, 'L');
+            $this->Cell(50, 4, '@ 0.0025% of Consideration', 0, 0, 'R');
+            $this->Cell(35, 4, number_format($fees['vrf'] ?? 0, 2), 0, 1, 'R');
+        }
+        
+        // Other Charges
+        $this->Cell(85, 4, 'Other Charges', 0, 0, 'L');
+        $this->Cell(50, 4, '', 0, 0, 'R');
+        $this->Cell(35, 4, '0.00', 0, 1, 'R');
+        
+        $this->Line(15, $this->GetY(), 195, $this->GetY());
+        
+        // Total Charges - slightly larger
+        $this->SetFont('helvetica', 'B', 7.5);
+        $this->Cell(135, 5, 'TOTAL CHARGES', 0, 0, 'R');
+        $this->Cell(35, 5, number_format($fees['total'], 2), 0, 1, 'R');
+        
+        $this->Ln(2);
+        
+        // ============================================
+        // NET AMOUNT
+        // ============================================
+        $consideration = $executed_value > 0 ? $executed_value : $order_value;
+        $is_sell = ($trade_side === 'SELL');
+        
+        if ($is_sell) {
+            $net_amount = $consideration - $fees['total'];
+            $net_label = 'NET AMOUNT RECEIVABLE';
+        } else {
+            $net_amount = $consideration + $fees['total'];
+            $net_label = 'NET AMOUNT PAYABLE';
+        }
+        
+        $this->SetLineWidth(0.5);
+        $this->Line(15, $this->GetY() + 2, 195, $this->GetY() + 2);
+        $this->Ln(3);
+        
+        $this->SetFont('helvetica', 'B', 9);
+        $this->Cell(120, 5, $net_label . ':', 0, 0, 'R');
+        $this->SetFont('helvetica', 'B', 9);
+        $this->SetTextColor(0, 100, 0);
+        $this->Cell(35, 5, 'TZS ' . number_format($net_amount, 2), 0, 1, 'R');
+        $this->SetTextColor(0, 0, 0);
+        
+        if ($is_bond) {
+            $this->SetFont('helvetica', 'I', 5.5);
+            $this->SetTextColor(100, 100, 100);
+            $this->Cell(0, 3, '* For bonds: Consideration = (Price% / 100) × Face Value', 0, 1, 'L');
+            $this->SetTextColor(0, 0, 0);
+        }
+        
+        $this->Ln(3);
+        
+        // ============================================
+        // PAYMENT RECEIPTS (Multiple) - Compact
+        // ============================================
+        if (!empty($sheet['payment_receipt'])) {
+            $receipt_files = explode(',', $sheet['payment_receipt']);
+            $has_receipts = false;
+            
+            foreach ($receipt_files as $receipt_file) {
+                $receipt_path = '../uploads/payment_receipts/' . trim($receipt_file);
+                if (file_exists($receipt_path)) {
+                    if (!$has_receipts) {
+                        $this->SetFont('helvetica', 'B', 7);
+                        $this->Cell(0, 4, 'Payment Receipts:', 0, 1, 'L');
+                        $has_receipts = true;
+                    }
+                    
+                    $ext = strtolower(pathinfo($receipt_file, PATHINFO_EXTENSION));
+                    if (in_array($ext, ['jpg', 'jpeg', 'png', 'gif'])) {
+                        $this->Image($receipt_path, 30, $this->GetY(), 120, 0, '', '', '', false, 200, '', false, false, 0);
+                        $this->Ln(6);
+                    } else {
+                        $this->SetFont('helvetica', 'I', 5.5);
+                        $this->Cell(0, 3, '• PDF receipt attached: ' . htmlspecialchars($receipt_file), 0, 1, 'L');
+                    }
+                }
+            }
+            if ($has_receipts) {
+                $this->Ln(2);
+            }
+        }
+        
+        // ============================================
+        // REMARKS - Compact
+        // ============================================
+        if (!empty($sheet['remarks'])) {
+            $this->SetFont('helvetica', 'B', 7);
+            $this->Cell(0, 4, 'Remarks:', 0, 1);
+            $this->SetFont('helvetica', '', 6.5);
+            $this->MultiCell(0, 3, $sheet['remarks'], 0, 'L');
+            $this->Ln(2);
+        }
+        
+        // ============================================
+        // SIGNATURES - Compact
+        // ============================================
+        $this->SetFont('helvetica', 'B', 7);
+        $this->Cell(0, 4, 'Dealer Name:', 0, 0);
+        $this->SetFont('helvetica', '', 7);
+        $this->Cell(0, 4, $sheet['dealer_name'] ?? $exportedByName, 0, 1);
+        $this->Ln(2);
+        
+        $this->SetFont('helvetica', 'B', 7);
+        $this->Cell(70, 4, 'Prepared By:', 0, 0);
+        $this->Cell(70, 4, 'Checked By:', 0, 0);
+        $this->Cell(0, 4, 'Approved By:', 0, 1);
+        
+        $this->SetLineWidth(0.2);
+        $this->Line(15, $this->GetY() + 5, 65, $this->GetY() + 5);
+        $this->Line(85, $this->GetY() + 5, 135, $this->GetY() + 5);
+        $this->Line(150, $this->GetY() + 5, 195, $this->GetY() + 5);
+        
+        $this->SetFont('helvetica', 'I', 5.5);
+        $this->Cell(70, 8, $exportedByName, 0, 0, 'L');
+        $this->Cell(70, 8, '__________________', 0, 0, 'L');
+        $this->Cell(0, 8, '__________________', 0, 1, 'L');
+        
+        $this->Ln(3);
+        
+        // ============================================
+        // DISCLAIMER - Smallest font
+        // ============================================
+        $this->SetFont('helvetica', 'I', 4.5);
+        $this->SetTextColor(120, 120, 120);
+        $disclaimer = "This Order Sheet is for internal use only. It does not constitute a contract note or official trade confirmation. " .
+                      "All trades are subject to the Rules, Regulations and Customs of the Dar es Salaam Stock Exchange.";
+        $this->MultiCell(0, 2.5, $disclaimer, 0, 'C');
+        $this->SetTextColor(0, 0, 0);
+    }
+}
+
+// ============================================
+// FEES CALCULATION FUNCTION - UPDATED FOR BONDS
+// ============================================
+function calculateDealingSheetFees($asset_class, $consideration, $quantity, $price) {
+    $fees = [];
+    $fees['tier_details'] = [];
+    $fees['vrf'] = 0;
+    
+    $is_bond = ($asset_class === 'bond');
+    
+    if ($is_bond) {
+        // ============================================
+        // BOND FEES - Calculated on Face Value (Quantity)
+        // CMSA is the ONLY fee calculated from Consideration
+        // ============================================
+        $face_value = $quantity;
+        
+        // Brokerage: 0.063132% on first 100M, 0.035% on excess
+        $brokerage_first_100m = min($face_value, 100000000) * (0.063132 / 100);
+        $brokerage_excess = max($face_value - 100000000, 0) * (0.035 / 100);
+        $fees['brokerage'] = $brokerage_first_100m + $brokerage_excess;
+        
+        if ($face_value <= 100000000) {
+            $fees['tier_details'][] = [
+                'fee' => $brokerage_first_100m,
+                'label' => number_format($face_value/1000000, 2) . 'M @ 0.063132%'
+            ];
+        } else {
+            $fees['tier_details'][] = [
+                'fee' => $brokerage_first_100m,
+                'label' => 'First 100M @ 0.063132%'
+            ];
+            $fees['tier_details'][] = [
+                'fee' => $brokerage_excess,
+                'label' => 'Excess ' . number_format(($face_value - 100000000)/1000000, 2) . 'M @ 0.035%'
+            ];
+        }
+        
+        // VAT: 18% of Brokerage (calculated on Face Value)
+        $fees['vat'] = $fees['brokerage'] * 0.18;
+        
+        // CMSA: 0.0100% of CONSIDERATION (Monetary Value)
+        $fees['cmsa'] = $consideration * (0.0100 / 100);
+        
+        // CSD: 0.0118% of FACE VALUE
+        $fees['csd'] = $face_value * (0.0118 / 100);
+        
+        // DSE: 0.02006% of FACE VALUE
+        $fees['dse'] = $face_value * (0.02006 / 100);
+        
+        // No Fidelity for bonds
+        $fees['fidelity'] = 0;
+        
+        // No VRF for bonds
+        $fees['vrf'] = 0;
+        
+    } else {
+        // ============================================
+        // EQUITY/ETF FEES - All calculated on Consideration
+        // ============================================
+        $total_brokerage = 0;
+        
+        if ($consideration <= 10000000) {
+            $brokerage_fee = $consideration * (1.7000 / 100);
+            $fees['tier_details'][] = [
+                'fee' => $brokerage_fee,
+                'label' => 'Up to 10M @ 1.7000%'
+            ];
+            $total_brokerage = $brokerage_fee;
+        } elseif ($consideration <= 50000000) {
+            $tier1_fee = 10000000 * (1.7000 / 100);
+            $tier2_fee = ($consideration - 10000000) * (1.5000 / 100);
+            $fees['tier_details'][] = [
+                'fee' => $tier1_fee,
+                'label' => 'First 10M @ 1.7000%'
+            ];
+            $fees['tier_details'][] = [
+                'fee' => $tier2_fee,
+                'label' => 'Next ' . number_format(($consideration - 10000000)/1000000, 1) . 'M @ 1.5000%'
+            ];
+            $total_brokerage = $tier1_fee + $tier2_fee;
+        } else {
+            $tier1_fee = 10000000 * (1.7000 / 100);
+            $tier2_fee = 40000000 * (1.5000 / 100);
+            $tier3_fee = ($consideration - 50000000) * (0.8000 / 100);
+            $fees['tier_details'][] = [
+                'fee' => $tier1_fee,
+                'label' => 'First 10M @ 1.7000%'
+            ];
+            $fees['tier_details'][] = [
+                'fee' => $tier2_fee,
+                'label' => 'Next 40M @ 1.5000%'
+            ];
+            $fees['tier_details'][] = [
+                'fee' => $tier3_fee,
+                'label' => 'Excess ' . number_format(($consideration - 50000000)/1000000, 1) . 'M @ 0.8000%'
+            ];
+            $total_brokerage = $tier1_fee + $tier2_fee + $tier3_fee;
+        }
+        
+        $fees['brokerage'] = $total_brokerage;
+        $fees['vat'] = $fees['brokerage'] * 0.18;
+        $fees['cmsa'] = $consideration * (0.1400 / 100);
+        $fees['dse'] = $consideration * (0.1652 / 100);
+        $fees['fidelity'] = $consideration * (0.0200 / 100);
+        $fees['csd'] = $consideration * (0.0708 / 100);
+        $fees['vrf'] = $consideration * (0.0025 / 100);
+    }
+    
+    $fees['total'] = $fees['brokerage'] + $fees['vat'] + $fees['cmsa'] + $fees['dse'] + $fees['fidelity'] + $fees['csd'] + $fees['vrf'];
+    
+    return $fees;
+}
+
+// ============================================
+// PDF EXPORT HANDLER - MUST BE FIRST
+// ============================================
+if (isset($_GET['export_pdf']) && isset($_GET['id'])) {
+    // Clean output buffers
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+    
+    $sheet_id = (int) $_GET['id'];
+    $sheet = dealingSheetGetById($db, $sheet_id);
+    
+    if (!$sheet) {
+        die('Dealing sheet not found.');
+    }
+    
+    $company_details = dealingSheetGetCompany($db);
+    $company_name = $company_details['company_name'] ?? 'Victory Financial Services Ltd';
+    
+    // Calculate consideration
+    $executed_qty = floatval($sheet['executed_quantity'] ?? 0);
+    $executed_price = floatval($sheet['executed_price'] ?? 0);
+    $order_qty = floatval($sheet['quantity'] ?? 0);
+    $order_price = floatval($sheet['order_price'] ?? 0);
+    $is_bond = ($sheet['asset_class'] === 'bond');
+    
+    if ($executed_qty > 0 && $executed_price > 0) {
+        $quantity = $executed_qty;
+        $price = $executed_price;
+    } else {
+        $quantity = $order_qty;
+        $price = $order_price;
+    }
+    
+    // Calculate consideration based on asset class
+    if ($is_bond) {
+        // For bonds: Consideration = (Price% / 100) × Face Value
+        $consideration = ($price / 100) * $quantity;
+    } else {
+        // For equities/ETFs: Consideration = Quantity × Price
+        $consideration = $quantity * $price;
+    }
+    
+    $fees = calculateDealingSheetFees($sheet['asset_class'], $consideration, $quantity, $price);
+    
+    $pdf = new DealingSheetPDF('P', 'mm', 'A4', true, 'UTF-8', false);
+    $pdf->setCompanyName($company_name);
+    $pdf->setWatermarkEnabled(true);
+    $pdf->SetCreator($company_name);
+    $pdf->SetAuthor($sheet['dealer_name'] ?? 'System');
+    $pdf->SetTitle('Dealing Sheet - ' . ($sheet['sheet_reference'] ?? ''));
+    $pdf->SetMargins(15, 15, 15);
+    $pdf->SetHeaderMargin(9);
+    $pdf->SetFooterMargin(8);
+    $pdf->SetAutoPageBreak(true, 12);
+    
+    $exportedByName = dealingSheetGetCurrentUserDisplayName($current_user);
+    $pdf->addDealingSheet($sheet, $fees, $exportedByName);
+    
+    $filename = 'dealing_sheet_' . preg_replace('/[^a-zA-Z0-9_-]/', '_', $sheet['sheet_reference'] ?? 'export') . '.pdf';
+    
+    // Force inline view with proper headers
+    header('Content-Type: application/pdf');
+    header('Content-Disposition: inline; filename="' . $filename . '"');
+    header('Cache-Control: private, max-age=0, must-revalidate');
+    header('Pragma: public');
+    
+    $pdf->Output($filename, 'I');
+    exit;
+}
+
+// ============================================
+// POST HANDLER FOR AJAX SAVE
+// ============================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_POST['ajax_action'] === 'save_order') {
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+    
+    header('Content-Type: application/json');
+    
+    try {
+        $data = $_POST;
+        
+        $required_fields = ['client_name', 'security_id', 'quantity', 'order_price'];
+        foreach ($required_fields as $field) {
+            if (empty($data[$field])) {
+                throw new Exception('Missing required field: ' . $field);
+            }
+        }
+        
+        if (empty($data['id'])) {
+            $prefix = 'DS' . date('Ymd');
+            $stmt = $db->prepare("SELECT COUNT(*) FROM dealing_sheets WHERE sheet_reference LIKE ?");
+            $stmt->execute([$prefix . '%']);
+            $count = $stmt->fetchColumn() + 1;
+            $data['sheet_reference'] = $prefix . str_pad($count, 4, '0', STR_PAD_LEFT);
+        }
+        
+        // Map priority
+        $priority_map = ['normal' => 'Normal', 'urgent' => 'Urgent', 'most_important' => 'Most Important'];
+        $data['priority'] = $priority_map[$data['priority'] ?? 'normal'] ?? 'Normal';
+        
+        // Calculate order value based on asset class
+        $qty = floatval($data['quantity']);
+        $price = floatval($data['order_price']);
+        $is_bond = ($data['asset_class'] ?? 'equity') === 'bond';
+        
+        if ($is_bond) {
+            // For bonds: Value = (Price% / 100) × Face Value
+            $data['order_value'] = ($price / 100) * $qty;
+        } else {
+            $data['order_value'] = $qty * $price;
+        }
+        
+        if (!empty($data['id'])) {
+            // Update existing
+            $sql = "UPDATE dealing_sheets SET 
+                client_name = :client_name,
+                client_cds_account = :client_cds_account,
+                security_id = :security_id,
+                security_name = :security_name,
+                order_type = :order_type,
+                asset_class = :asset_class,
+                quantity = :quantity,
+                order_price = :order_price,
+                order_value = :order_value,
+                order_date = :order_date,
+                order_time = :order_time,
+                priority = :priority,
+                remarks = :remarks,
+                broker_code = :broker_code,
+                executed_quantity = :executed_quantity,
+                executed_price = :executed_price,
+                trade_date = :trade_date,
+                settlement_date = :settlement_date,
+                execution_time = :execution_time,
+                updated_at = NOW()
+                WHERE id = :id";
+            
+            $stmt = $db->prepare($sql);
+            $stmt->execute([
+                ':id' => $data['id'],
+                ':client_name' => $data['client_name'],
+                ':client_cds_account' => $data['client_cds_account'] ?? '',
+                ':security_id' => $data['security_id'],
+                ':security_name' => $data['security_name'] ?? '',
+                ':order_type' => $data['order_type'] ?? 'buy',
+                ':asset_class' => $data['asset_class'] ?? 'equity',
+                ':quantity' => $data['quantity'],
+                ':order_price' => $data['order_price'],
+                ':order_value' => $data['order_value'],
+                ':order_date' => $data['order_date'] ?? date('Y-m-d'),
+                ':order_time' => $data['order_time'] ?? date('H:i:s'),
+                ':priority' => $data['priority'],
+                ':remarks' => $data['remarks'] ?? '',
+                ':broker_code' => $data['broker_code'] ?? '',
+                ':executed_quantity' => !empty($data['executed_quantity']) ? $data['executed_quantity'] : null,
+                ':executed_price' => !empty($data['executed_price']) ? $data['executed_price'] : null,
+                ':trade_date' => !empty($data['trade_date']) ? $data['trade_date'] : null,
+                ':settlement_date' => !empty($data['settlement_date']) ? $data['settlement_date'] : null,
+                ':execution_time' => !empty($data['execution_time']) ? $data['execution_time'] : null
+            ]);
+        } else {
+            // Insert new
+            $sql = "INSERT INTO dealing_sheets (
+                sheet_reference, client_name, client_cds_account, security_id, security_name,
+                order_type, asset_class, quantity, order_price, order_value, order_date, order_time,
+                priority, remarks, broker_code, executed_quantity, executed_price,
+                trade_date, settlement_date, execution_time, lifecycle_stage, execution_status,
+                recorded_at, created_at, dealer_name
+            ) VALUES (
+                :sheet_reference, :client_name, :client_cds_account, :security_id, :security_name,
+                :order_type, :asset_class, :quantity, :order_price, :order_value, :order_date, :order_time,
+                :priority, :remarks, :broker_code, :executed_quantity, :executed_price,
+                :trade_date, :settlement_date, :execution_time, 'order', 'pending',
+                NOW(), NOW(), :dealer_name
+            )";
+            
+            $stmt = $db->prepare($sql);
+            $stmt->execute([
+                ':sheet_reference' => $data['sheet_reference'],
+                ':client_name' => $data['client_name'],
+                ':client_cds_account' => $data['client_cds_account'] ?? '',
+                ':security_id' => $data['security_id'],
+                ':security_name' => $data['security_name'] ?? '',
+                ':order_type' => $data['order_type'] ?? 'buy',
+                ':asset_class' => $data['asset_class'] ?? 'equity',
+                ':quantity' => $data['quantity'],
+                ':order_price' => $data['order_price'],
+                ':order_value' => $data['order_value'],
+                ':order_date' => $data['order_date'] ?? date('Y-m-d'),
+                ':order_time' => $data['order_time'] ?? date('H:i:s'),
+                ':priority' => $data['priority'],
+                ':remarks' => $data['remarks'] ?? '',
+                ':broker_code' => $data['broker_code'] ?? '',
+                ':executed_quantity' => !empty($data['executed_quantity']) ? $data['executed_quantity'] : null,
+                ':executed_price' => !empty($data['executed_price']) ? $data['executed_price'] : null,
+                ':trade_date' => !empty($data['trade_date']) ? $data['trade_date'] : null,
+                ':settlement_date' => !empty($data['settlement_date']) ? $data['settlement_date'] : null,
+                ':execution_time' => !empty($data['execution_time']) ? $data['execution_time'] : null,
+                ':dealer_name' => dealingSheetGetCurrentUserDisplayName($current_user)
+            ]);
+        }
+        
+        echo json_encode(['success' => true, 'message' => 'Order saved successfully']);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ============================================
+// ORDER ACTION HANDLERS
+// ============================================
+if (isset($_GET['action']) && isset($_GET['id'])) {
+    $sheet_id = (int) $_GET['id'];
+    
+    if ($_GET['action'] === 'delete_order') {
+        $db->prepare("DELETE FROM dealing_sheets WHERE id = ?")->execute([$sheet_id]);
+        $_SESSION['alert'] = ['Order deleted successfully.', 'success'];
+        header('Location: dealing_sheet.php?view=' . urlencode($view));
         exit;
     }
     
-    $stmt = $db->prepare("
-        INSERT INTO trade_comments (trade_id, comment, created_by, created_at) 
-        VALUES (?, ?, ?, NOW())
-    ");
-    
-    if ($stmt->execute([$trade_id, $comment, $user_name])) {
-        $_SESSION['alert'] = ['Comment added successfully.', 'success'];
-    } else {
-        $_SESSION['alert'] = ['Failed to add comment.', 'danger'];
+    if ($_GET['action'] === 'cancel_order') {
+        $db->prepare("UPDATE dealing_sheets SET lifecycle_stage = 'cancelled', execution_status = 'cancelled', updated_at = NOW() WHERE id = ?")->execute([$sheet_id]);
+        $_SESSION['alert'] = ['Order cancelled successfully.', 'warning'];
+        header('Location: dealing_sheet.php?view=' . urlencode($view));
+        exit;
     }
     
-    header('Location: trade_upload.php?' . http_build_query(array_filter([
-        'filter' => $_GET['filter'] ?? 'all',
-        'type' => $_GET['type'] ?? 'all',
-        'search' => $_GET['search'] ?? ''
-    ])));
-    exit;
+    if ($_GET['action'] === 'mark_executed') {
+        $db->prepare("UPDATE dealing_sheets SET lifecycle_stage = 'executed', execution_status = 'executed', updated_at = NOW() WHERE id = ?")->execute([$sheet_id]);
+        $_SESSION['alert'] = ['Order marked as executed successfully.', 'success'];
+        header('Location: dealing_sheet.php?view=' . urlencode($view));
+        exit;
+    }
 }
 
 // ============================================
-// GET FILTER PARAMETERS
+// AJAX HANDLERS FOR SEARCH
 // ============================================
-$filter = $_GET['filter'] ?? 'all';
-$type_filter = $_GET['type'] ?? 'all';
-$search = $_GET['search'] ?? '';
-
-// ============================================
-// FETCH TRADES
-// ============================================
-function getTrades($db, $filter = 'all', $type_filter = 'all', $search = '') {
-    $sql = "
-        SELECT 
-            t.id,
-            t.trade_reference,
-            t.asset_class,
-            t.security_id,
-            t.security_name,
-            t.client_name,
-            t.client_cds_account,
-            t.trade_side,
-            t.quantity,
-            t.price,
-            t.consideration,
-            t.trade_date,
-            t.settlement_date,
-            t.exchange_reference,
-            t.additional_reference,
-            t.uploaded_by,
-            t.status,
-            t.created_at,
-            ANY_VALUE(tr.receipt_files) as receipt_files,
-            ANY_VALUE(tr.uploaded_by) as receipt_uploaded_by,
-            ANY_VALUE(tr.created_at) as receipt_created_at,
-            ANY_VALUE(tr.updated_at) as receipt_updated_at,
-            GROUP_CONCAT(DISTINCT tc.comment ORDER BY tc.created_at DESC SEPARATOR '|||') as comments,
-            GROUP_CONCAT(DISTINCT tc.created_by ORDER BY tc.created_at DESC SEPARATOR '|||') as comment_authors,
-            GROUP_CONCAT(DISTINCT tc.created_at ORDER BY tc.created_at DESC SEPARATOR '|||') as comment_dates
-        FROM trades t
-        LEFT JOIN trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
-        LEFT JOIN trade_comments tc ON t.id = tc.trade_id
-        WHERE 1=1
-    ";
+if (isset($_GET['ajax_action'])) {
+    header('Content-Type: application/json');
     
-    $params = [];
-    
-    // Type filter
-    if ($type_filter === 'bond') {
-        $sql .= " AND t.asset_class = 'bond'";
-    } elseif ($type_filter === 'equity') {
-        $sql .= " AND t.asset_class = 'equity'";
-    } elseif ($type_filter === 'etf') {
-        $sql .= " AND t.asset_class = 'Exchange Traded Funds'";
-    }
-    
-    // Status filter
-    if ($filter === 'has_receipt') {
-        $sql .= " AND tr.receipt_files IS NOT NULL AND tr.receipt_files != ''";
-    } elseif ($filter === 'no_receipt') {
-        $sql .= " AND (tr.receipt_files IS NULL OR tr.receipt_files = '')";
-    }
-    
-    // Search filter
-    if (!empty($search)) {
-        $sql .= " AND (t.client_name LIKE ? OR t.security_id LIKE ? OR t.trade_reference LIKE ? OR t.exchange_reference LIKE ?)";
-        $search_param = "%$search%";
-        $params[] = $search_param;
-        $params[] = $search_param;
-        $params[] = $search_param;
-        $params[] = $search_param;
-    }
-    
-    $sql .= " GROUP BY t.id ORDER BY t.trade_date DESC, t.id DESC";
-    
-    $stmt = $db->prepare($sql);
-    $stmt->execute($params);
-    return $stmt->fetchAll(PDO::FETCH_ASSOC);
-}
-
-// ============================================
-// GET STATS
-// ============================================
-function getStats($db) {
-    $stats = [
-        'total' => 0,
-        'has_receipt' => 0,
-        'no_receipt' => 0,
-        'bond' => 0,
-        'equity' => 0,
-        'etf' => 0
-    ];
-    
-    try {
-        $stmt = $db->query("
-            SELECT 
-                COUNT(*) as total,
-                SUM(CASE WHEN tr.receipt_files IS NOT NULL AND tr.receipt_files != '' THEN 1 ELSE 0 END) as has_receipt,
-                SUM(CASE WHEN tr.receipt_files IS NULL OR tr.receipt_files = '' THEN 1 ELSE 0 END) as no_receipt
-            FROM trades t
-            LEFT JOIN trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
-        ");
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ($result) {
-            $stats['total'] = (int)$result['total'];
-            $stats['has_receipt'] = (int)$result['has_receipt'];
-            $stats['no_receipt'] = (int)$result['no_receipt'];
+    if ($_GET['ajax_action'] === 'get_securities') {
+        $asset_class = $_GET['asset_class'] ?? 'equity';
+        $search = $_GET['search'] ?? '';
+        
+        try {
+            if ($asset_class === 'equity') {
+                $sql = "SELECT security_id, stock_name as security_name, company_name, sector FROM equities WHERE status = 'active'";
+                if ($search) $sql .= " AND (security_id LIKE :search OR stock_name LIKE :search)";
+                $sql .= " LIMIT 50";
+            } elseif ($asset_class === 'bond') {
+                $sql = "SELECT security_id, bond_name as security_name, issuer, coupon_rate, maturity_date FROM bonds WHERE status = 'active'";
+                if ($search) $sql .= " AND (security_id LIKE :search OR bond_name LIKE :search)";
+                $sql .= " LIMIT 50";
+            } else {
+                $sql = "SELECT etf_code as security_id, name as security_name FROM etf WHERE status = 'active'";
+                if ($search) $sql .= " AND (etf_code LIKE :search OR name LIKE :search)";
+                $sql .= " LIMIT 50";
+            }
+            
+            $stmt = $db->prepare($sql);
+            if ($search) $stmt->bindValue(':search', "%$search%");
+            $stmt->execute();
+            echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
+        } catch (Exception $e) {
+            echo json_encode([]);
         }
-    } catch (Exception $e) {
-        error_log("Error getting stats: " . $e->getMessage());
+        exit;
     }
     
-    try {
-        $stmt = $db->query("
-            SELECT 
-                asset_class,
-                COUNT(*) as count
-            FROM trades
-            GROUP BY asset_class
-        ");
-        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-            if ($row['asset_class'] === 'bond') $stats['bond'] = (int)$row['count'];
-            elseif ($row['asset_class'] === 'equity') $stats['equity'] = (int)$row['count'];
-            elseif ($row['asset_class'] === 'Exchange Traded Funds') $stats['etf'] = (int)$row['count'];
+    if ($_GET['ajax_action'] === 'search_clients') {
+        $search = $_GET['search'] ?? '';
+        try {
+            $stmt = $db->prepare("SELECT DISTINCT client_name, client_cds_account FROM trades WHERE client_name LIKE :search LIMIT 30");
+            $stmt->bindValue(':search', "%$search%");
+            $stmt->execute();
+            $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            if (empty($results)) {
+                $stmt = $db->prepare("SELECT client_name, cds_account as client_cds_account FROM clients WHERE client_name LIKE :search LIMIT 30");
+                $stmt->bindValue(':search', "%$search%");
+                $stmt->execute();
+                $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            }
+            echo json_encode($results);
+        } catch (Exception $e) {
+            echo json_encode([]);
         }
-    } catch (Exception $e) {
-        error_log("Error getting asset stats: " . $e->getMessage());
+        exit;
     }
-    
-    return $stats;
 }
 
 // ============================================
-// GET DATA
+// GET DATA FOR DISPLAY WITH FILTERS
 // ============================================
-$trades = [];
-$stats = ['total' => 0, 'has_receipt' => 0, 'no_receipt' => 0, 'bond' => 0, 'equity' => 0, 'etf' => 0];
-$error_message = '';
 
-try {
-    $trades = getTrades($db, $filter, $type_filter, $search);
-    $stats = getStats($db);
-} catch (Exception $e) {
-    $error_message = "Error loading data: " . $e->getMessage();
-    error_log("Trade upload page error: " . $e->getMessage());
-    error_log("Stack trace: " . $e->getTraceAsString());
+// Simple list function if not in helper
+if (!function_exists('dealingSheetList')) {
+    function dealingSheetList($db, $filters) {
+        $sql = "SELECT * FROM dealing_sheets WHERE 1=1";
+        $params = [];
+        
+        // Apply view filter
+        if ($filters['view'] === 'orders') {
+            $sql .= " AND (lifecycle_stage = 'order' OR execution_status = 'pending')";
+        } elseif ($filters['view'] === 'execution') {
+            $sql .= " AND (lifecycle_stage = 'execution' OR execution_status = 'executed')";
+        } elseif ($filters['view'] === 'approved') {
+            $sql .= " AND lifecycle_stage = 'approved'";
+        } elseif ($filters['view'] === 'settled') {
+            $sql .= " AND lifecycle_stage = 'settled'";
+        }
+        
+        // Apply asset class filter
+        if (!empty($filters['asset_class']) && $filters['asset_class'] !== 'all') {
+            $sql .= " AND asset_class = ?";
+            $params[] = $filters['asset_class'];
+        }
+        
+        // Apply date range filter
+        if (!empty($filters['date_from'])) {
+            $sql .= " AND order_date >= ?";
+            $params[] = $filters['date_from'];
+        }
+        if (!empty($filters['date_to'])) {
+            $sql .= " AND order_date <= ?";
+            $params[] = $filters['date_to'];
+        }
+        
+        // Apply search filter
+        if (!empty($filters['search'])) {
+            $sql .= " AND (client_name LIKE ? OR security_id LIKE ? OR sheet_reference LIKE ?)";
+            $search = '%' . $filters['search'] . '%';
+            $params[] = $search;
+            $params[] = $search;
+            $params[] = $search;
+        }
+        
+        // Apply payment status filter
+        if (!empty($filters['payment_status']) && $filters['payment_status'] !== 'all') {
+            if ($filters['payment_status'] === 'paid') {
+                $sql .= " AND payment_receipt IS NOT NULL";
+            } else {
+                $sql .= " AND payment_receipt IS NULL";
+            }
+        }
+        
+        // Order by
+        $sql .= " ORDER BY 
+            CASE priority 
+                WHEN 'Most Important' THEN 1 
+                WHEN 'Urgent' THEN 2 
+                ELSE 3 
+            END,
+            created_at DESC";
+        
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
 }
 
-$page_title = 'Trade Receipt Upload & Comments';
+if (!function_exists('dealingSheetOverview')) {
+    function dealingSheetOverview($db) {
+        $total = $db->query("SELECT COUNT(*) FROM dealing_sheets")->fetchColumn();
+        $orders = $db->query("SELECT COUNT(*) FROM dealing_sheets WHERE lifecycle_stage = 'order' OR execution_status = 'pending'")->fetchColumn();
+        $execution = $db->query("SELECT COUNT(*) FROM dealing_sheets WHERE lifecycle_stage = 'execution' OR execution_status = 'executed'")->fetchColumn();
+        $settled = $db->query("SELECT COUNT(*) FROM dealing_sheets WHERE lifecycle_stage = 'settled'")->fetchColumn();
+        $total_executed_value = $db->query("SELECT COALESCE(SUM(executed_value), 0) FROM dealing_sheets WHERE execution_status = 'executed'")->fetchColumn();
+        
+        // Asset class breakdown
+        $bond_count = $db->query("SELECT COUNT(*) FROM dealing_sheets WHERE asset_class = 'bond'")->fetchColumn();
+        $equity_count = $db->query("SELECT COUNT(*) FROM dealing_sheets WHERE asset_class = 'equity'")->fetchColumn();
+        $etf_count = $db->query("SELECT COUNT(*) FROM dealing_sheets WHERE asset_class = 'etf'")->fetchColumn();
+        
+        return [
+            'total' => $total,
+            'orders' => $orders,
+            'execution' => $execution,
+            'settled' => $settled,
+            'total_executed_value' => $total_executed_value,
+            'bond_count' => $bond_count,
+            'equity_count' => $equity_count,
+            'etf_count' => $etf_count
+        ];
+    }
+}
+
+if (!function_exists('dealingSheetGetById')) {
+    function dealingSheetGetById($db, $id) {
+        $stmt = $db->prepare("SELECT * FROM dealing_sheets WHERE id = ?");
+        $stmt->execute([$id]);
+        return $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+}
+
+if (!function_exists('dealingSheetGetCurrentUserDisplayName')) {
+    function dealingSheetGetCurrentUserDisplayName($user) {
+        if (isset($user['first_name']) && isset($user['last_name'])) {
+            return $user['first_name'] . ' ' . $user['last_name'];
+        }
+        return $user['username'] ?? 'System User';
+    }
+}
+
+// Get filters from request
+$filters = [
+    'view' => $view,
+    'search' => $_GET['search'] ?? '',
+    'stage' => $_GET['stage'] ?? 'all',
+    'asset_class' => $_GET['asset_class'] ?? 'all',
+    'payment_status' => $_GET['payment_status'] ?? 'all',
+    'date_from' => $_GET['date_from'] ?? '',
+    'date_to' => $_GET['date_to'] ?? '',
+];
+
+$sheets = dealingSheetList($db, $filters);
+$overview = dealingSheetOverview($db);
+
+$page_title = $view === 'orders' ? 'Order Intake Sheet' : 'Dealing Sheet Lifecycle';
 include '../includes/header.php';
 ?>
 
 <style>
-    /* File Upload Styles */
+    .modal-xl { max-width: 900px; }
+    .priority-Normal { background-color: #e8f5e9; }
+    .priority-Urgent { background-color: #fff3e0; border-left: 4px solid #ff9800 !important; }
+    .priority-Most\ Important { background-color: #ffebee; border-left: 4px solid #f44336 !important; }
+    .old-order { background-color: #ffcdd2 !important; color: #c62828 !important; }
+    .old-order td { color: #c62828 !important; }
+    .bond-row { background-color: #e3f2fd !important; border-left: 3px solid #1976d2 !important; }
+    .client-search-dropdown, .security-search-dropdown {
+        position: absolute;
+        background: white;
+        border: 1px solid #ddd;
+        max-height: 250px;
+        overflow-y: auto;
+        z-index: 10000;
+        width: 100%;
+        display: none;
+        border-radius: 4px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
+    .client-search-dropdown div, .security-search-dropdown div {
+        padding: 10px 12px;
+        cursor: pointer;
+        border-bottom: 1px solid #eee;
+    }
+    .client-search-dropdown div:hover, .security-search-dropdown div:hover {
+        background-color: #f0f0f0;
+    }
+    .security-info { font-size: 11px; color: #6c757d; margin-top: 4px; }
+    .position-relative { position: relative; }
+    .btn-group-sm .btn { padding: 0.25rem 0.5rem; font-size: 0.75rem; }
+    .table-responsive { overflow-x: auto; }
+    .receipt-upload-form {
+        display: inline-block;
+        margin: 0 2px;
+    }
+    .receipt-upload-form input[type="file"] {
+        display: none;
+    }
+    .receipt-badge {
+        font-size: 0.7rem;
+        padding: 2px 6px;
+    }
+    .receipt-preview {
+        max-width: 60px;
+        max-height: 50px;
+        object-fit: cover;
+        border-radius: 4px;
+        cursor: pointer;
+        border: 1px solid #ddd;
+    }
+    .receipt-preview:hover {
+        border-color: #0d6efd;
+        box-shadow: 0 0 5px rgba(13, 110, 253, 0.3);
+    }
+    .receipt-modal-img {
+        max-width: 100%;
+        max-height: 80vh;
+    }
     .receipt-thumbnails {
         display: flex;
         gap: 5px;
         flex-wrap: wrap;
         align-items: center;
     }
-    .receipt-thumbnails .thumbnail {
-        position: relative;
-        width: 50px;
-        height: 50px;
-        border: 2px solid #e9ecef;
-        border-radius: 6px;
-        overflow: hidden;
+    .receipt-thumbnails .badge {
         cursor: pointer;
-        transition: border-color 0.2s;
     }
-    .receipt-thumbnails .thumbnail:hover {
-        border-color: #0d6efd;
-    }
-    .receipt-thumbnails .thumbnail img {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-    }
-    .receipt-thumbnails .thumbnail .file-icon {
-        width: 100%;
-        height: 100%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 24px;
-        background: #f8f9fa;
-        color: #6c757d;
-    }
-    .receipt-thumbnails .delete-btn {
-        position: absolute;
-        top: -6px;
-        right: -6px;
-        background: #dc3545;
-        color: white;
-        border-radius: 50%;
-        width: 18px;
-        height: 18px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 12px;
-        text-decoration: none;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-        transition: transform 0.2s;
-    }
-    .receipt-thumbnails .delete-btn:hover {
-        transform: scale(1.1);
-        color: white;
-    }
-    .receipt-thumbnails .more-badge {
+    .receipt-count {
+        font-size: 0.7rem;
         background: #0d6efd;
         color: white;
         border-radius: 50%;
-        width: 30px;
-        height: 30px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 12px;
-        font-weight: bold;
+        padding: 1px 6px;
+        margin-left: 3px;
     }
-    
-    /* Comment Styles */
-    .comment-bubble {
-        background: #f8f9fa;
-        border-left: 3px solid #0d6efd;
-        padding: 6px 10px;
-        border-radius: 4px;
-        font-size: 13px;
-        max-width: 200px;
-        margin-bottom: 4px;
+    .file-input-wrapper {
+        position: relative;
     }
-    .comment-bubble .author {
-        font-weight: 600;
-        font-size: 11px;
-        color: #495057;
-    }
-    .comment-bubble .time {
-        font-size: 10px;
-        color: #6c757d;
-        margin-left: 5px;
-    }
-    .comment-bubble .comment-text {
-        word-wrap: break-word;
-        margin-top: 2px;
-    }
-    
-    /* Status Badges */
-    .status-badge {
-        font-size: 11px;
-        padding: 3px 8px;
-    }
-    
-    /* Upload Drop Zone */
-    .drop-zone {
-        border: 2px dashed #dee2e6;
-        border-radius: 8px;
-        padding: 20px;
-        text-align: center;
-        transition: border-color 0.3s, background-color 0.3s;
-        cursor: pointer;
-    }
-    .drop-zone:hover {
-        border-color: #0d6efd;
-        background-color: #f8f9fa;
-    }
-    .drop-zone.dragover {
-        border-color: #0d6efd;
-        background-color: #e7f1ff;
-    }
-    .drop-zone .icon {
-        font-size: 40px;
-        color: #6c757d;
-        margin-bottom: 10px;
-    }
-    .drop-zone .text {
-        color: #6c757d;
-        font-size: 14px;
-    }
-    .drop-zone .text strong {
-        color: #0d6efd;
-    }
-    
-    /* File List */
-    .file-list {
+    .file-input-wrapper .file-list {
         margin-top: 10px;
+        max-height: 150px;
+        overflow-y: auto;
     }
-    .file-item {
+    .file-input-wrapper .file-item {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 6px 12px;
+        padding: 5px 10px;
         background: #f8f9fa;
         border-radius: 4px;
-        margin-bottom: 4px;
-        font-size: 13px;
+        margin-bottom: 3px;
     }
-    .file-item .file-info {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-    .file-item .file-info .name {
-        font-weight: 500;
-    }
-    .file-item .file-info .size {
-        color: #6c757d;
-        font-size: 12px;
-    }
-    .file-item .remove-btn {
-        color: #dc3545;
-        cursor: pointer;
-        font-size: 16px;
-        background: none;
-        border: none;
-        padding: 0 4px;
-    }
-    
-    /* Stats Cards */
-    .stat-card {
-        transition: transform 0.2s, box-shadow 0.2s;
-        cursor: default;
-    }
-    .stat-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-    }
-    .stat-card .stat-number {
-        font-size: 24px;
-        font-weight: bold;
-    }
-    .stat-card .stat-label {
-        font-size: 13px;
-        color: #6c757d;
-    }
-    
-    /* Table Row Hover */
-    .trade-row {
-        transition: background-color 0.2s;
-    }
-    .trade-row:hover {
-        background-color: #f8f9fa;
-    }
-    
-    /* Action Buttons */
-    .action-btn {
-        padding: 3px 8px;
-        font-size: 12px;
-        margin: 0 2px;
-    }
-    .action-btn i {
-        margin-right: 2px;
-    }
-    
-    /* Modal Enhancements */
-    .modal-header .modal-title i {
-        margin-right: 8px;
-    }
-    
-    /* Preview in Modal */
-    .preview-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
-        gap: 8px;
-        margin-top: 10px;
-    }
-    .preview-grid .preview-item {
-        border: 1px solid #dee2e6;
-        border-radius: 4px;
-        overflow: hidden;
-        position: relative;
-    }
-    .preview-grid .preview-item img {
-        width: 100%;
-        height: 80px;
-        object-fit: cover;
-    }
-    .preview-grid .preview-item .file-name {
-        font-size: 10px;
-        text-align: center;
-        padding: 2px;
-        background: #f8f9fa;
+    .file-input-wrapper .file-item .file-name {
+        font-size: 0.85rem;
+        white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        white-space: nowrap;
+        max-width: 200px;
+    }
+    .file-input-wrapper .file-item .file-size {
+        font-size: 0.75rem;
+        color: #6c757d;
+    }
+    .file-input-wrapper .file-item .remove-file {
+        cursor: pointer;
+        color: #dc3545;
+        font-weight: bold;
+        padding: 0 5px;
+    }
+    .file-input-wrapper .file-item .remove-file:hover {
+        color: #a71d2a;
+    }
+    /* PDF Receipt Viewer Modal */
+    .receipt-pdf-viewer .modal-dialog {
+        max-width: 95%;
+        height: 90vh;
+    }
+    .receipt-pdf-viewer .modal-content {
+        height: 100%;
+    }
+    .receipt-pdf-viewer .modal-body {
+        height: calc(100% - 120px);
+        padding: 0;
+    }
+    .receipt-pdf-viewer .modal-body embed {
+        width: 100%;
+        height: 100%;
+    }
+    /* Dashboard cards */
+    .stat-card {
+        transition: transform 0.2s;
+    }
+    .stat-card:hover {
+        transform: translateY(-3px);
+    }
+    .stat-icon {
+        font-size: 2rem;
+        opacity: 0.3;
+    }
+    .filter-section {
+        background: #f8f9fa;
+        border-radius: 8px;
+        padding: 15px;
+        margin-bottom: 20px;
+    }
+    .filter-section .form-control,
+    .filter-section .form-select {
+        font-size: 0.875rem;
+    }
+    .chart-container {
+        height: 200px;
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+        gap: 30px;
+        padding: 20px 0;
+    }
+    .chart-bar {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 5px;
+        width: 60px;
+    }
+    .chart-bar .bar {
+        width: 40px;
+        border-radius: 4px 4px 0 0;
+        min-height: 10px;
+        transition: height 0.5s ease;
+    }
+    .chart-bar .bar-label {
+        font-size: 0.7rem;
+        color: #6c757d;
+        text-align: center;
+    }
+    .chart-bar .bar-value {
+        font-size: 0.8rem;
+        font-weight: bold;
     }
 </style>
 
-<div class="container-fluid">
-    <!-- Page Header -->
-    <div class="row mb-3">
-        <div class="col-12">
-            <div class="d-flex justify-content-between align-items-center">
-                <div>
-                    <h2>
-                        <i class="bi bi-file-earmark-arrow-up"></i> Trade Receipt Upload
-                        <small class="text-muted fs-6">Upload files, photos & comments</small>
-                    </h2>
-                </div>
-                <div>
-                    <button class="btn btn-primary btn-sm" onclick="refreshPage()">
-                        <i class="bi bi-arrow-clockwise"></i> Refresh
-                    </button>
-                </div>
+<!-- Modal for Order Entry -->
+<div class="modal fade" id="orderModal" tabindex="-1" aria-labelledby="orderModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title"><i class="bi bi-plus-circle me-2"></i>New Order</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
-        </div>
-    </div>
-
-    <!-- Alert Messages -->
-    <?php if (isset($_SESSION['alert'])): ?>
-        <div class="alert alert-<?php echo $_SESSION['alert'][1]; ?> alert-dismissible fade show">
-            <i class="bi <?php echo $_SESSION['alert'][1] === 'success' ? 'bi-check-circle' : 'bi-exclamation-triangle'; ?>"></i>
-            <?php echo htmlspecialchars($_SESSION['alert'][0]); ?>
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        </div>
-        <?php unset($_SESSION['alert']); ?>
-    <?php endif; ?>
-
-    <?php if (!empty($error_message)): ?>
-        <div class="alert alert-danger">
-            <i class="bi bi-exclamation-triangle"></i> <?php echo htmlspecialchars($error_message); ?>
-        </div>
-    <?php endif; ?>
-
-    <!-- Stats -->
-    <div class="row mb-3 g-2">
-        <div class="col-md-2 col-6">
-            <div class="card stat-card border-primary">
-                <div class="card-body text-center">
-                    <div class="stat-number text-primary"><?php echo number_format($stats['total']); ?></div>
-                    <div class="stat-label">Total Trades</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-2 col-6">
-            <div class="card stat-card border-success">
-                <div class="card-body text-center">
-                    <div class="stat-number text-success"><?php echo number_format($stats['has_receipt']); ?></div>
-                    <div class="stat-label">With Receipt</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-2 col-6">
-            <div class="card stat-card border-warning">
-                <div class="card-body text-center">
-                    <div class="stat-number text-warning"><?php echo number_format($stats['no_receipt']); ?></div>
-                    <div class="stat-label">No Receipt</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-2 col-6">
-            <div class="card stat-card border-info">
-                <div class="card-body text-center">
-                    <div class="stat-number text-info"><?php echo number_format($stats['bond']); ?></div>
-                    <div class="stat-label">Bonds</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-2 col-6">
-            <div class="card stat-card border-secondary">
-                <div class="card-body text-center">
-                    <div class="stat-number text-secondary"><?php echo number_format($stats['equity']); ?></div>
-                    <div class="stat-label">Equities</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-2 col-6">
-            <div class="card stat-card border-dark">
-                <div class="card-body text-center">
-                    <div class="stat-number text-dark"><?php echo number_format($stats['etf']); ?></div>
-                    <div class="stat-label">ETFs</div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Filters -->
-    <div class="card mb-3">
-        <div class="card-body">
-            <form method="GET" class="row g-2 align-items-end">
-                <div class="col-md-3">
-                    <label class="form-label small text-muted">Status</label>
-                    <select class="form-select form-select-sm" name="filter" onchange="this.form.submit()">
-                        <option value="all" <?php echo $filter === 'all' ? 'selected' : ''; ?>>All Trades</option>
-                        <option value="has_receipt" <?php echo $filter === 'has_receipt' ? 'selected' : ''; ?>>With Receipt</option>
-                        <option value="no_receipt" <?php echo $filter === 'no_receipt' ? 'selected' : ''; ?>>No Receipt</option>
-                    </select>
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label small text-muted">Asset Type</label>
-                    <select class="form-select form-select-sm" name="type" onchange="this.form.submit()">
-                        <option value="all" <?php echo $type_filter === 'all' ? 'selected' : ''; ?>>All Types</option>
-                        <option value="bond" <?php echo $type_filter === 'bond' ? 'selected' : ''; ?>>Bond</option>
-                        <option value="equity" <?php echo $type_filter === 'equity' ? 'selected' : ''; ?>>Equity</option>
-                        <option value="etf" <?php echo $type_filter === 'etf' ? 'selected' : ''; ?>>ETF</option>
-                    </select>
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label small text-muted">Search</label>
-                    <div class="input-group input-group-sm">
-                        <input type="text" class="form-control" name="search" placeholder="Client, Security, Reference..." value="<?php echo htmlspecialchars($search); ?>">
-                        <button type="submit" class="btn btn-primary">
-                            <i class="bi bi-search"></i>
-                        </button>
+            <form id="orderForm">
+                <div class="modal-body">
+                    <input type="hidden" name="id" id="order_id" value="">
+                    <input type="hidden" name="ajax_action" value="save_order">
+                    
+                    <div class="row g-3">
+                        <div class="col-md-3">
+                            <label class="form-label fw-semibold">Order Type <span class="text-danger">*</span></label>
+                            <select class="form-select" name="order_type" id="order_type" required>
+                                <option value="buy">BUY</option>
+                                <option value="sell">SELL</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label fw-semibold">Priority</label>
+                            <select class="form-select" name="priority" id="priority">
+                                <option value="normal">Normal</option>
+                                <option value="urgent">Urgent</option>
+                                <option value="most_important">Most Important</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label fw-semibold">Asset Class <span class="text-danger">*</span></label>
+                            <select class="form-select" name="asset_class" id="asset_class" required>
+                                <option value="equity">Equity / Shares</option>
+                                <option value="bond">Bond</option>
+                                <option value="etf">ETF</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label fw-semibold">Order Date</label>
+                            <input type="date" class="form-control" name="order_date" id="order_date" value="<?php echo date('Y-m-d'); ?>">
+                        </div>
+                        
+                        <div class="col-md-6 position-relative">
+                            <label class="form-label fw-semibold">Client <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="client_search" placeholder="Type to search..." autocomplete="off">
+                            <input type="hidden" name="client_name" id="client_name">
+                            <input type="hidden" name="client_cds_account" id="client_cds_account">
+                            <div id="client_search_dropdown" class="client-search-dropdown"></div>
+                        </div>
+                        
+                        <div class="col-md-6 position-relative">
+                            <label class="form-label fw-semibold">Security <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="security_search" placeholder="Type to search..." autocomplete="off">
+                            <input type="hidden" name="security_id" id="security_id">
+                            <input type="hidden" name="security_name" id="security_name">
+                            <div id="security_search_dropdown" class="security-search-dropdown"></div>
+                            <div id="security_info" class="security-info"></div>
+                        </div>
+                        
+                        <div class="col-md-3" id="quantity_field">
+                            <label class="form-label fw-semibold" id="quantity_label">Quantity <span class="text-danger">*</span></label>
+                            <input type="number" class="form-control" name="quantity" id="quantity" step="1" min="1" required>
+                            <small class="text-muted" id="quantity_hint">Number of shares</small>
+                        </div>
+                        <div class="col-md-3" id="price_field">
+                            <label class="form-label fw-semibold" id="price_label">Price (TZS) <span class="text-danger">*</span></label>
+                            <input type="number" class="form-control" name="order_price" id="order_price" step="0.01" min="0" required>
+                            <small class="text-muted" id="price_hint">Price per share in TZS</small>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label fw-semibold">Order Time</label>
+                            <input type="time" class="form-control" name="order_time" id="order_time" value="<?php echo date('H:i:s'); ?>">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label fw-semibold">Broker Code</label>
+                            <input class="form-control" name="broker_code" id="broker_code" value="<?php echo htmlspecialchars($company['company_code'] ?? ''); ?>">
+                        </div>
+                        
+                        <div class="col-12">
+                            <hr>
+                            <h6 class="fw-semibold">Execution Details (Optional)</h6>
+                            <div class="row g-3">
+                                <div class="col-md-3">
+                                    <label class="form-label" id="exec_qty_label">Executed Quantity</label>
+                                    <input type="number" class="form-control" name="executed_quantity" id="executed_quantity" step="1" min="0">
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label" id="exec_price_label">Executed Price</label>
+                                    <input type="number" class="form-control" name="executed_price" id="executed_price" step="0.01" min="0">
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label">Trade Date</label>
+                                    <input type="date" class="form-control" name="trade_date" id="trade_date" value="<?php echo date('Y-m-d'); ?>">
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label">Settlement Date</label>
+                                    <input type="date" class="form-control" name="settlement_date" id="settlement_date" value="<?php echo date('Y-m-d', strtotime('+2 days')); ?>">
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label">Execution Time</label>
+                                    <input type="time" class="form-control" name="execution_time" id="execution_time" value="<?php echo date('H:i:s'); ?>">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-12">
+                            <label class="form-label">Remarks</label>
+                            <textarea class="form-control" name="remarks" id="remarks" rows="2"></textarea>
+                        </div>
                     </div>
                 </div>
-                <div class="col-md-2">
-                    <a href="trade_upload.php" class="btn btn-outline-secondary btn-sm w-100">
-                        <i class="bi bi-eraser"></i> Clear
-                    </a>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save Order</button>
                 </div>
             </form>
         </div>
     </div>
+</div>
 
-    <!-- Trades Table -->
-    <div class="card">
-        <div class="card-header d-flex justify-content-between align-items-center">
-            <h6 class="mb-0">
-                <i class="bi bi-table"></i> Trades 
-                <span class="badge bg-secondary ms-2"><?php echo count($trades); ?></span>
-            </h6>
-            <div>
-                <button class="btn btn-outline-primary btn-sm" onclick="openUploadModal(0)" title="Upload for New Trade">
-                    <i class="bi bi-plus-circle"></i> New Trade
-                </button>
+<!-- Receipt Upload Modal - Multi-file -->
+<div class="modal fade" id="receiptModal" tabindex="-1" aria-labelledby="receiptModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-md">
+        <div class="modal-content">
+            <div class="modal-header bg-success text-white">
+                <h5 class="modal-title"><i class="bi bi-upload me-2"></i>Upload Payment Receipts</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" enctype="multipart/form-data" action="dealing_sheet.php" id="receiptUploadForm">
+                <div class="modal-body">
+                    <input type="hidden" name="sheet_id" id="receipt_sheet_id" value="">
+                    <input type="hidden" name="upload_receipt" value="1">
+                    
+                    <div class="text-center mb-3">
+                        <div class="receipt-preview-container" id="receiptPreviews">
+                            <!-- Previews will be inserted here -->
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Select Receipt Files</label>
+                        <div class="file-input-wrapper">
+                            <input type="file" class="form-control" name="payment_receipts[]" id="receipt_files" accept="image/*,.pdf" multiple required>
+                            <div class="form-text">Allowed formats: JPG, PNG, GIF, PDF (Max 5MB each)</div>
+                            <div class="file-list" id="fileList"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle me-2"></i>
+                        You can select multiple files at once. Upload clear photos or scanned copies of payment receipts/confirmations.
+                        <br><small class="text-muted">Supported: Images (JPG, PNG, GIF) and PDF documents.</small>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success" id="uploadReceiptBtn">Upload Receipts</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Receipt Image View Modal -->
+<div class="modal fade" id="receiptViewModal" tabindex="-1" aria-labelledby="receiptViewModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-info text-white">
+                <h5 class="modal-title"><i class="bi bi-image me-2"></i>Payment Receipt</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body text-center">
+                <img id="receiptViewImg" src="" alt="Payment Receipt" class="receipt-modal-img">
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <a id="receiptDownloadLink" href="#" target="_blank" class="btn btn-primary">Download</a>
             </div>
         </div>
-        <div class="card-body p-0">
-            <?php if (empty($trades)): ?>
-                <div class="text-center py-5">
-                    <i class="bi bi-inbox" style="font-size: 48px; color: #dee2e6;"></i>
-                    <p class="text-muted mt-3">No trades found matching your criteria.</p>
+    </div>
+</div>
+
+<!-- Receipt PDF Viewer Modal -->
+<div class="modal fade receipt-pdf-viewer" id="receiptPdfViewerModal" tabindex="-1" aria-labelledby="receiptPdfViewerModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title"><i class="bi bi-file-pdf me-2"></i>Payment Receipt (PDF)</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <embed id="receiptPdfViewer" src="" type="application/pdf" width="100%" height="100%">
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <a id="receiptPdfDownloadLink" href="#" target="_blank" class="btn btn-primary"><i class="bi bi-download"></i> Download PDF</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="page-header">
+    <div class="container-fluid">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
+            <div>
+                <h1 class="page-title mb-1"><?php echo htmlspecialchars($page_title); ?></h1>
+                <p class="page-subtitle mb-0">Capture orders, execute trades, and track settlement in one workflow.</p>
+            </div>
+            <div class="d-flex gap-2 flex-wrap">
+                <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#orderModal" onclick="resetOrderForm()">
+                    <i class="bi bi-plus-circle me-2"></i>New Order
+                </button>
+                <a href="trades.php" class="btn btn-outline-dark"><i class="bi bi-list-ul me-2"></i>All Trades</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="container-fluid">
+    <?php if (isset($_SESSION['alert'])): ?>
+        <div class="alert alert-<?php echo $_SESSION['alert'][1]; ?> alert-dismissible fade show"><?php echo htmlspecialchars($_SESSION['alert'][0]); ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+        <?php unset($_SESSION['alert']); ?>
+    <?php endif; ?>
+
+    <!-- Navigation Tabs -->
+    <div class="d-flex flex-wrap gap-2 mb-4">
+        <?php foreach (['all' => 'All Sheets', 'orders' => 'Order Intake', 'execution' => 'Execution Queue', 'approved' => 'Approved', 'settled' => 'Settled'] as $viewKey => $viewLabel): ?>
+            <a href="dealing_sheet.php?view=<?php echo urlencode($viewKey); ?>&<?php echo http_build_query(array_filter(['search' => $_GET['search'] ?? '', 'asset_class' => $_GET['asset_class'] ?? '', 'payment_status' => $_GET['payment_status'] ?? '', 'date_from' => $_GET['date_from'] ?? '', 'date_to' => $_GET['date_to'] ?? ''])); ?>" class="btn <?php echo $view === $viewKey ? 'btn-primary' : 'btn-outline-secondary'; ?>"><?php echo htmlspecialchars($viewLabel); ?></a>
+        <?php endforeach; ?>
+    </div>
+
+    <!-- Filter Section -->
+    <div class="filter-section">
+        <form method="GET" action="dealing_sheet.php" class="row g-3 align-items-end">
+            <input type="hidden" name="view" value="<?php echo htmlspecialchars($view); ?>">
+            
+            <div class="col-md-3">
+                <label class="form-label small fw-semibold">Search</label>
+                <input type="text" class="form-control" name="search" placeholder="Client, Security, Ref..." value="<?php echo htmlspecialchars($filters['search']); ?>">
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small fw-semibold">Asset Class</label>
+                <select class="form-select" name="asset_class">
+                    <option value="all" <?php echo $filters['asset_class'] === 'all' ? 'selected' : ''; ?>>All</option>
+                    <option value="equity" <?php echo $filters['asset_class'] === 'equity' ? 'selected' : ''; ?>>Equity</option>
+                    <option value="bond" <?php echo $filters['asset_class'] === 'bond' ? 'selected' : ''; ?>>Bond</option>
+                    <option value="etf" <?php echo $filters['asset_class'] === 'etf' ? 'selected' : ''; ?>>ETF</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small fw-semibold">Payment Status</label>
+                <select class="form-select" name="payment_status">
+                    <option value="all" <?php echo $filters['payment_status'] === 'all' ? 'selected' : ''; ?>>All</option>
+                    <option value="paid" <?php echo $filters['payment_status'] === 'paid' ? 'selected' : ''; ?>>Paid</option>
+                    <option value="unpaid" <?php echo $filters['payment_status'] === 'unpaid' ? 'selected' : ''; ?>>Unpaid</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small fw-semibold">Date From</label>
+                <input type="date" class="form-control" name="date_from" value="<?php echo htmlspecialchars($filters['date_from']); ?>">
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small fw-semibold">Date To</label>
+                <input type="date" class="form-control" name="date_to" value="<?php echo htmlspecialchars($filters['date_to']); ?>">
+            </div>
+            <div class="col-md-1">
+                <button type="submit" class="btn btn-primary w-100">Filter</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Orders Table -->
+    <div class="card dashboard-card">
+        <div class="card-header bg-transparent border-0 pb-0">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <h6 class="mb-1 fw-semibold">Order Register</h6>
+                    <div class="small text-muted"><?php echo number_format(count($sheets)); ?> orders matching current filters</div>
                 </div>
-            <?php else: ?>
-                <div class="table-responsive">
-                    <table class="table table-sm table-hover mb-0">
-                        <thead class="table-light">
-                            <tr>
-                                <th>Ref</th>
-                                <th>Client</th>
-                                <th>Security</th>
-                                <th>Type</th>
-                                <th>Side</th>
-                                <th class="text-end">Qty</th>
-                                <th class="text-end">Value</th>
-                                <th>Date</th>
-                                <th>Files</th>
-                                <th>Comments</th>
-                                <th class="text-end">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($trades as $trade): 
-                                $receipts = !empty($trade['receipt_files']) ? explode(',', $trade['receipt_files']) : [];
-                                $hasReceipt = !empty($receipts) && !empty($receipts[0]);
+                <div>
+                    <a href="dealing_sheet.php?export_excel=1&<?php echo http_build_query($filters); ?>" class="btn btn-outline-success btn-sm">
+                        <i class="bi bi-file-earmark-excel"></i> Export
+                    </a>
+                </div>
+            </div>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle">
+                    <thead>
+                        <tr>
+                            <th>Reference</th>
+                            <th>Priority</th>
+                            <th>Client</th>
+                            <th>Security</th>
+                            <th>Asset</th>
+                            <th class="text-end">Qty</th>
+                            <th class="text-end">Price</th>
+                            <th class="text-end">Value</th>
+                            <th>Date</th>
+                            <th>Status</th>
+                            <th>Receipt</th>
+                            <th class="text-end">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if (empty($sheets)): ?>
+                            <tr><td colspan="12" class="text-center py-5 text-muted">No orders found matching filters</td></tr>
+                        <?php else: ?>
+                            <?php foreach ($sheets as $sheet): 
+                                $isOldOrder = strtotime($sheet['order_date'] ?? '') < strtotime(date('Y-m-d'));
+                                $isBond = ($sheet['asset_class'] ?? '') === 'bond';
+                                $rowClass = '';
+                                if ($isOldOrder) $rowClass = 'old-order';
+                                if ($isBond) $rowClass .= ' bond-row';
+                                if (($sheet['priority'] ?? '') === 'Urgent') $rowClass .= ' priority-Urgent';
+                                if (($sheet['priority'] ?? '') === 'Most Important') $rowClass .= ' priority-Most Important';
                                 
-                                $assetClass = $trade['asset_class'] ?? 'Unknown';
-                                if ($assetClass === 'Exchange Traded Funds') $assetClass = 'ETF';
+                                $hasReceipt = !empty($sheet['payment_receipt']);
+                                $receiptFiles = $hasReceipt ? explode(',', $sheet['payment_receipt']) : [];
+                                $receiptCount = count($receiptFiles);
                                 
-                                // Get latest comment
-                                $commentText = '';
-                                $commentAuthor = '';
-                                $commentTime = '';
-                                if (!empty($trade['comments'])) {
-                                    $comment_parts = explode('|||', $trade['comments']);
-                                    $author_parts = !empty($trade['comment_authors']) ? explode('|||', $trade['comment_authors']) : [];
-                                    $date_parts = !empty($trade['comment_dates']) ? explode('|||', $trade['comment_dates']) : [];
-                                    $commentText = htmlspecialchars($comment_parts[0] ?? '');
-                                    $commentAuthor = $author_parts[0] ?? 'Unknown';
-                                    $commentTime = isset($date_parts[0]) ? date('d/m/Y H:i', strtotime($date_parts[0])) : '';
+                                if ($isBond) {
+                                    $displayQty = 'TZS ' . number_format(floatval($sheet['quantity'] ?? 0), 2);
+                                    $displayPrice = number_format(floatval($sheet['order_price'] ?? 0), 4) . '%';
+                                    $displayValue = 'TZS ' . number_format((floatval($sheet['order_price'] ?? 0) / 100) * floatval($sheet['quantity'] ?? 0), 2);
+                                    $assetDisplay = '<span class="badge bg-info">Bond</span>';
+                                } else {
+                                    $displayQty = number_format(floatval($sheet['quantity'] ?? 0), 0);
+                                    $displayPrice = 'TZS ' . number_format(floatval($sheet['order_price'] ?? 0), 2);
+                                    $displayValue = 'TZS ' . number_format(floatval($sheet['order_value'] ?? 0), 2);
+                                    $assetDisplay = '<span class="badge bg-secondary">' . ucfirst($sheet['asset_class'] ?? 'Equity') . '</span>';
                                 }
                             ?>
-                                <tr class="trade-row">
+                                <tr class="<?php echo $rowClass; ?>">
+                                    <td><span class="fw-semibold"><?php echo htmlspecialchars($sheet['sheet_reference'] ?? 'N/A'); ?></span></td>
+                                    <td><?php echo htmlspecialchars($sheet['priority'] ?? 'Normal'); ?></td>
+                                    <td><?php echo htmlspecialchars($sheet['client_name'] ?? ''); ?></td>
+                                    <td><?php echo htmlspecialchars($sheet['security_id'] ?? ''); ?></td>
+                                    <td><?php echo $assetDisplay; ?></td>
+                                    <td class="text-end"><?php echo $displayQty; ?></td>
+                                    <td class="text-end"><?php echo $displayPrice; ?></td>
+                                    <td class="text-end"><?php echo $displayValue; ?></td>
+                                    <td><?php echo htmlspecialchars($sheet['order_date'] ?? ''); ?></td>
                                     <td>
-                                        <span class="fw-semibold small"><?php echo htmlspecialchars($trade['trade_reference'] ?? ''); ?></span>
-                                        <?php if (!empty($trade['additional_reference'])): ?>
-                                            <br><small class="text-muted"><?php echo htmlspecialchars($trade['additional_reference']); ?></small>
+                                        <?php if (($sheet['execution_status'] ?? '') === 'executed'): ?>
+                                            <span class="badge bg-success">Executed</span>
+                                        <?php elseif (($sheet['lifecycle_stage'] ?? '') === 'cancelled'): ?>
+                                            <span class="badge bg-secondary">Cancelled</span>
+                                        <?php else: ?>
+                                            <span class="badge bg-warning">Pending</span>
                                         <?php endif; ?>
                                     </td>
-                                    <td>
-                                        <?php echo htmlspecialchars($trade['client_name'] ?? ''); ?>
-                                        <br><small class="text-muted"><?php echo htmlspecialchars($trade['client_cds_account'] ?? ''); ?></small>
-                                    </td>
-                                    <td>
-                                        <strong><?php echo htmlspecialchars($trade['security_id'] ?? ''); ?></strong>
-                                        <br><small class="text-muted"><?php echo htmlspecialchars($trade['security_name'] ?? ''); ?></small>
-                                    </td>
-                                    <td><span class="badge bg-secondary status-badge"><?php echo $assetClass; ?></span></td>
-                                    <td>
-                                        <span class="badge <?php echo strtolower($trade['trade_side'] ?? '') === 'buy' ? 'bg-success' : 'bg-danger'; ?> status-badge">
-                                            <?php echo strtoupper($trade['trade_side'] ?? ''); ?>
-                                        </span>
-                                    </td>
-                                    <td class="text-end">
-                                        <?php 
-                                        if ($assetClass === 'Bond' || $assetClass === 'bond') {
-                                            echo 'TZS ' . number_format(floatval($trade['quantity'] ?? 0), 2);
-                                        } else {
-                                            echo number_format(floatval($trade['quantity'] ?? 0), 0);
-                                        }
-                                        ?>
-                                    </td>
-                                    <td class="text-end fw-bold">
-                                        TZS <?php echo number_format(floatval($trade['consideration'] ?? 0), 2); ?>
-                                    </td>
-                                    <td><?php echo date('d/m/Y', strtotime($trade['trade_date'] ?? '')); ?></td>
                                     <td>
                                         <?php if ($hasReceipt): ?>
                                             <div class="receipt-thumbnails">
                                                 <?php 
-                                                $displayCount = 0;
-                                                foreach ($receipts as $receiptFile):
+                                                $display_count = 0;
+                                                foreach ($receiptFiles as $receiptFile):
                                                     $receiptFile = trim($receiptFile);
                                                     if (empty($receiptFile)) continue;
-                                                    if ($displayCount >= 3) break;
-                                                    $displayCount++;
-                                                    $filepath = '../uploads/trade_receipts/' . $receiptFile;
+                                                    $display_count++;
+                                                    $filepath = '../uploads/payment_receipts/' . $receiptFile;
                                                     $ext = strtolower(pathinfo($receiptFile, PATHINFO_EXTENSION));
                                                     $isImage = in_array($ext, ['jpg', 'jpeg', 'png', 'gif']);
+                                                    
+                                                    if ($isImage && file_exists($filepath)):
                                                 ?>
-                                                    <div class="thumbnail" onclick="window.open('<?php echo $filepath; ?>', '_blank')" title="Click to view">
-                                                        <?php if ($isImage && file_exists($filepath)): ?>
-                                                            <img src="<?php echo $filepath; ?>" alt="Receipt">
-                                                        <?php else: ?>
-                                                            <div class="file-icon">
-                                                                <i class="bi <?php echo in_array($ext, ['pdf']) ? 'bi-file-pdf' : (in_array($ext, ['doc', 'docx']) ? 'bi-file-word' : (in_array($ext, ['xls', 'xlsx']) ? 'bi-file-excel' : 'bi-file')); ?>"></i>
-                                                            </div>
-                                                        <?php endif; ?>
-                                                        <a href="trade_upload.php?delete_receipt=1&trade_id=<?php echo $trade['id']; ?>&file=<?php echo urlencode($receiptFile); ?>&filter=<?php echo urlencode($filter); ?>&type=<?php echo urlencode($type_filter); ?>&search=<?php echo urlencode($search); ?>" 
-                                                           class="delete-btn" onclick="event.stopPropagation(); return confirm('Delete this file?')">
-                                                            <i class="bi bi-x"></i>
-                                                        </a>
-                                                    </div>
+                                                    <img src="<?php echo $filepath; ?>" alt="Receipt" class="receipt-preview" onclick="viewReceiptImage('<?php echo $filepath; ?>')" title="Click to view">
+                                                <?php else: ?>
+                                                    <span class="badge bg-danger receipt-badge" onclick="viewReceiptPDF('<?php echo $filepath; ?>')" style="cursor:pointer;">
+                                                        <i class="bi bi-file-pdf"></i>
+                                                    </span>
+                                                <?php endif; ?>
                                                 <?php endforeach; ?>
-                                                <?php if (count($receipts) > 3): ?>
-                                                    <div class="more-badge">+<?php echo count($receipts) - 3; ?></div>
+                                                <?php if ($receiptCount > 0): ?>
+                                                    <a href="dealing_sheet.php?delete_receipt=1&id=<?php echo $sheet['id']; ?>&file=<?php echo urlencode($receiptFiles[0]); ?>&view=<?php echo urlencode($view); ?>" class="text-danger" onclick="return confirm('Delete this receipt?')" title="Delete receipt">
+                                                        <i class="bi bi-x-circle"></i>
+                                                    </a>
+                                                    <?php if ($receiptCount > 1): ?>
+                                                        <span class="badge bg-secondary receipt-count">+<?php echo $receiptCount - 1; ?></span>
+                                                    <?php endif; ?>
                                                 <?php endif; ?>
                                             </div>
                                         <?php else: ?>
-                                            <span class="text-muted small">No files</span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td>
-                                        <?php if (!empty($commentText)): ?>
-                                            <div class="comment-bubble">
-                                                <div>
-                                                    <span class="author"><?php echo $commentAuthor; ?></span>
-                                                    <span class="time"><?php echo $commentTime; ?></span>
-                                                </div>
-                                                <div class="comment-text"><?php echo $commentText; ?></div>
-                                            </div>
-                                        <?php else: ?>
-                                            <span class="text-muted small">No comments</span>
-                                        <?php endif; ?>
-                                        <button class="btn btn-outline-secondary btn-sm mt-1" onclick="openCommentModal(<?php echo $trade['id']; ?>)">
-                                            <i class="bi bi-chat"></i> Add
-                                        </button>
-                                    </td>
-                                    <td class="text-end">
-                                        <div class="btn-group btn-group-sm" role="group">
-                                            <button class="btn btn-outline-primary" onclick="openUploadModal(<?php echo $trade['id']; ?>)" title="Upload Files">
+                                            <button class="btn btn-outline-success btn-sm" onclick="openReceiptUpload(<?php echo $sheet['id']; ?>)">
                                                 <i class="bi bi-upload"></i>
                                             </button>
-                                            <button class="btn btn-outline-secondary" onclick="openCommentModal(<?php echo $trade['id']; ?>)" title="Add Comment">
-                                                <i class="bi bi-chat-dots"></i>
-                                            </button>
-                                            <button class="btn btn-outline-info" onclick="viewTrade(<?php echo $trade['id']; ?>)" title="View Details">
-                                                <i class="bi bi-eye"></i>
-                                            </button>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="text-end">
+                                        <div class="btn-group btn-group-sm">
+                                            <button class="btn btn-outline-primary" onclick='editOrder(<?php echo json_encode($sheet); ?>)'><i class="bi bi-pencil"></i></button>
+                                            <a href="dealing_sheet.php?export_pdf=1&id=<?php echo $sheet['id']; ?>" target="_blank" class="btn btn-outline-danger btn-sm">
+                                                <i class="bi bi-file-pdf"></i>
+                                            </a>
+                                            <button class="btn btn-outline-warning" onclick="confirmAction(<?php echo $sheet['id']; ?>, 'cancel_order')"><i class="bi bi-x-circle"></i></button>
+                                            <button class="btn btn-outline-success" onclick="confirmAction(<?php echo $sheet['id']; ?>, 'mark_executed')"><i class="bi bi-check-circle"></i></button>
+                                            <button class="btn btn-outline-danger" onclick="confirmAction(<?php echo $sheet['id']; ?>, 'delete_order')"><i class="bi bi-trash"></i></button>
                                         </div>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
-            <?php endif; ?>
-        </div>
-    </div>
-</div>
-
-<!-- ============================================ -->
-<!-- MODALS -->
-<!-- ============================================ -->
-
-<!-- Upload Modal -->
-<div class="modal fade" id="uploadModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="bi bi-upload text-primary"></i> Upload Files
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <form method="POST" enctype="multipart/form-data" action="trade_upload.php" id="uploadForm">
-                <div class="modal-body">
-                    <input type="hidden" name="trade_id" id="upload_trade_id" value="">
-                    <input type="hidden" name="upload_receipt" value="1">
-                    <input type="hidden" name="filter" value="<?php echo htmlspecialchars($filter); ?>">
-                    <input type="hidden" name="type" value="<?php echo htmlspecialchars($type_filter); ?>">
-                    <input type="hidden" name="search" value="<?php echo htmlspecialchars($search); ?>">
-                    
-                    <div class="alert alert-info">
-                        <i class="bi bi-info-circle"></i> 
-                        <strong>Trade ID:</strong> <span id="tradeIdDisplay">-</span>
-                    </div>
-                    
-                    <!-- File Upload Area -->
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">Select Files to Upload</label>
-                        <div class="drop-zone" id="dropZone">
-                            <div class="icon">
-                                <i class="bi bi-cloud-arrow-up"></i>
-                            </div>
-                            <div class="text">
-                                <strong>Click to browse</strong> or drag & drop files here
-                                <br><small class="text-muted">Supports: JPG, PNG, GIF, PDF, DOC, XLS (Max 10MB each)</small>
-                            </div>
-                            <input type="file" class="form-control" name="receipt_files[]" id="fileInput" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" multiple style="display: none;">
-                        </div>
-                    </div>
-                    
-                    <!-- Selected Files Preview -->
-                    <div id="selectedFilesContainer">
-                        <div class="file-list" id="fileList"></div>
-                    </div>
-                    
-                    <div class="mt-3">
-                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('fileInput').click()">
-                            <i class="bi bi-plus-circle"></i> Add More Files
-                        </button>
-                        <button type="button" class="btn btn-outline-danger btn-sm" onclick="clearSelectedFiles()">
-                            <i class="bi bi-x-circle"></i> Clear All
-                        </button>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary" id="uploadBtn">
-                        <i class="bi bi-upload"></i> Upload <span id="fileCount">0</span> Files
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
-
-<!-- Comment Modal -->
-<div class="modal fade" id="commentModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="bi bi-chat-dots text-primary"></i> Add Comment
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <form method="POST" action="trade_upload.php">
-                <div class="modal-body">
-                    <input type="hidden" name="trade_id" id="comment_trade_id" value="">
-                    <input type="hidden" name="add_comment" value="1">
-                    <input type="hidden" name="filter" value="<?php echo htmlspecialchars($filter); ?>">
-                    <input type="hidden" name="type" value="<?php echo htmlspecialchars($type_filter); ?>">
-                    <input type="hidden" name="search" value="<?php echo htmlspecialchars($search); ?>">
-                    
-                    <div class="alert alert-info">
-                        <i class="bi bi-info-circle"></i> 
-                        <strong>Trade:</strong> <span id="commentTradeRef">-</span>
-                    </div>
-                    
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">Your Comment</label>
-                        <textarea class="form-control" name="trader_comment" id="traderComment" rows="4" placeholder="Enter your comment about this trade..." required></textarea>
-                    </div>
-                    
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">Recent Comments</label>
-                        <div id="recentComments" class="border rounded p-2" style="max-height: 150px; overflow-y: auto;">
-                            <p class="text-muted small">No previous comments</p>
-                        </div>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">
-                        <i class="bi bi-send"></i> Add Comment
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
-
-<!-- View Trade Modal -->
-<div class="modal fade" id="viewTradeModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="bi bi-info-circle text-info"></i> Trade Details
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body" id="tradeDetails">
-                <div class="text-center py-3">
-                    <div class="spinner-border text-primary" role="status">
-                        <span class="visually-hidden">Loading...</span>
-                    </div>
-                    <p class="mt-2">Loading trade details...</p>
-                </div>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>
 </div>
 
 <script>
-// ============================================
-// FILE UPLOAD HANDLING
-// ============================================
-
+let securityData = [];
 let selectedFiles = [];
 
-// File input change handler
-document.getElementById('fileInput').addEventListener('change', function(e) {
-    const files = Array.from(e.target.files);
-    files.forEach(file => {
-        // Check if file already selected
-        if (!selectedFiles.some(f => f.name === file.name && f.size === file.size)) {
-            selectedFiles.push(file);
-        }
-    });
-    updateFileList();
-    e.target.value = ''; // Reset input
-});
-
-// Drag and drop
-const dropZone = document.getElementById('dropZone');
-
-dropZone.addEventListener('dragover', function(e) {
-    e.preventDefault();
-    this.classList.add('dragover');
-});
-
-dropZone.addEventListener('dragleave', function(e) {
-    e.preventDefault();
-    this.classList.remove('dragover');
-});
-
-dropZone.addEventListener('drop', function(e) {
-    e.preventDefault();
-    this.classList.remove('dragover');
-    
-    const files = Array.from(e.dataTransfer.files);
-    files.forEach(file => {
-        if (!selectedFiles.some(f => f.name === file.name && f.size === file.size)) {
-            selectedFiles.push(file);
-        }
-    });
-    updateFileList();
-});
-
-dropZone.addEventListener('click', function() {
-    document.getElementById('fileInput').click();
-});
-
-// Update file list display
-function updateFileList() {
-    const container = document.getElementById('fileList');
-    const fileCount = document.getElementById('fileCount');
-    const uploadBtn = document.getElementById('uploadBtn');
-    
-    if (selectedFiles.length === 0) {
-        container.innerHTML = '<p class="text-muted small">No files selected</p>';
-        fileCount.textContent = '0';
-        uploadBtn.disabled = true;
-        return;
-    }
-    
-    let html = '';
-    selectedFiles.forEach((file, index) => {
-        const size = (file.size / 1024 / 1024).toFixed(2);
-        const icon = file.type.startsWith('image/') ? 'bi-file-image' :
-                    file.type === 'application/pdf' ? 'bi-file-pdf' :
-                    file.type.includes('word') ? 'bi-file-word' :
-                    file.type.includes('excel') ? 'bi-file-excel' : 'bi-file';
-        html += `
-            <div class="file-item">
-                <div class="file-info">
-                    <i class="bi ${icon}"></i>
-                    <span class="name">${file.name}</span>
-                    <span class="size">(${size} MB)</span>
-                </div>
-                <button class="remove-btn" onclick="removeFile(${index})">
-                    <i class="bi bi-x-circle"></i>
-                </button>
-            </div>
-        `;
-    });
-    container.innerHTML = html;
-    
-    fileCount.textContent = selectedFiles.length;
-    uploadBtn.disabled = false;
-    uploadBtn.innerHTML = `<i class="bi bi-upload"></i> Upload ${selectedFiles.length} Files`;
+function resetOrderForm() {
+    document.getElementById('orderForm').reset();
+    document.getElementById('order_id').value = '';
+    document.getElementById('client_name').value = '';
+    document.getElementById('client_cds_account').value = '';
+    document.getElementById('client_search').value = '';
+    document.getElementById('security_id').value = '';
+    document.getElementById('security_name').value = '';
+    document.getElementById('security_search').value = '';
+    document.getElementById('security_info').innerHTML = '';
+    document.getElementById('order_date').value = '<?php echo date('Y-m-d'); ?>';
+    document.getElementById('trade_date').value = '<?php echo date('Y-m-d'); ?>';
+    document.getElementById('settlement_date').value = '<?php echo date('Y-m-d', strtotime('+2 days')); ?>';
+    hideDropdowns();
+    updateFieldsForAssetClass();
 }
 
-// Remove a file from selection
+function hideDropdowns() {
+    const clientDropdown = document.getElementById('client_search_dropdown');
+    const securityDropdown = document.getElementById('security_search_dropdown');
+    if (clientDropdown) clientDropdown.style.display = 'none';
+    if (securityDropdown) securityDropdown.style.display = 'none';
+}
+
+function editOrder(sheet) {
+    resetOrderForm();
+    document.getElementById('order_id').value = sheet.id || '';
+    document.getElementById('client_name').value = sheet.client_name || '';
+    document.getElementById('client_cds_account').value = sheet.client_cds_account || '';
+    document.getElementById('client_search').value = sheet.client_name || '';
+    document.getElementById('security_id').value = sheet.security_id || '';
+    document.getElementById('security_name').value = sheet.security_name || '';
+    document.getElementById('security_search').value = sheet.security_name || '';
+    document.getElementById('order_type').value = sheet.order_type || 'buy';
+    document.getElementById('asset_class').value = sheet.asset_class || 'equity';
+    let priorityVal = 'normal';
+    if (sheet.priority === 'Urgent') priorityVal = 'urgent';
+    else if (sheet.priority === 'Most Important') priorityVal = 'most_important';
+    document.getElementById('priority').value = priorityVal;
+    document.getElementById('quantity').value = sheet.quantity || '';
+    document.getElementById('order_price').value = sheet.order_price || '';
+    document.getElementById('order_date').value = sheet.order_date || '<?php echo date('Y-m-d'); ?>';
+    document.getElementById('order_time').value = sheet.order_time || '<?php echo date('H:i:s'); ?>';
+    document.getElementById('executed_quantity').value = sheet.executed_quantity || '';
+    document.getElementById('executed_price').value = sheet.executed_price || '';
+    document.getElementById('trade_date').value = sheet.trade_date || '<?php echo date('Y-m-d'); ?>';
+    document.getElementById('settlement_date').value = sheet.settlement_date || '<?php echo date('Y-m-d', strtotime('+2 days')); ?>';
+    document.getElementById('execution_time').value = sheet.execution_time || '<?php echo date('H:i:s'); ?>';
+    document.getElementById('remarks').value = sheet.remarks || '';
+    document.getElementById('broker_code').value = sheet.broker_code || '<?php echo htmlspecialchars($company['company_code'] ?? ''); ?>';
+    
+    updateFieldsForAssetClass();
+    const modal = new bootstrap.Modal(document.getElementById('orderModal'));
+    modal.show();
+}
+
+function confirmAction(id, action) {
+    let msg = '';
+    if (action === 'delete_order') msg = 'Delete this order? This cannot be undone.';
+    else if (action === 'cancel_order') msg = 'Cancel this order?';
+    else if (action === 'mark_executed') msg = 'Mark this order as executed?';
+    if (confirm(msg)) {
+        window.location.href = 'dealing_sheet.php?action=' + action + '&id=' + id + '&view=' + encodeURIComponent('<?php echo $view; ?>');
+    }
+}
+
+function updateFieldsForAssetClass() {
+    const assetClass = document.getElementById('asset_class').value;
+    const isBond = assetClass === 'bond';
+    
+    const quantityLabel = document.getElementById('quantity_label');
+    const priceLabel = document.getElementById('price_label');
+    const quantityInput = document.getElementById('quantity');
+    const priceInput = document.getElementById('order_price');
+    const quantityHint = document.getElementById('quantity_hint');
+    const priceHint = document.getElementById('price_hint');
+    const execQtyLabel = document.getElementById('exec_qty_label');
+    const execPriceLabel = document.getElementById('exec_price_label');
+    
+    if (isBond) {
+        quantityLabel.innerHTML = 'Face Value (TZS) <span class="text-danger">*</span>';
+        priceLabel.innerHTML = 'Price (% of Par) <span class="text-danger">*</span>';
+        quantityInput.placeholder = 'e.g., 100000000';
+        quantityInput.step = '0.01';
+        priceInput.placeholder = 'e.g., 98.5000';
+        priceInput.step = '0.0001';
+        quantityHint.textContent = 'Face value in TZS';
+        priceHint.textContent = 'Percentage of par value (e.g., 98.5 = 98.5% of face value)';
+        execQtyLabel.textContent = 'Executed Face Value (TZS)';
+        execPriceLabel.textContent = 'Executed Price (% of Par)';
+        document.getElementById('executed_quantity').step = '0.01';
+        document.getElementById('executed_price').step = '0.0001';
+    } else {
+        quantityLabel.innerHTML = 'Quantity <span class="text-danger">*</span>';
+        priceLabel.innerHTML = 'Price (TZS) <span class="text-danger">*</span>';
+        quantityInput.placeholder = 'e.g., 1000';
+        quantityInput.step = '1';
+        priceInput.placeholder = 'e.g., 2500';
+        priceInput.step = '0.01';
+        quantityHint.textContent = 'Number of shares';
+        priceHint.textContent = 'Price per share in TZS';
+        execQtyLabel.textContent = 'Executed Quantity';
+        execPriceLabel.textContent = 'Executed Price (TZS)';
+        document.getElementById('executed_quantity').step = '1';
+        document.getElementById('executed_price').step = '0.01';
+    }
+}
+
+document.getElementById('asset_class')?.addEventListener('change', updateFieldsForAssetClass);
+
+// ============================================
+// RECEIPT VIEW FUNCTIONS
+// ============================================
+function viewReceiptImage(path) {
+    document.getElementById('receiptViewImg').src = path;
+    document.getElementById('receiptDownloadLink').href = path;
+    const modal = new bootstrap.Modal(document.getElementById('receiptViewModal'));
+    modal.show();
+}
+
+function viewReceiptPDF(path) {
+    const modal = new bootstrap.Modal(document.getElementById('receiptPdfViewerModal'));
+    document.getElementById('receiptPdfViewer').src = path;
+    document.getElementById('receiptPdfDownloadLink').href = path;
+    modal.show();
+}
+
+// Receipt upload functions - Multi-file
+function openReceiptUpload(sheetId) {
+    document.getElementById('receipt_sheet_id').value = sheetId;
+    document.getElementById('receipt_files').value = '';
+    document.getElementById('receiptPreviews').innerHTML = '';
+    document.getElementById('fileList').innerHTML = '';
+    selectedFiles = [];
+    const modal = new bootstrap.Modal(document.getElementById('receiptModal'));
+    modal.show();
+}
+
+// Multi-file preview
+document.getElementById('receipt_files')?.addEventListener('change', function(e) {
+    const files = this.files;
+    const fileList = document.getElementById('fileList');
+    const previewContainer = document.getElementById('receiptPreviews');
+    
+    fileList.innerHTML = '';
+    previewContainer.innerHTML = '';
+    selectedFiles = [];
+    
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        selectedFiles.push(file);
+        
+        const fileItem = document.createElement('div');
+        fileItem.className = 'file-item';
+        fileItem.innerHTML = `
+            <span class="file-name" title="${file.name}">${file.name}</span>
+            <span class="file-size">${(file.size / 1024).toFixed(1)} KB</span>
+            <span class="remove-file" onclick="removeFile(${i})">&times;</span>
+        `;
+        fileList.appendChild(fileItem);
+        
+        if (file.type.startsWith('image/')) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = document.createElement('img');
+                img.src = e.target.result;
+                img.style.maxWidth = '80px';
+                img.style.maxHeight = '60px';
+                img.style.objectFit = 'cover';
+                img.style.borderRadius = '4px';
+                img.style.margin = '3px';
+                img.style.border = '1px solid #ddd';
+                previewContainer.appendChild(img);
+            };
+            reader.readAsDataURL(file);
+        }
+    }
+});
+
 function removeFile(index) {
-    selectedFiles.splice(index, 1);
-    updateFileList();
-}
-
-// Clear all selected files
-function clearSelectedFiles() {
-    selectedFiles = [];
-    updateFileList();
-}
-
-// ============================================
-// MODAL FUNCTIONS
-// ============================================
-
-function openUploadModal(tradeId) {
-    // Reset file selection
-    selectedFiles = [];
-    updateFileList();
-    document.getElementById('fileInput').value = '';
+    const input = document.getElementById('receipt_files');
+    const dt = new DataTransfer();
+    const files = input.files;
     
-    document.getElementById('upload_trade_id').value = tradeId;
-    document.getElementById('tradeIdDisplay').textContent = tradeId === 0 ? 'New Trade' : tradeId;
-    
-    const modal = new bootstrap.Modal(document.getElementById('uploadModal'));
-    modal.show();
-}
-
-function openCommentModal(tradeId) {
-    document.getElementById('comment_trade_id').value = tradeId;
-    document.getElementById('commentTradeRef').textContent = tradeId;
-    document.getElementById('traderComment').value = '';
-    
-    // Load recent comments (you can implement AJAX here)
-    const container = document.getElementById('recentComments');
-    container.innerHTML = '<p class="text-muted small">Loading comments...</p>';
-    
-    // Simulate loading - in production, use AJAX
-    setTimeout(() => {
-        container.innerHTML = '<p class="text-muted small">No previous comments for this trade.</p>';
-    }, 500);
-    
-    const modal = new bootstrap.Modal(document.getElementById('commentModal'));
-    modal.show();
-}
-
-function viewTrade(tradeId) {
-    const modal = new bootstrap.Modal(document.getElementById('viewTradeModal'));
-    const container = document.getElementById('tradeDetails');
-    container.innerHTML = `
-        <div class="text-center py-3">
-            <div class="spinner-border text-primary" role="status">
-                <span class="visually-hidden">Loading...</span>
-            </div>
-            <p class="mt-2">Loading trade ${tradeId} details...</p>
-        </div>
-    `;
-    modal.show();
-    
-    // Simulate loading - in production, use AJAX
-    setTimeout(() => {
-        container.innerHTML = `
-            <div class="row g-3">
-                <div class="col-md-6">
-                    <div class="border-bottom pb-2 mb-2">
-                        <small class="text-muted">Trade Reference</small>
-                        <div class="fw-bold">TRD-${String(tradeId).padStart(6, '0')}</div>
-                    </div>
-                    <div class="border-bottom pb-2 mb-2">
-                        <small class="text-muted">Client</small>
-                        <div>Sample Client Ltd</div>
-                    </div>
-                    <div class="border-bottom pb-2 mb-2">
-                        <small class="text-muted">Security</small>
-                        <div>SEC-001 (Sample Security)</div>
-                    </div>
-                    <div class="border-bottom pb-2 mb-2">
-                        <small class="text-muted">Trade Date</small>
-                        <div>${new Date().toLocaleDateString()}</div>
-                    </div>
-                </div>
-                <div class="col-md-6">
-                    <div class="border-bottom pb-2 mb-2">
-                        <small class="text-muted">Trade Side</small>
-                        <div><span class="badge bg-success">BUY</span></div>
-                    </div>
-                    <div class="border-bottom pb-2 mb-2">
-                        <small class="text-muted">Quantity</small>
-                        <div>1,000</div>
-                    </div>
-                    <div class="border-bottom pb-2 mb-2">
-                        <small class="text-muted">Consideration</small>
-                        <div class="fw-bold text-success">TZS 1,500,000.00</div>
-                    </div>
-                    <div class="border-bottom pb-2 mb-2">
-                        <small class="text-muted">Status</small>
-                        <div><span class="badge bg-warning">Pending</span></div>
-                    </div>
-                </div>
-                <div class="col-12">
-                    <hr>
-                    <small class="text-muted">Additional Reference</small>
-                    <div><code>REF-${String(tradeId).padStart(4, '0')}</code></div>
-                </div>
-            </div>
-        `;
-    }, 800);
-}
-
-// Refresh page
-function refreshPage() {
-    window.location.reload();
-}
-
-// ============================================
-// FORM VALIDATION
-// ============================================
-
-document.getElementById('uploadForm').addEventListener('submit', function(e) {
-    if (selectedFiles.length === 0) {
-        e.preventDefault();
-        alert('Please select at least one file to upload.');
-        return false;
+    for (let i = 0; i < files.length; i++) {
+        if (i !== index) {
+            dt.items.add(files[i]);
+        }
     }
-    return true;
-});
+    input.files = dt.files;
+    
+    const event = new Event('change');
+    input.dispatchEvent(event);
+}
 
-document.querySelectorAll('form[action="trade_upload.php"]').forEach(form => {
-    if (form.querySelector('textarea[name="trader_comment"]')) {
-        form.addEventListener('submit', function(e) {
-            const comment = this.querySelector('textarea[name="trader_comment"]').value.trim();
-            if (!comment) {
-                e.preventDefault();
-                alert('Please enter a comment.');
-                return false;
-            }
-            return true;
+// Client search
+document.getElementById('client_search')?.addEventListener('input', function() {
+    const search = this.value;
+    if (search.length < 2) { document.getElementById('client_search_dropdown').style.display = 'none'; return; }
+    fetch('dealing_sheet.php?ajax_action=search_clients&search=' + encodeURIComponent(search))
+        .then(r => r.json()).then(data => {
+            const dropdown = document.getElementById('client_search_dropdown');
+            dropdown.innerHTML = '';
+            if (data.length) {
+                data.forEach(c => {
+                    const div = document.createElement('div');
+                    div.innerHTML = `<strong>${escapeHtml(c.client_name)}</strong><br><small>CDS: ${escapeHtml(c.client_cds_account)}</small>`;
+                    div.onclick = () => {
+                        document.getElementById('client_name').value = c.client_name;
+                        document.getElementById('client_cds_account').value = c.client_cds_account;
+                        document.getElementById('client_search').value = c.client_name;
+                        dropdown.style.display = 'none';
+                    };
+                    dropdown.appendChild(div);
+                });
+                dropdown.style.display = 'block';
+            } else dropdown.style.display = 'none';
         });
-    }
 });
 
-// ============================================
-// INITIALIZATION
-// ============================================
-
-// Auto-refresh alerts after 5 seconds
-document.querySelectorAll('.alert').forEach(alert => {
-    setTimeout(() => {
-        const bsAlert = bootstrap.Alert.getOrCreateInstance(alert);
-        bsAlert.close();
-    }, 5000);
+// Security search
+document.getElementById('security_search')?.addEventListener('input', function() {
+    const search = this.value;
+    const assetClass = document.getElementById('asset_class').value;
+    if (search.length < 2) { document.getElementById('security_search_dropdown').style.display = 'none'; return; }
+    fetch('dealing_sheet.php?ajax_action=get_securities&asset_class=' + encodeURIComponent(assetClass) + '&search=' + encodeURIComponent(search))
+        .then(r => r.json()).then(data => {
+            const dropdown = document.getElementById('security_search_dropdown');
+            dropdown.innerHTML = '';
+            if (data.length) {
+                data.forEach(s => {
+                    const div = document.createElement('div');
+                    div.innerHTML = `<strong>${escapeHtml(s.security_id)}</strong> - ${escapeHtml(s.security_name)}`;
+                    div.onclick = () => {
+                        document.getElementById('security_id').value = s.security_id;
+                        document.getElementById('security_name').value = s.security_name;
+                        document.getElementById('security_search').value = s.security_name;
+                        dropdown.style.display = 'none';
+                        let info = '';
+                        if (s.company_name) info += `<strong>Company:</strong> ${escapeHtml(s.company_name)}<br>`;
+                        if (s.coupon_rate) info += `<strong>Coupon:</strong> ${s.coupon_rate}%<br>`;
+                        if (s.maturity_date) info += `<strong>Maturity:</strong> ${s.maturity_date}<br>`;
+                        if (s.issuer) info += `<strong>Issuer:</strong> ${escapeHtml(s.issuer)}<br>`;
+                        document.getElementById('security_info').innerHTML = info;
+                    };
+                    dropdown.appendChild(div);
+                });
+                dropdown.style.display = 'block';
+            } else dropdown.style.display = 'none';
+        });
 });
 
-console.log('Trade Upload System initialized successfully.');
+// Form submit
+document.getElementById('orderForm')?.addEventListener('submit', function(e) {
+    e.preventDefault();
+    const btn = this.querySelector('button[type="submit"]');
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Saving...';
+    fetch(window.location.href, { method: 'POST', body: new FormData(this) })
+        .then(r => r.json()).then(data => {
+            if (data.success) {
+                bootstrap.Modal.getInstance(document.getElementById('orderModal'))?.hide();
+                location.reload();
+            } else alert('Error: ' + data.message);
+        }).catch(err => alert('Error saving order')).finally(() => {
+            btn.disabled = false;
+            btn.innerHTML = original;
+        });
+});
+
+function escapeHtml(text) { if (!text) return ''; return text.replace(/[&<>]/g, function(m) { if (m === '&') return '&amp;'; if (m === '<') return '&lt;'; if (m === '>') return '&gt;'; return m; }); }
+
+document.addEventListener('click', function(e) {
+    if (!document.getElementById('client_search')?.contains(e.target)) document.getElementById('client_search_dropdown').style.display = 'none';
+    if (!document.getElementById('security_search')?.contains(e.target)) document.getElementById('security_search_dropdown').style.display = 'none';
+});
+
+// Initialize fields on page load
+document.addEventListener('DOMContentLoaded', function() {
+    updateFieldsForAssetClass();
+});
 </script>
 
 <?php include '../includes/footer.php'; ?>
