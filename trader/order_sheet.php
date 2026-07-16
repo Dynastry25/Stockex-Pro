@@ -32,7 +32,6 @@ $user_id = $current_user['id'] ?? null;
 // CHECK AND CREATE TABLE IF NOT EXISTS
 // ============================================
 try {
-    // Check if numeric_trade_receipts table exists
     $checkTable = $db->query("SHOW TABLES LIKE 'numeric_trade_receipts'");
     if ($checkTable->rowCount() == 0) {
         $createTable = "
@@ -70,7 +69,7 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
     $errors = [];
     
     $allowed_exts = ['jpg', 'jpeg', 'png', 'gif', 'pdf'];
-    $max_size = 5 * 1024 * 1024; // 5MB
+    $max_size = 5 * 1024 * 1024;
     
     $upload_dir = __DIR__ . '/../uploads/numeric_receipts/';
     if (!file_exists($upload_dir)) {
@@ -88,6 +87,7 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
     $existing = $stmt->fetch(PDO::FETCH_ASSOC);
     $existing_receipts = !empty($existing['payment_receipt']) ? explode(',', $existing['payment_receipt']) : [];
     
+    // Check if files were uploaded
     if (isset($_FILES['payment_receipts']) && !empty($_FILES['payment_receipts']['name'][0])) {
         $files = $_FILES['payment_receipts'];
         $total_files = count($files['name']);
@@ -126,7 +126,6 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
             $all_receipts = array_merge($existing_receipts, $uploaded_files);
             $receipts_str = implode(',', $all_receipts);
             
-            // Check if record exists
             $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
             $stmt->execute([$trade_id]);
             if ($stmt->fetch()) {
@@ -163,7 +162,6 @@ if (isset($_GET['delete_receipt']) && isset($_GET['trade_id']) && isset($_GET['f
     $trade_id = (int) $_GET['trade_id'];
     $file_to_delete = $_GET['file'];
     
-    // Check if receipt is already approved
     $stmt = $db->prepare("SELECT is_approved FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
     $stmt->execute([$trade_id]);
     $record = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -292,12 +290,10 @@ function getNumericTrades($db, $filter = 'pending', $asset_class_filter = 'all',
     
     $params = [];
     
-    // KEY CONDITION: additional_reference is a NUMBER ONLY
     $sql .= " AND t.additional_reference REGEXP '^[0-9]+$'";
     $sql .= " AND t.additional_reference IS NOT NULL";
     $sql .= " AND t.additional_reference != ''";
     
-    // Asset class conditions
     if ($asset_class_filter === 'all') {
         $sql .= " AND (
             (t.asset_class = 'bond') OR 
@@ -311,7 +307,6 @@ function getNumericTrades($db, $filter = 'pending', $asset_class_filter = 'all',
         $sql .= " AND t.asset_class = 'Exchange Traded Funds' AND LOWER(t.trade_side) = 'buy'";
     }
     
-    // Filter by approval status
     if ($filter === 'pending') {
         $sql .= " AND (tr.is_approved IS NULL OR tr.is_approved = 0)";
     } elseif ($filter === 'approved') {
@@ -320,7 +315,6 @@ function getNumericTrades($db, $filter = 'pending', $asset_class_filter = 'all',
         $sql .= " AND tr.is_approved = 2";
     }
     
-    // Search filter
     if (!empty($search)) {
         $sql .= " AND (t.client_name LIKE ? OR t.security_id LIKE ? OR t.trade_reference LIKE ? OR t.exchange_reference LIKE ? OR t.additional_reference LIKE ?)";
         $search_param = "%$search%";
@@ -429,7 +423,6 @@ include '../includes/header.php';
 ?>
 
 <style>
-    /* File Upload Styles */
     .receipt-thumbnails {
         display: flex;
         gap: 3px;
@@ -475,16 +468,6 @@ include '../includes/header.php';
         font-weight: bold;
         font-size: 10px;
         color: #6c757d;
-    }
-    .upload-form-inline {
-        display: inline-block;
-    }
-    .upload-form-inline input[type="file"] {
-        display: none;
-    }
-    .action-btn {
-        padding: 2px 6px;
-        font-size: 12px;
     }
     
     /* Drop Zone */
@@ -615,13 +598,11 @@ include '../includes/header.php';
         background: #a71d2a;
     }
     
-    /* Upload button disabled state */
     #uploadBtn:disabled {
         opacity: 0.6;
         cursor: not-allowed;
     }
     
-    /* Modal */
     .modal-lg {
         max-width: 700px;
     }
@@ -786,7 +767,6 @@ include '../includes/header.php';
                                     if ($assetClass === 'Exchange Traded Funds') $assetClass = 'ETF';
                                 }
                                 
-                                // Get comments
                                 $commentText = '';
                                 $commentAuthor = '';
                                 if (!empty($trade['comments'])) {
@@ -876,7 +856,7 @@ include '../includes/header.php';
     </div>
 </div>
 
-<!-- Upload Modal - FIXED with proper file handling -->
+<!-- Upload Modal - COMPLETELY FIXED -->
 <div class="modal fade" id="uploadModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
@@ -968,21 +948,24 @@ include '../includes/header.php';
 
 <script>
 // ============================================
-// FILE UPLOAD HANDLING - FIXED
+// FILE UPLOAD HANDLING - COMPLETELY FIXED
 // ============================================
 
 let selectedFiles = [];
 
-// File input change handler - DON'T clear the input
+// File input change handler
 document.getElementById('fileInput').addEventListener('change', function(e) {
+    console.log('File input changed:', e.target.files);
     const files = Array.from(e.target.files);
+    
+    // Clear existing selection and add new files
+    selectedFiles = [];
     files.forEach(file => {
-        if (!selectedFiles.some(f => f.name === file.name && f.size === file.size)) {
-            selectedFiles.push(file);
-        }
+        selectedFiles.push(file);
     });
+    
+    console.log('Selected files:', selectedFiles);
     updateFileList();
-    // DO NOT clear e.target.value here!
 });
 
 // Drag and drop
@@ -1003,11 +986,12 @@ dropZone.addEventListener('drop', function(e) {
     this.classList.remove('dragover');
     
     const files = Array.from(e.dataTransfer.files);
+    selectedFiles = [];
     files.forEach(file => {
-        if (!selectedFiles.some(f => f.name === file.name && f.size === file.size)) {
-            selectedFiles.push(file);
-        }
+        selectedFiles.push(file);
     });
+    
+    console.log('Dropped files:', selectedFiles);
     updateFileList();
     
     // Update the file input with dropped files
@@ -1029,6 +1013,8 @@ function updateFileList() {
     
     // Clear thumbnails
     thumbnailsContainer.innerHTML = '';
+    
+    console.log('Updating file list. Selected files count:', selectedFiles.length);
     
     if (selectedFiles.length === 0) {
         container.innerHTML = '<p class="text-muted small">No files selected</p>';
@@ -1076,7 +1062,6 @@ function updateFileList() {
             };
             reader.readAsDataURL(file);
         } else {
-            // Non-image file icon
             const icon = file.type === 'application/pdf' ? 'bi-file-pdf' : 'bi-file';
             const thumb = document.createElement('div');
             thumb.className = 'thumb';
@@ -1096,6 +1081,7 @@ function updateFileList() {
 // Remove a file from selection
 function removeFile(index) {
     selectedFiles.splice(index, 1);
+    console.log('Removed file, remaining:', selectedFiles);
     updateFileList();
     
     // Update the file input with remaining files
@@ -1107,6 +1093,7 @@ function removeFile(index) {
 // Clear all selected files
 function clearSelectedFiles() {
     selectedFiles = [];
+    console.log('Cleared all files');
     updateFileList();
     document.getElementById('fileInput').value = '';
     document.getElementById('filePreviewThumbnails').innerHTML = '';
@@ -1117,6 +1104,7 @@ function clearSelectedFiles() {
 // ============================================
 
 function openUploadModal(tradeId) {
+    console.log('Opening upload modal for trade:', tradeId);
     // Reset file selection
     selectedFiles = [];
     updateFileList();
@@ -1135,10 +1123,12 @@ function openCommentModal(tradeId) {
 }
 
 // ============================================
-// FORM SUBMISSION - FIXED
+// FORM SUBMISSION - COMPLETELY FIXED
 // ============================================
 
 document.getElementById('uploadForm').addEventListener('submit', function(e) {
+    console.log('Form submitting. Selected files:', selectedFiles);
+    
     // If no files selected, prevent submission
     if (selectedFiles.length === 0) {
         e.preventDefault();
@@ -1151,6 +1141,8 @@ document.getElementById('uploadForm').addEventListener('submit', function(e) {
     const dataTransfer = new DataTransfer();
     selectedFiles.forEach(file => dataTransfer.items.add(file));
     fileInput.files = dataTransfer.files;
+    
+    console.log('File input now has:', fileInput.files.length, 'files');
     
     // Let the form submit normally
     return true;
@@ -1169,6 +1161,7 @@ document.querySelectorAll('.alert').forEach(alert => {
 });
 
 console.log('Numeric Receipt Upload System initialized successfully.');
+console.log('Selected files:', selectedFiles.length);
 </script>
 
 <?php include '../includes/footer.php'; ?>
