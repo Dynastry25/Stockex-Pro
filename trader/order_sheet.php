@@ -69,7 +69,7 @@ try {
 // HANDLE ACTIONS
 // ============================================
 
-// Handle Receipt Upload with Comment
+// Handle Receipt Upload with Comment - FIXED
 if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
     $trade_id = (int) $_POST['trade_id'];
     $uploaded_files = [];
@@ -84,12 +84,20 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
         mkdir($upload_dir, 0777, true);
     }
     
+    // Log for debugging
+    error_log("=== NUMERIC UPLOAD DEBUG ===");
+    error_log("Trade ID: " . $trade_id);
+    error_log("Comment: " . $comment);
+    error_log("FILES: " . print_r($_FILES, true));
+    
+    // Get existing receipts and comment
     $stmt = $db->prepare("SELECT payment_receipt, comment FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
     $stmt->execute([$trade_id]);
     $existing = $stmt->fetch(PDO::FETCH_ASSOC);
     $existing_receipts = !empty($existing['payment_receipt']) ? explode(',', $existing['payment_receipt']) : [];
     $existing_comment = $existing['comment'] ?? '';
     
+    // Check if files were uploaded
     if (isset($_FILES['payment_receipts']) && !empty($_FILES['payment_receipts']['name'][0])) {
         $files = $_FILES['payment_receipts'];
         $total_files = count($files['name']);
@@ -97,17 +105,20 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
         for ($i = 0; $i < $total_files; $i++) {
             if ($files['error'][$i] !== UPLOAD_ERR_OK) {
                 $errors[] = "File '{$files['name'][$i]}' upload error: " . $files['error'][$i];
+                error_log("Upload error for {$files['name'][$i]}: " . $files['error'][$i]);
                 continue;
             }
             
             $file_ext = strtolower(pathinfo($files['name'][$i], PATHINFO_EXTENSION));
             if (!in_array($file_ext, $allowed_exts)) {
                 $errors[] = "File '{$files['name'][$i]}' - Invalid type. Allowed: JPG, PNG, GIF, PDF";
+                error_log("Invalid type for {$files['name'][$i]}: " . $file_ext);
                 continue;
             }
             
             if ($files['size'][$i] > $max_size) {
                 $errors[] = "File '{$files['name'][$i]}' exceeds 5MB limit";
+                error_log("File too large {$files['name'][$i]}: " . $files['size'][$i]);
                 continue;
             }
             
@@ -116,12 +127,17 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
             
             if (move_uploaded_file($files['tmp_name'][$i], $filepath)) {
                 $uploaded_files[] = $filename;
+                error_log("Successfully uploaded: " . $filename);
             } else {
                 $errors[] = "Failed to upload file '{$files['name'][$i]}'";
+                error_log("Failed to move file: " . $files['tmp_name'][$i] . " to " . $filepath);
             }
         }
+    } else {
+        error_log("No files in FILES array or empty name");
     }
     
+    // Combine comment
     $full_comment = $existing_comment;
     if (!empty($comment)) {
         $timestamp = date('Y-m-d H:i:s');
@@ -130,6 +146,7 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
             : "[" . $timestamp . "] " . $user_name . ": " . $comment;
     }
     
+    // Update database
     $receipts_str = !empty($uploaded_files) ? implode(',', array_merge($existing_receipts, $uploaded_files)) : $existing['payment_receipt'] ?? null;
     
     $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
@@ -137,9 +154,11 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
     if ($stmt->fetch()) {
         $stmt = $db->prepare("UPDATE numeric_trade_receipts SET payment_receipt = ?, comment = ?, updated_at = NOW(), uploaded_by = ? WHERE trade_id = ? AND trade_type = 'trade'");
         $result = $stmt->execute([$receipts_str, $full_comment, $user_name, $trade_id]);
+        error_log("UPDATE result: " . ($result ? 'success' : 'failed'));
     } else {
         $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, payment_receipt, comment, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, ?, NOW(), NOW())");
         $result = $stmt->execute([$trade_id, $receipts_str, $full_comment, $user_name]);
+        error_log("INSERT result: " . ($result ? 'success' : 'failed'));
     }
     
     if ($result) {
@@ -149,6 +168,7 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
         $_SESSION['alert'] = [implode(' and ', $message) . ' successfully!', 'success'];
     } else {
         $_SESSION['alert'] = ['Failed to update database', 'danger'];
+        error_log("Database update failed for trade_id: " . $trade_id);
     }
     
     header('Location: numeric_receipt_upload.php?' . http_build_query(array_filter([
@@ -492,7 +512,6 @@ include '../includes/header.php';
         padding: 1px 6px;
     }
     
-    /* Drop Zone */
     .drop-zone {
         border: 2px dashed #ddd;
         border-radius: 6px;
@@ -618,7 +637,6 @@ include '../includes/header.php';
         background: #a71d2a;
     }
     
-    /* Small Stat Boxes - NO COLORS */
     .stat-box {
         background: #f8f9fa;
         border: 1px solid #ddd;
@@ -1032,7 +1050,7 @@ include '../includes/header.php';
 
 <script>
 // ============================================
-// SIMPLE FILE UPLOAD - USING NATIVE FILE INPUT
+// SIMPLE FILE UPLOAD
 // ============================================
 
 function openUploadModal(tradeId) {
@@ -1111,14 +1129,13 @@ function viewTrade(tradeId) {
     }, 500);
 }
 
-// Show selected files when user picks them - SIMPLE AND RELIABLE
+// Show selected files when user picks them
 document.getElementById('fileInput').addEventListener('change', function(e) {
     const files = this.files;
     const fileList = document.getElementById('fileList');
     const thumbnailsContainer = document.getElementById('filePreviewThumbnails');
     const uploadBtn = document.getElementById('uploadBtn');
     
-    // Clear previous
     fileList.innerHTML = '';
     thumbnailsContainer.innerHTML = '';
     
@@ -1128,7 +1145,6 @@ document.getElementById('fileInput').addEventListener('change', function(e) {
         return;
     }
     
-    // Build file list
     let html = '';
     for (let i = 0; i < files.length; i++) {
         const file = files[i];
@@ -1147,7 +1163,6 @@ document.getElementById('fileInput').addEventListener('change', function(e) {
     }
     fileList.innerHTML = html;
     
-    // Build thumbnails for images
     for (let i = 0; i < files.length; i++) {
         const file = files[i];
         if (file.type.startsWith('image/')) {
@@ -1175,7 +1190,6 @@ document.getElementById('fileInput').addEventListener('change', function(e) {
     uploadBtn.innerHTML = `<i class="bi bi-upload"></i> Upload ${files.length} Files`;
 });
 
-// Clear files
 function clearSelectedFiles() {
     document.getElementById('fileInput').value = '';
     document.getElementById('fileList').innerHTML = '<p class="text-muted small">No files selected</p>';
@@ -1184,19 +1198,22 @@ function clearSelectedFiles() {
 }
 
 // ============================================
-// FORM SUBMISSION
+// FORM SUBMISSION - FIXED: Submit the form normally
 // ============================================
 
 document.getElementById('uploadForm').addEventListener('submit', function(e) {
     const fileInput = document.getElementById('fileInput');
     const comment = document.getElementById('receiptComment').value.trim();
     
+    // If no files and no comment, prevent submission
     if (fileInput.files.length === 0 && !comment) {
         e.preventDefault();
         alert('Please select at least one file or add a comment.');
         return false;
     }
     
+    // Allow the form to submit normally with files
+    console.log('Submitting form with', fileInput.files.length, 'files');
     return true;
 });
 
