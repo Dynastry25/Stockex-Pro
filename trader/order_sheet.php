@@ -40,6 +40,7 @@ try {
                 trade_id INT NOT NULL,
                 trade_type VARCHAR(50) DEFAULT 'trade',
                 payment_receipt TEXT,
+                comment TEXT,
                 is_approved TINYINT DEFAULT 0,
                 approved_by VARCHAR(100),
                 approved_at DATETIME,
@@ -54,6 +55,13 @@ try {
         $db->exec($createTable);
         error_log("Created numeric_trade_receipts table");
     }
+    
+    // Add comment column if it doesn't exist
+    $checkColumn = $db->query("SHOW COLUMNS FROM numeric_trade_receipts LIKE 'comment'");
+    if ($checkColumn->rowCount() == 0) {
+        $db->exec("ALTER TABLE numeric_trade_receipts ADD COLUMN comment TEXT AFTER payment_receipt");
+        error_log("Added comment column to numeric_trade_receipts");
+    }
 } catch (Exception $e) {
     error_log("Table setup error: " . $e->getMessage());
 }
@@ -62,11 +70,12 @@ try {
 // HANDLE ACTIONS
 // ============================================
 
-// Handle Receipt Upload - FIXED
+// Handle Receipt Upload with Comment
 if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
     $trade_id = (int) $_POST['trade_id'];
     $uploaded_files = [];
     $errors = [];
+    $comment = trim($_POST['receipt_comment'] ?? '');
     
     $allowed_exts = ['jpg', 'jpeg', 'png', 'gif', 'pdf'];
     $max_size = 5 * 1024 * 1024;
@@ -76,12 +85,14 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
         mkdir($upload_dir, 0777, true);
     }
     
-    // Get existing receipts
-    $stmt = $db->prepare("SELECT payment_receipt FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+    // Get existing receipts and comment
+    $stmt = $db->prepare("SELECT payment_receipt, comment FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
     $stmt->execute([$trade_id]);
     $existing = $stmt->fetch(PDO::FETCH_ASSOC);
     $existing_receipts = !empty($existing['payment_receipt']) ? explode(',', $existing['payment_receipt']) : [];
+    $existing_comment = $existing['comment'] ?? '';
     
+    // Handle file uploads
     if (isset($_FILES['payment_receipts']) && !empty($_FILES['payment_receipts']['name'][0])) {
         $files = $_FILES['payment_receipts'];
         $total_files = count($files['name']);
@@ -112,32 +123,39 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
                 $errors[] = "Failed to upload file '{$files['name'][$i]}'";
             }
         }
-        
-        if (!empty($uploaded_files)) {
-            $all_receipts = array_merge($existing_receipts, $uploaded_files);
-            $receipts_str = implode(',', $all_receipts);
-            
-            $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
-            $stmt->execute([$trade_id]);
-            if ($stmt->fetch()) {
-                $stmt = $db->prepare("UPDATE numeric_trade_receipts SET payment_receipt = ?, updated_at = NOW(), uploaded_by = ? WHERE trade_id = ? AND trade_type = 'trade'");
-                $result = $stmt->execute([$receipts_str, $user_name, $trade_id]);
-            } else {
-                $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, payment_receipt, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, NOW(), NOW())");
-                $result = $stmt->execute([$trade_id, $receipts_str, $user_name]);
-            }
-            
-            if ($result) {
-                $_SESSION['alert'] = [count($uploaded_files) . ' receipt(s) uploaded successfully!', 'success'];
-            } else {
-                $_SESSION['alert'] = ['Failed to update database', 'danger'];
-            }
-        } else {
-            $_SESSION['alert'] = ['No files were uploaded successfully. Errors: ' . implode('; ', $errors), 'danger'];
-        }
-    } else {
-        $_SESSION['alert'] = ['No files selected for upload', 'danger'];
     }
+    
+    // Combine comment
+    $full_comment = $existing_comment;
+    if (!empty($comment)) {
+        $timestamp = date('Y-m-d H:i:s');
+        $full_comment = $existing_comment 
+            ? $existing_comment . "\n---\n[" . $timestamp . "] " . $user_name . ": " . $comment 
+            : "[" . $timestamp . "] " . $user_name . ": " . $comment;
+    }
+    
+    // Update database
+    $receipts_str = !empty($uploaded_files) ? implode(',', array_merge($existing_receipts, $uploaded_files)) : $existing['payment_receipt'] ?? null;
+    
+    $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+    $stmt->execute([$trade_id]);
+    if ($stmt->fetch()) {
+        $stmt = $db->prepare("UPDATE numeric_trade_receipts SET payment_receipt = ?, comment = ?, updated_at = NOW(), uploaded_by = ? WHERE trade_id = ? AND trade_type = 'trade'");
+        $result = $stmt->execute([$receipts_str, $full_comment, $user_name, $trade_id]);
+    } else {
+        $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, payment_receipt, comment, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, ?, NOW(), NOW())");
+        $result = $stmt->execute([$trade_id, $receipts_str, $full_comment, $user_name]);
+    }
+    
+    if ($result) {
+        $message = [];
+        if (!empty($uploaded_files)) $message[] = count($uploaded_files) . ' file(s) uploaded';
+        if (!empty($comment)) $message[] = 'comment added';
+        $_SESSION['alert'] = [implode(' and ', $message) . ' successfully!', 'success'];
+    } else {
+        $_SESSION['alert'] = ['Failed to update database', 'danger'];
+    }
+    
     header('Location: numeric_receipt_upload.php?' . http_build_query(array_filter([
         'filter' => $_GET['filter'] ?? 'pending',
         'asset_class' => $_GET['asset_class'] ?? 'all',
@@ -195,30 +213,13 @@ if (isset($_GET['delete_receipt']) && isset($_GET['trade_id']) && isset($_GET['f
     exit;
 }
 
-// Handle Trader Comment Upload
-if (isset($_POST['add_comment']) && isset($_POST['trade_id'])) {
-    $trade_id = (int) $_POST['trade_id'];
-    $comment = trim($_POST['trader_comment'] ?? '');
+// Handle Comment Delete
+if (isset($_GET['delete_comment']) && isset($_GET['trade_id'])) {
+    $trade_id = (int) $_GET['trade_id'];
     
-    if (empty($comment)) {
-        $_SESSION['alert'] = ['Please enter a comment.', 'danger'];
-        header('Location: numeric_receipt_upload.php?' . http_build_query(array_filter([
-            'filter' => $_GET['filter'] ?? 'pending',
-            'asset_class' => $_GET['asset_class'] ?? 'all',
-            'search' => $_GET['search'] ?? ''
-        ])));
-        exit;
-    }
-    
-    $stmt = $db->prepare("
-        INSERT INTO numeric_trade_comments (trade_id, comment, created_by, created_at) 
-        VALUES (?, ?, ?, NOW())
-    ");
-    
-    if ($stmt->execute([$trade_id, $comment, $user_name])) {
-        $_SESSION['alert'] = ['Comment added successfully.', 'success'];
-    } else {
-        $_SESSION['alert'] = ['Failed to add comment.', 'danger'];
+    $stmt = $db->prepare("UPDATE numeric_trade_receipts SET comment = NULL, updated_at = NOW() WHERE trade_id = ? AND trade_type = 'trade'");
+    if ($stmt->execute([$trade_id])) {
+        $_SESSION['alert'] = ['Comment deleted successfully.', 'success'];
     }
     
     header('Location: numeric_receipt_upload.php?' . http_build_query(array_filter([
@@ -261,6 +262,7 @@ function getNumericTrades($db, $filter = 'pending', $asset_class_filter = 'all',
             t.status,
             t.created_at,
             ANY_VALUE(tr.payment_receipt) as payment_receipt,
+            ANY_VALUE(tr.comment) as receipt_comment,
             ANY_VALUE(tr.is_approved) as is_approved,
             ANY_VALUE(tr.approved_by) as approved_by,
             ANY_VALUE(tr.approved_at) as approved_at,
@@ -408,7 +410,7 @@ include '../includes/header.php';
 ?>
 
 <style>
-    /* Receipt Thumbnails - Like dealing_sheet.php */
+    /* Simple clean styles - like dealing_sheet.php */
     .receipt-thumbnails {
         display: flex;
         gap: 5px;
@@ -477,48 +479,35 @@ include '../includes/header.php';
         font-weight: bold;
     }
     
-    /* Comment Display */
-    .comment-bubble {
+    .comment-display {
         background: #f8f9fa;
         border-left: 3px solid #0d6efd;
-        padding: 4px 8px;
-        border-radius: 3px;
+        padding: 6px 10px;
+        border-radius: 4px;
         font-size: 12px;
         max-width: 200px;
-        margin-bottom: 2px;
+        margin-top: 4px;
     }
-    .comment-bubble .author {
-        font-weight: bold;
-        font-size: 10px;
-        color: #6c757d;
-    }
-    .comment-bubble .comment-text {
+    .comment-display .comment-text {
+        white-space: pre-wrap;
         word-wrap: break-word;
-        margin-top: 2px;
+        max-height: 60px;
+        overflow-y: auto;
     }
     .comment-actions .btn-sm {
         font-size: 10px;
         padding: 1px 6px;
     }
     
-    /* Receipt Preview in Modal */
-    .receipt-preview-container img {
-        max-width: 80px;
-        max-height: 60px;
-        object-fit: cover;
-        border: 1px solid #ddd;
-        border-radius: 3px;
-        margin: 2px;
-    }
-    
-    /* File Upload Styles */
+    /* Drop Zone */
     .drop-zone {
         border: 2px dashed #dee2e6;
         border-radius: 8px;
-        padding: 20px;
+        padding: 30px;
         text-align: center;
         transition: border-color 0.3s, background-color 0.3s;
         cursor: pointer;
+        margin-bottom: 15px;
     }
     .drop-zone:hover {
         border-color: #0d6efd;
@@ -636,19 +625,8 @@ include '../includes/header.php';
         background: #a71d2a;
     }
     
-    #uploadBtn:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-    }
-    
-    .modal-lg {
-        max-width: 700px;
-    }
-    
-    /* Stats Cards */
     .stat-card {
         transition: transform 0.2s, box-shadow 0.2s;
-        cursor: default;
     }
     .stat-card:hover {
         transform: translateY(-2px);
@@ -663,7 +641,6 @@ include '../includes/header.php';
         color: #6c757d;
     }
     
-    /* Filter section */
     .filter-section {
         background: #f8f9fa;
         padding: 15px;
@@ -676,20 +653,25 @@ include '../includes/header.php';
         color: #495057;
         margin-bottom: 4px;
     }
+    
+    .table-condensed td, .table-condensed th {
+        padding: 6px 8px;
+        font-size: 13px;
+    }
 </style>
 
 <div class="container-fluid">
     <!-- Page Header -->
     <div class="row mb-3">
         <div class="col-12">
-            <h4>
-                <i class="bi bi-receipt"></i> Numeric Reference Receipt Upload
-                <small class="text-muted">(Additional Reference = Number only)</small>
-            </h4>
-            <p class="text-muted">
-                <span class="badge bg-info">Bonds: All trades</span>
-                <span class="badge bg-success">Equities/ETFs: BUY only</span>
-            </p>
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <h4>
+                        <i class="bi bi-receipt"></i> Numeric Reference Receipt Upload
+                        <small class="text-muted">(Additional Reference = Number only)</small>
+                    </h4>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -745,9 +727,9 @@ include '../includes/header.php';
             <div class="card stat-card">
                 <div class="card-body text-center">
                     <div>
-                        <span class="badge bg-primary">B: <?php echo $stats['bond']; ?></span>
-                        <span class="badge bg-success">E: <?php echo $stats['equity']; ?></span>
-                        <span class="badge bg-warning text-dark">F: <?php echo $stats['etf']; ?></span>
+                        <span class="badge bg-secondary">B: <?php echo $stats['bond']; ?></span>
+                        <span class="badge bg-secondary">E: <?php echo $stats['equity']; ?></span>
+                        <span class="badge bg-secondary">F: <?php echo $stats['etf']; ?></span>
                     </div>
                     <div class="stat-label">Breakdown</div>
                 </div>
@@ -782,7 +764,7 @@ include '../includes/header.php';
             </div>
             <div class="col-md-2">
                 <label class="form-label">&nbsp;</label>
-                <button type="submit" class="btn btn-primary btn-sm w-100">Apply</button>
+                <button type="submit" class="btn btn-secondary btn-sm w-100">Apply</button>
             </div>
         </form>
     </div>
@@ -803,7 +785,7 @@ include '../includes/header.php';
                 </div>
             <?php else: ?>
                 <div class="table-responsive">
-                    <table class="table table-sm table-hover mb-0">
+                    <table class="table table-sm table-hover mb-0 table-condensed">
                         <thead class="table-light">
                             <tr>
                                 <th>Ref</th>
@@ -812,11 +794,10 @@ include '../includes/header.php';
                                 <th>Asset</th>
                                 <th>Side</th>
                                 <th class="text-end">Qty</th>
-                                <th class="text-end">Price</th>
                                 <th class="text-end">Value</th>
                                 <th>Date</th>
                                 <th>Add Ref</th>
-                                <th>Receipt / Comments</th>
+                                <th>Files / Comments</th>
                                 <th>Status</th>
                                 <th class="text-end">Actions</th>
                             </tr>
@@ -826,18 +807,19 @@ include '../includes/header.php';
                                 $isBond = ($trade['asset_class'] === 'bond');
                                 $receipts = !empty($trade['payment_receipt']) ? explode(',', $trade['payment_receipt']) : [];
                                 $hasReceipt = !empty($receipts) && !empty($receipts[0]);
+                                $hasComment = !empty($trade['receipt_comment']);
+                                $commentText = $trade['receipt_comment'] ?? '';
+                                
                                 $isApproved = isset($trade['is_approved']) ? (int)$trade['is_approved'] : 0;
                                 $statusText = $isApproved === 1 ? 'Approved' : ($isApproved === 2 ? 'Rejected' : 'Pending');
                                 $statusClass = $isApproved === 1 ? 'success' : ($isApproved === 2 ? 'danger' : 'warning');
                                 
                                 if ($isBond) {
                                     $displayQty = 'TZS ' . number_format(floatval($trade['quantity'] ?? 0), 2);
-                                    $displayPrice = number_format(floatval($trade['price'] ?? 0), 4) . '%';
                                     $displayValue = 'TZS ' . number_format(floatval($trade['consideration'] ?? 0), 2);
                                     $assetClass = 'Bond';
                                 } else {
                                     $displayQty = number_format(floatval($trade['quantity'] ?? 0), 0);
-                                    $displayPrice = 'TZS ' . number_format(floatval($trade['price'] ?? 0), 2);
                                     $displayValue = 'TZS ' . number_format(floatval($trade['consideration'] ?? 0), 2);
                                     $assetClass = ucfirst($trade['asset_class'] ?? 'Equity');
                                     if ($assetClass === 'Exchange Traded Funds') $assetClass = 'ETF';
@@ -854,7 +836,6 @@ include '../includes/header.php';
                                         </span>
                                     </td>
                                     <td class="text-end"><?php echo $displayQty; ?></td>
-                                    <td class="text-end"><?php echo $displayPrice; ?></td>
                                     <td class="text-end fw-bold"><?php echo $displayValue; ?></td>
                                     <td><?php echo date('d/m/Y', strtotime($trade['trade_date'] ?? '')); ?></td>
                                     <td><code class="small"><?php echo htmlspecialchars($trade['additional_reference'] ?? ''); ?></code></td>
@@ -897,22 +878,27 @@ include '../includes/header.php';
                                             <span class="text-muted small">No files</span>
                                         <?php endif; ?>
                                         
-                                        <!-- Comments -->
-                                        <button class="btn btn-outline-secondary btn-sm mt-1" onclick="openCommentModal(<?php echo $trade['id']; ?>)">
-                                            <i class="bi bi-chat"></i> Add Comment
-                                        </button>
+                                        <!-- Comment Display -->
+                                        <?php if ($hasComment): ?>
+                                            <div class="comment-display">
+                                                <div class="comment-text"><?php echo nl2br(htmlspecialchars($commentText)); ?></div>
+                                            </div>
+                                            <div class="comment-actions">
+                                                <a href="numeric_receipt_upload.php?delete_comment=1&trade_id=<?php echo $trade['id']; ?>&filter=<?php echo urlencode($filter); ?>&asset_class=<?php echo urlencode($asset_class_filter); ?>&search=<?php echo urlencode($search); ?>" 
+                                                   class="text-danger small" onclick="return confirm('Delete this comment?')">
+                                                    <i class="bi bi-trash"></i> Delete
+                                                </a>
+                                            </div>
+                                        <?php endif; ?>
                                     </td>
                                     <td><span class="badge bg-<?php echo $statusClass; ?>"><?php echo $statusText; ?></span></td>
                                     <td class="text-end">
                                         <div class="btn-group btn-group-sm" role="group">
                                             <?php if ($isApproved !== 1): ?>
-                                                <button class="btn btn-outline-primary" onclick="openUploadModal(<?php echo $trade['id']; ?>)" title="Upload Files">
+                                                <button class="btn btn-outline-primary" onclick="openUploadModal(<?php echo $trade['id']; ?>)" title="Upload Files / Add Comment">
                                                     <i class="bi bi-upload"></i>
                                                 </button>
                                             <?php endif; ?>
-                                            <button class="btn btn-outline-secondary" onclick="openCommentModal(<?php echo $trade['id']; ?>)" title="Add Comment">
-                                                <i class="bi bi-chat-dots"></i>
-                                            </button>
                                             <button class="btn btn-outline-info" onclick="viewTrade(<?php echo $trade['id']; ?>)" title="View Details">
                                                 <i class="bi bi-eye"></i>
                                             </button>
@@ -929,16 +915,14 @@ include '../includes/header.php';
 </div>
 
 <!-- ============================================ -->
-<!-- MODALS -->
+<!-- UPLOAD MODAL - Combined Upload + Comment -->
 <!-- ============================================ -->
-
-<!-- Upload Modal -->
 <div class="modal fade" id="uploadModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">
-                    <i class="bi bi-upload text-primary"></i> Upload Receipt(s)
+                    <i class="bi bi-upload"></i> Upload Receipt & Add Comment
                 </h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
@@ -955,16 +939,19 @@ include '../includes/header.php';
                         <strong>Trade ID:</strong> <span id="tradeIdDisplay">-</span>
                     </div>
                     
-                    <!-- Drop Zone -->
-                    <div class="drop-zone" id="dropZone">
-                        <div class="icon">
-                            <i class="bi bi-cloud-arrow-up"></i>
+                    <!-- File Upload Area -->
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Select Files</label>
+                        <div class="drop-zone" id="dropZone">
+                            <div class="icon">
+                                <i class="bi bi-cloud-arrow-up"></i>
+                            </div>
+                            <div class="text">
+                                <strong>Click to browse</strong> or drag & drop files here
+                                <br><small class="text-muted">Supports: JPG, PNG, GIF, PDF (Max 5MB each)</small>
+                            </div>
+                            <input type="file" class="form-control" name="payment_receipts[]" id="fileInput" accept="image/*,.pdf" multiple style="display: none;">
                         </div>
-                        <div class="text">
-                            <strong>Click to browse</strong> or drag & drop files here
-                            <br><small class="text-muted">Supports: JPG, PNG, GIF, PDF (Max 5MB each)</small>
-                        </div>
-                        <input type="file" class="form-control" name="payment_receipts[]" id="fileInput" accept="image/*,.pdf" multiple style="display: none;">
                     </div>
                     
                     <!-- File Preview Thumbnails -->
@@ -984,6 +971,12 @@ include '../includes/header.php';
                         </button>
                     </div>
                     
+                    <!-- Comment Section -->
+                    <div class="mt-3">
+                        <label class="form-label fw-bold">Add Comment (Optional)</label>
+                        <textarea class="form-control" name="receipt_comment" id="receiptComment" rows="3" placeholder="Add a comment about this trade..."></textarea>
+                    </div>
+                    
                     <div class="alert alert-info mt-3">
                         <i class="bi bi-info-circle"></i> Upload clear copies of payment receipts or confirmations. Multiple files allowed.
                     </div>
@@ -999,52 +992,13 @@ include '../includes/header.php';
     </div>
 </div>
 
-<!-- Comment Modal -->
-<div class="modal fade" id="commentModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="bi bi-chat-dots text-primary"></i> Add Comment
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <form method="POST" action="numeric_receipt_upload.php">
-                <div class="modal-body">
-                    <input type="hidden" name="trade_id" id="comment_trade_id" value="">
-                    <input type="hidden" name="add_comment" value="1">
-                    <input type="hidden" name="filter" value="<?php echo htmlspecialchars($filter); ?>">
-                    <input type="hidden" name="asset_class" value="<?php echo htmlspecialchars($asset_class_filter); ?>">
-                    <input type="hidden" name="search" value="<?php echo htmlspecialchars($search); ?>">
-                    
-                    <div class="alert alert-info">
-                        <i class="bi bi-info-circle"></i> 
-                        <strong>Trade:</strong> <span id="commentTradeRef">-</span>
-                    </div>
-                    
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">Your Comment</label>
-                        <textarea class="form-control" name="trader_comment" id="traderComment" rows="4" placeholder="Enter your comment about this trade..." required></textarea>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">
-                        <i class="bi bi-send"></i> Add Comment
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
-
 <!-- View Trade Modal -->
 <div class="modal fade" id="viewTradeModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">
-                    <i class="bi bi-info-circle text-info"></i> Trade Details
+                    <i class="bi bi-info-circle"></i> Trade Details
                 </h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
@@ -1062,7 +1016,7 @@ include '../includes/header.php';
 
 <script>
 // ============================================
-// FILE UPLOAD HANDLING - Like dealing_sheet.php
+// FILE UPLOAD HANDLING
 // ============================================
 
 let selectedFiles = [];
@@ -1207,20 +1161,12 @@ function openUploadModal(tradeId) {
     updateFileList();
     document.getElementById('fileInput').value = '';
     document.getElementById('filePreviewThumbnails').innerHTML = '';
+    document.getElementById('receiptComment').value = '';
     
     document.getElementById('upload_trade_id').value = tradeId;
     document.getElementById('tradeIdDisplay').textContent = tradeId === 0 ? 'New Trade' : tradeId;
     
     const modal = new bootstrap.Modal(document.getElementById('uploadModal'));
-    modal.show();
-}
-
-function openCommentModal(tradeId) {
-    document.getElementById('comment_trade_id').value = tradeId;
-    document.getElementById('commentTradeRef').textContent = tradeId;
-    document.getElementById('traderComment').value = '';
-    
-    const modal = new bootstrap.Modal(document.getElementById('commentModal'));
     modal.show();
 }
 
@@ -1286,26 +1232,27 @@ function viewTrade(tradeId) {
     }, 500);
 }
 
-// Refresh page
-function refreshPage() {
-    window.location.reload();
-}
-
 // ============================================
-// FORM SUBMISSION
+// FORM SUBMISSION - FIXED
 // ============================================
 
 document.getElementById('uploadForm').addEventListener('submit', function(e) {
-    if (selectedFiles.length === 0) {
+    // Allow submission if files are selected OR comment is entered
+    const comment = document.getElementById('receiptComment').value.trim();
+    
+    if (selectedFiles.length === 0 && !comment) {
         e.preventDefault();
-        alert('Please select at least one file to upload.');
+        alert('Please select at least one file or add a comment.');
         return false;
     }
     
-    const fileInput = document.getElementById('fileInput');
-    const dataTransfer = new DataTransfer();
-    selectedFiles.forEach(file => dataTransfer.items.add(file));
-    fileInput.files = dataTransfer.files;
+    // If files are selected, ensure the file input has them
+    if (selectedFiles.length > 0) {
+        const fileInput = document.getElementById('fileInput');
+        const dataTransfer = new DataTransfer();
+        selectedFiles.forEach(file => dataTransfer.items.add(file));
+        fileInput.files = dataTransfer.files;
+    }
     
     return true;
 });
