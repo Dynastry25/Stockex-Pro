@@ -29,22 +29,58 @@ $user_name = $current_user['username'] ?? 'System';
 $user_id = $current_user['id'] ?? null;
 
 // ============================================
+// CHECK AND CREATE TABLE IF NOT EXISTS
+// ============================================
+try {
+    // Check if numeric_trade_receipts table exists
+    $checkTable = $db->query("SHOW TABLES LIKE 'numeric_trade_receipts'");
+    if ($checkTable->rowCount() == 0) {
+        $createTable = "
+            CREATE TABLE numeric_trade_receipts (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                trade_id INT NOT NULL,
+                trade_type VARCHAR(50) DEFAULT 'trade',
+                payment_receipt TEXT,
+                is_approved TINYINT DEFAULT 0,
+                approved_by VARCHAR(100),
+                approved_at DATETIME,
+                approval_comment TEXT,
+                uploaded_by VARCHAR(100),
+                created_at DATETIME,
+                updated_at DATETIME,
+                INDEX idx_trade_id (trade_id),
+                INDEX idx_trade_type (trade_type)
+            )
+        ";
+        $db->exec($createTable);
+        error_log("Created numeric_trade_receipts table");
+    }
+} catch (Exception $e) {
+    error_log("Table setup error: " . $e->getMessage());
+}
+
+// ============================================
 // HANDLE ACTIONS
 // ============================================
 
-// Handle Receipt Upload
+// Handle Receipt Upload - FIXED
 if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
     $trade_id = (int) $_POST['trade_id'];
     $uploaded_files = [];
     $errors = [];
     
     $allowed_exts = ['jpg', 'jpeg', 'png', 'gif', 'pdf'];
-    $max_size = 5 * 1024 * 1024;
+    $max_size = 5 * 1024 * 1024; // 5MB
     
     $upload_dir = __DIR__ . '/../uploads/numeric_receipts/';
     if (!file_exists($upload_dir)) {
         mkdir($upload_dir, 0777, true);
     }
+    
+    // Debug logging
+    error_log("=== Numeric Upload Debug ===");
+    error_log("POST: " . print_r($_POST, true));
+    error_log("FILES: " . print_r($_FILES, true));
     
     // Get existing receipts
     $stmt = $db->prepare("SELECT payment_receipt FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
@@ -59,6 +95,7 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
         for ($i = 0; $i < $total_files; $i++) {
             if ($files['error'][$i] !== UPLOAD_ERR_OK) {
                 $errors[] = "File '{$files['name'][$i]}' upload error: " . $files['error'][$i];
+                error_log("Upload error for {$files['name'][$i]}: " . $files['error'][$i]);
                 continue;
             }
             
@@ -78,8 +115,10 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
             
             if (move_uploaded_file($files['tmp_name'][$i], $filepath)) {
                 $uploaded_files[] = $filename;
+                error_log("Successfully uploaded: $filename");
             } else {
                 $errors[] = "Failed to upload file '{$files['name'][$i]}'";
+                error_log("Failed to move uploaded file: {$files['tmp_name'][$i]} to $filepath");
             }
         }
         
@@ -102,12 +141,14 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
                 $_SESSION['alert'] = [count($uploaded_files) . ' receipt(s) uploaded successfully!', 'success'];
             } else {
                 $_SESSION['alert'] = ['Failed to update database', 'danger'];
+                error_log("Database update failed for trade_id: $trade_id");
             }
         } else {
             $_SESSION['alert'] = ['No files were uploaded successfully. Errors: ' . implode('; ', $errors), 'danger'];
         }
     } else {
         $_SESSION['alert'] = ['No files selected for upload', 'danger'];
+        error_log("No files in FILES array or empty name");
     }
     header('Location: numeric_receipt_upload.php?' . http_build_query(array_filter([
         'filter' => $_GET['filter'] ?? 'pending',
@@ -388,6 +429,7 @@ include '../includes/header.php';
 ?>
 
 <style>
+    /* File Upload Styles */
     .receipt-thumbnails {
         display: flex;
         gap: 3px;
@@ -444,29 +486,144 @@ include '../includes/header.php';
         padding: 2px 6px;
         font-size: 12px;
     }
-    .modal-lg {
-        max-width: 600px;
+    
+    /* Drop Zone */
+    .drop-zone {
+        border: 2px dashed #dee2e6;
+        border-radius: 8px;
+        padding: 30px;
+        text-align: center;
+        transition: border-color 0.3s, background-color 0.3s;
+        cursor: pointer;
+        margin-bottom: 15px;
     }
-    .receipt-preview-container img {
-        max-width: 80px;
-        max-height: 60px;
-        object-fit: cover;
-        border: 1px solid #ddd;
-        border-radius: 3px;
-        margin: 2px;
+    .drop-zone:hover {
+        border-color: #0d6efd;
+        background-color: #f8f9fa;
+    }
+    .drop-zone.dragover {
+        border-color: #0d6efd;
+        background-color: #e7f1ff;
+    }
+    .drop-zone .icon {
+        font-size: 40px;
+        color: #6c757d;
+        margin-bottom: 10px;
+    }
+    .drop-zone .text {
+        color: #6c757d;
+        font-size: 14px;
+    }
+    .drop-zone .text strong {
+        color: #0d6efd;
+    }
+    
+    /* File List */
+    .file-list {
+        margin-top: 10px;
+        max-height: 200px;
+        overflow-y: auto;
     }
     .file-item {
         display: flex;
         justify-content: space-between;
-        padding: 4px 8px;
+        align-items: center;
+        padding: 8px 12px;
         background: #f8f9fa;
-        border-radius: 3px;
-        margin-bottom: 2px;
+        border-radius: 4px;
+        margin-bottom: 4px;
         font-size: 13px;
     }
-    .file-item .size {
+    .file-item .file-info {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 1;
+        min-width: 0;
+    }
+    .file-item .file-info .name {
+        font-weight: 500;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 200px;
+    }
+    .file-item .file-info .size {
         color: #6c757d;
-        font-size: 11px;
+        font-size: 12px;
+        white-space: nowrap;
+    }
+    .file-item .remove-btn {
+        color: #dc3545;
+        cursor: pointer;
+        font-size: 18px;
+        background: none;
+        border: none;
+        padding: 0 4px;
+        line-height: 1;
+    }
+    .file-item .remove-btn:hover {
+        color: #a71d2a;
+    }
+    
+    /* File Preview Thumbnails */
+    .file-preview-thumbnails {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 10px;
+    }
+    .file-preview-thumbnails .thumb {
+        width: 70px;
+        height: 70px;
+        border: 2px solid #dee2e6;
+        border-radius: 6px;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #f8f9fa;
+        position: relative;
+    }
+    .file-preview-thumbnails .thumb img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+    .file-preview-thumbnails .thumb .file-icon-big {
+        font-size: 30px;
+        color: #6c757d;
+    }
+    .file-preview-thumbnails .thumb .thumb-remove {
+        position: absolute;
+        top: -6px;
+        right: -6px;
+        background: #dc3545;
+        color: white;
+        border-radius: 50%;
+        width: 20px;
+        height: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        cursor: pointer;
+        border: none;
+        padding: 0;
+    }
+    .file-preview-thumbnails .thumb .thumb-remove:hover {
+        background: #a71d2a;
+    }
+    
+    /* Upload button disabled state */
+    #uploadBtn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+    
+    /* Modal */
+    .modal-lg {
+        max-width: 700px;
     }
 </style>
 
@@ -474,10 +631,10 @@ include '../includes/header.php';
     <!-- Page Header -->
     <div class="row mb-3">
         <div class="col-12">
-            <h2>
+            <h4>
                 <i class="bi bi-receipt"></i> Numeric Reference Receipt Upload
                 <small class="text-muted">(Additional Reference = Number only)</small>
-            </h2>
+            </h4>
             <p class="text-muted">
                 <span class="badge bg-info">Bonds: All trades</span>
                 <span class="badge bg-success">Equities/ETFs: BUY only</span>
@@ -566,10 +723,10 @@ include '../includes/header.php';
                         <option value="etf" <?php echo $asset_class_filter === 'etf' ? 'selected' : ''; ?>>ETF</option>
                     </select>
                 </div>
-                <div class="col-md-3">
+                <div class="col-md-4">
                     <input type="text" class="form-control form-control-sm" name="search" placeholder="Search..." value="<?php echo htmlspecialchars($search); ?>">
                 </div>
-                <div class="col-md-3">
+                <div class="col-md-2">
                     <button type="submit" class="btn btn-primary btn-sm w-100">Apply</button>
                 </div>
             </form>
@@ -719,15 +876,15 @@ include '../includes/header.php';
     </div>
 </div>
 
-<!-- Upload Modal -->
+<!-- Upload Modal - FIXED with proper file handling -->
 <div class="modal fade" id="uploadModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog">
+    <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title"><i class="bi bi-upload"></i> Upload Receipt</h5>
+                <h5 class="modal-title"><i class="bi bi-upload"></i> Upload Receipt(s)</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form method="POST" enctype="multipart/form-data" action="numeric_receipt_upload.php">
+            <form method="POST" enctype="multipart/form-data" action="numeric_receipt_upload.php" id="uploadForm">
                 <div class="modal-body">
                     <input type="hidden" name="trade_id" id="upload_trade_id" value="">
                     <input type="hidden" name="upload_receipt" value="1">
@@ -735,19 +892,44 @@ include '../includes/header.php';
                     <input type="hidden" name="asset_class" value="<?php echo htmlspecialchars($asset_class_filter); ?>">
                     <input type="hidden" name="search" value="<?php echo htmlspecialchars($search); ?>">
                     
-                    <div class="mb-3">
-                        <label class="form-label">Select Receipt Files</label>
-                        <input type="file" class="form-control" name="payment_receipts[]" accept="image/*,.pdf" multiple required>
-                        <div class="form-text">Allowed: JPG, PNG, GIF, PDF (Max 5MB each)</div>
+                    <!-- Drop Zone -->
+                    <div class="drop-zone" id="dropZone">
+                        <div class="icon">
+                            <i class="bi bi-cloud-arrow-up"></i>
+                        </div>
+                        <div class="text">
+                            <strong>Click to browse</strong> or drag & drop files here
+                            <br><small class="text-muted">Supports: JPG, PNG, GIF, PDF (Max 5MB each)</small>
+                        </div>
+                        <input type="file" class="form-control" name="payment_receipts[]" id="fileInput" accept="image/*,.pdf" multiple style="display: none;">
                     </div>
                     
-                    <div class="alert alert-info">
+                    <!-- File Preview Thumbnails -->
+                    <div id="filePreviewThumbnails" class="file-preview-thumbnails"></div>
+                    
+                    <!-- Selected Files List -->
+                    <div class="file-list" id="fileList">
+                        <p class="text-muted small">No files selected</p>
+                    </div>
+                    
+                    <div class="mt-2">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('fileInput').click()">
+                            <i class="bi bi-plus-circle"></i> Add More Files
+                        </button>
+                        <button type="button" class="btn btn-outline-danger btn-sm" onclick="clearSelectedFiles()">
+                            <i class="bi bi-x-circle"></i> Clear All
+                        </button>
+                    </div>
+                    
+                    <div class="alert alert-info mt-3">
                         <i class="bi bi-info-circle"></i> Upload clear copies of payment receipts or confirmations. Multiple files allowed.
                     </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-success">Upload</button>
+                    <button type="submit" class="btn btn-success" id="uploadBtn" disabled>
+                        <i class="bi bi-upload"></i> Upload <span id="fileCount">0</span> Files
+                    </button>
                 </div>
             </form>
         </div>
@@ -785,7 +967,162 @@ include '../includes/header.php';
 </div>
 
 <script>
+// ============================================
+// FILE UPLOAD HANDLING - FIXED
+// ============================================
+
+let selectedFiles = [];
+
+// File input change handler - DON'T clear the input
+document.getElementById('fileInput').addEventListener('change', function(e) {
+    const files = Array.from(e.target.files);
+    files.forEach(file => {
+        if (!selectedFiles.some(f => f.name === file.name && f.size === file.size)) {
+            selectedFiles.push(file);
+        }
+    });
+    updateFileList();
+    // DO NOT clear e.target.value here!
+});
+
+// Drag and drop
+const dropZone = document.getElementById('dropZone');
+
+dropZone.addEventListener('dragover', function(e) {
+    e.preventDefault();
+    this.classList.add('dragover');
+});
+
+dropZone.addEventListener('dragleave', function(e) {
+    e.preventDefault();
+    this.classList.remove('dragover');
+});
+
+dropZone.addEventListener('drop', function(e) {
+    e.preventDefault();
+    this.classList.remove('dragover');
+    
+    const files = Array.from(e.dataTransfer.files);
+    files.forEach(file => {
+        if (!selectedFiles.some(f => f.name === file.name && f.size === file.size)) {
+            selectedFiles.push(file);
+        }
+    });
+    updateFileList();
+    
+    // Update the file input with dropped files
+    const dataTransfer = new DataTransfer();
+    selectedFiles.forEach(file => dataTransfer.items.add(file));
+    document.getElementById('fileInput').files = dataTransfer.files;
+});
+
+dropZone.addEventListener('click', function() {
+    document.getElementById('fileInput').click();
+});
+
+// Update file list display with thumbnails
+function updateFileList() {
+    const container = document.getElementById('fileList');
+    const fileCount = document.getElementById('fileCount');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const thumbnailsContainer = document.getElementById('filePreviewThumbnails');
+    
+    // Clear thumbnails
+    thumbnailsContainer.innerHTML = '';
+    
+    if (selectedFiles.length === 0) {
+        container.innerHTML = '<p class="text-muted small">No files selected</p>';
+        fileCount.textContent = '0';
+        uploadBtn.disabled = true;
+        uploadBtn.innerHTML = '<i class="bi bi-upload"></i> Upload 0 Files';
+        return;
+    }
+    
+    // Build file list
+    let html = '';
+    selectedFiles.forEach((file, index) => {
+        const size = (file.size / 1024 / 1024).toFixed(2);
+        const icon = file.type.startsWith('image/') ? 'bi-file-image' :
+                    file.type === 'application/pdf' ? 'bi-file-pdf' :
+                    file.type.includes('word') ? 'bi-file-word' :
+                    file.type.includes('excel') ? 'bi-file-excel' : 'bi-file';
+        html += `
+            <div class="file-item">
+                <div class="file-info">
+                    <i class="bi ${icon}"></i>
+                    <span class="name" title="${file.name}">${file.name}</span>
+                    <span class="size">(${size} MB)</span>
+                </div>
+                <button type="button" class="remove-btn" onclick="removeFile(${index})" title="Remove file">
+                    <i class="bi bi-x-circle"></i>
+                </button>
+            </div>
+        `;
+    });
+    container.innerHTML = html;
+    
+    // Build thumbnails for images
+    selectedFiles.forEach((file, index) => {
+        if (file.type.startsWith('image/')) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const thumb = document.createElement('div');
+                thumb.className = 'thumb';
+                thumb.innerHTML = `
+                    <img src="${e.target.result}" alt="${file.name}">
+                    <button type="button" class="thumb-remove" onclick="removeFile(${index})" title="Remove">×</button>
+                `;
+                thumbnailsContainer.appendChild(thumb);
+            };
+            reader.readAsDataURL(file);
+        } else {
+            // Non-image file icon
+            const icon = file.type === 'application/pdf' ? 'bi-file-pdf' : 'bi-file';
+            const thumb = document.createElement('div');
+            thumb.className = 'thumb';
+            thumb.innerHTML = `
+                <div class="file-icon-big"><i class="bi ${icon}"></i></div>
+                <button type="button" class="thumb-remove" onclick="removeFile(${index})" title="Remove">×</button>
+            `;
+            thumbnailsContainer.appendChild(thumb);
+        }
+    });
+    
+    fileCount.textContent = selectedFiles.length;
+    uploadBtn.disabled = false;
+    uploadBtn.innerHTML = `<i class="bi bi-upload"></i> Upload ${selectedFiles.length} Files`;
+}
+
+// Remove a file from selection
+function removeFile(index) {
+    selectedFiles.splice(index, 1);
+    updateFileList();
+    
+    // Update the file input with remaining files
+    const dataTransfer = new DataTransfer();
+    selectedFiles.forEach(file => dataTransfer.items.add(file));
+    document.getElementById('fileInput').files = dataTransfer.files;
+}
+
+// Clear all selected files
+function clearSelectedFiles() {
+    selectedFiles = [];
+    updateFileList();
+    document.getElementById('fileInput').value = '';
+    document.getElementById('filePreviewThumbnails').innerHTML = '';
+}
+
+// ============================================
+// MODAL FUNCTIONS
+// ============================================
+
 function openUploadModal(tradeId) {
+    // Reset file selection
+    selectedFiles = [];
+    updateFileList();
+    document.getElementById('fileInput').value = '';
+    document.getElementById('filePreviewThumbnails').innerHTML = '';
+    
     document.getElementById('upload_trade_id').value = tradeId;
     const modal = new bootstrap.Modal(document.getElementById('uploadModal'));
     modal.show();
@@ -796,6 +1133,42 @@ function openCommentModal(tradeId) {
     const modal = new bootstrap.Modal(document.getElementById('commentModal'));
     modal.show();
 }
+
+// ============================================
+// FORM SUBMISSION - FIXED
+// ============================================
+
+document.getElementById('uploadForm').addEventListener('submit', function(e) {
+    // If no files selected, prevent submission
+    if (selectedFiles.length === 0) {
+        e.preventDefault();
+        alert('Please select at least one file to upload.');
+        return false;
+    }
+    
+    // CRITICAL FIX: Ensure the file input has the files
+    const fileInput = document.getElementById('fileInput');
+    const dataTransfer = new DataTransfer();
+    selectedFiles.forEach(file => dataTransfer.items.add(file));
+    fileInput.files = dataTransfer.files;
+    
+    // Let the form submit normally
+    return true;
+});
+
+// ============================================
+// INITIALIZATION
+// ============================================
+
+// Auto-refresh alerts after 5 seconds
+document.querySelectorAll('.alert').forEach(alert => {
+    setTimeout(() => {
+        const bsAlert = bootstrap.Alert.getOrCreateInstance(alert);
+        if (bsAlert) bsAlert.close();
+    }, 5000);
+});
+
+console.log('Numeric Receipt Upload System initialized successfully.');
 </script>
 
 <?php include '../includes/footer.php'; ?>
