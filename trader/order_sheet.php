@@ -999,8 +999,8 @@ include '../includes/header.php';
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-secondary" id="uploadBtn" disabled>
-                        <i class="bi bi-upload"></i> Upload <span id="fileCount">0</span> Files
+                    <button type="submit" class="btn btn-secondary" id="uploadBtn">
+                        <i class="bi bi-upload"></i> Upload Files
                     </button>
                 </div>
             </form>
@@ -1032,155 +1032,18 @@ include '../includes/header.php';
 
 <script>
 // ============================================
-// FILE UPLOAD HANDLING - FIXED
-// ============================================
-
-let selectedFiles = [];
-
-// File input change handler - FIXED: Properly track files
-document.getElementById('fileInput').addEventListener('change', function(e) {
-    const files = Array.from(e.target.files);
-    selectedFiles = []; // Clear existing selection
-    files.forEach(file => {
-        selectedFiles.push(file);
-    });
-    updateFileList();
-    console.log('Files selected:', selectedFiles.length);
-});
-
-// Drag and drop
-const dropZone = document.getElementById('dropZone');
-
-dropZone.addEventListener('dragover', function(e) {
-    e.preventDefault();
-    this.classList.add('dragover');
-});
-
-dropZone.addEventListener('dragleave', function(e) {
-    e.preventDefault();
-    this.classList.remove('dragover');
-});
-
-dropZone.addEventListener('drop', function(e) {
-    e.preventDefault();
-    this.classList.remove('dragover');
-    
-    const files = Array.from(e.dataTransfer.files);
-    selectedFiles = [];
-    files.forEach(file => {
-        selectedFiles.push(file);
-    });
-    updateFileList();
-    
-    const dataTransfer = new DataTransfer();
-    selectedFiles.forEach(file => dataTransfer.items.add(file));
-    document.getElementById('fileInput').files = dataTransfer.files;
-    console.log('Files dropped:', selectedFiles.length);
-});
-
-dropZone.addEventListener('click', function() {
-    document.getElementById('fileInput').click();
-});
-
-// Update file list display
-function updateFileList() {
-    const container = document.getElementById('fileList');
-    const fileCount = document.getElementById('fileCount');
-    const uploadBtn = document.getElementById('uploadBtn');
-    const thumbnailsContainer = document.getElementById('filePreviewThumbnails');
-    
-    thumbnailsContainer.innerHTML = '';
-    
-    if (selectedFiles.length === 0) {
-        container.innerHTML = '<p class="text-muted small">No files selected</p>';
-        fileCount.textContent = '0';
-        uploadBtn.disabled = true;
-        uploadBtn.innerHTML = '<i class="bi bi-upload"></i> Upload 0 Files';
-        return;
-    }
-    
-    let html = '';
-    selectedFiles.forEach((file, index) => {
-        const size = (file.size / 1024 / 1024).toFixed(2);
-        const icon = file.type.startsWith('image/') ? 'bi-file-image' :
-                    file.type === 'application/pdf' ? 'bi-file-pdf' : 'bi-file';
-        html += `
-            <div class="file-item">
-                <div class="file-info">
-                    <i class="bi ${icon}"></i>
-                    <span class="name" title="${file.name}">${file.name}</span>
-                    <span class="size">(${size} MB)</span>
-                </div>
-                <button type="button" class="remove-btn" onclick="removeFile(${index})" title="Remove file">
-                    <i class="bi bi-x-circle"></i>
-                </button>
-            </div>
-        `;
-    });
-    container.innerHTML = html;
-    
-    // Build thumbnails for images
-    selectedFiles.forEach((file, index) => {
-        if (file.type.startsWith('image/')) {
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                const thumb = document.createElement('div');
-                thumb.className = 'thumb';
-                thumb.innerHTML = `
-                    <img src="${e.target.result}" alt="${file.name}">
-                    <button type="button" class="thumb-remove" onclick="removeFile(${index})" title="Remove">×</button>
-                `;
-                thumbnailsContainer.appendChild(thumb);
-            };
-            reader.readAsDataURL(file);
-        } else {
-            const icon = file.type === 'application/pdf' ? 'bi-file-pdf' : 'bi-file';
-            const thumb = document.createElement('div');
-            thumb.className = 'thumb';
-            thumb.innerHTML = `
-                <div class="file-icon-big"><i class="bi ${icon}"></i></div>
-                <button type="button" class="thumb-remove" onclick="removeFile(${index})" title="Remove">×</button>
-            `;
-            thumbnailsContainer.appendChild(thumb);
-        }
-    });
-    
-    fileCount.textContent = selectedFiles.length;
-    uploadBtn.disabled = false;
-    uploadBtn.innerHTML = `<i class="bi bi-upload"></i> Upload ${selectedFiles.length} Files`;
-}
-
-// Remove a file from selection
-function removeFile(index) {
-    selectedFiles.splice(index, 1);
-    updateFileList();
-    
-    const dataTransfer = new DataTransfer();
-    selectedFiles.forEach(file => dataTransfer.items.add(file));
-    document.getElementById('fileInput').files = dataTransfer.files;
-}
-
-// Clear all selected files
-function clearSelectedFiles() {
-    selectedFiles = [];
-    updateFileList();
-    document.getElementById('fileInput').value = '';
-    document.getElementById('filePreviewThumbnails').innerHTML = '';
-}
-
-// ============================================
-// MODAL FUNCTIONS
+// SIMPLE FILE UPLOAD - USING NATIVE FILE INPUT
 // ============================================
 
 function openUploadModal(tradeId) {
-    selectedFiles = [];
-    updateFileList();
-    document.getElementById('fileInput').value = '';
-    document.getElementById('filePreviewThumbnails').innerHTML = '';
-    document.getElementById('receiptComment').value = '';
-    
     document.getElementById('upload_trade_id').value = tradeId;
     document.getElementById('tradeIdDisplay').textContent = tradeId === 0 ? 'New Trade' : tradeId;
+    document.getElementById('fileInput').value = '';
+    document.getElementById('receiptComment').value = '';
+    document.getElementById('fileList').innerHTML = '<p class="text-muted small">No files selected</p>';
+    document.getElementById('filePreviewThumbnails').innerHTML = '';
+    document.getElementById('uploadBtn').innerHTML = '<i class="bi bi-upload"></i> Upload Files';
+    document.getElementById('uploadBtn').disabled = false;
     
     const modal = new bootstrap.Modal(document.getElementById('uploadModal'));
     modal.show();
@@ -1248,24 +1111,90 @@ function viewTrade(tradeId) {
     }, 500);
 }
 
+// Show selected files when user picks them - SIMPLE AND RELIABLE
+document.getElementById('fileInput').addEventListener('change', function(e) {
+    const files = this.files;
+    const fileList = document.getElementById('fileList');
+    const thumbnailsContainer = document.getElementById('filePreviewThumbnails');
+    const uploadBtn = document.getElementById('uploadBtn');
+    
+    // Clear previous
+    fileList.innerHTML = '';
+    thumbnailsContainer.innerHTML = '';
+    
+    if (files.length === 0) {
+        fileList.innerHTML = '<p class="text-muted small">No files selected</p>';
+        uploadBtn.innerHTML = '<i class="bi bi-upload"></i> Upload Files';
+        return;
+    }
+    
+    // Build file list
+    let html = '';
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const size = (file.size / 1024 / 1024).toFixed(2);
+        const icon = file.type.startsWith('image/') ? 'bi-file-image' :
+                    file.type === 'application/pdf' ? 'bi-file-pdf' : 'bi-file';
+        html += `
+            <div class="file-item">
+                <div class="file-info">
+                    <i class="bi ${icon}"></i>
+                    <span class="name" title="${file.name}">${file.name}</span>
+                    <span class="size">(${size} MB)</span>
+                </div>
+            </div>
+        `;
+    }
+    fileList.innerHTML = html;
+    
+    // Build thumbnails for images
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (file.type.startsWith('image/')) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const thumb = document.createElement('div');
+                thumb.className = 'thumb';
+                thumb.innerHTML = `
+                    <img src="${e.target.result}" alt="${file.name}">
+                `;
+                thumbnailsContainer.appendChild(thumb);
+            };
+            reader.readAsDataURL(file);
+        } else {
+            const icon = file.type === 'application/pdf' ? 'bi-file-pdf' : 'bi-file';
+            const thumb = document.createElement('div');
+            thumb.className = 'thumb';
+            thumb.innerHTML = `
+                <div class="file-icon-big"><i class="bi ${icon}"></i></div>
+            `;
+            thumbnailsContainer.appendChild(thumb);
+        }
+    }
+    
+    uploadBtn.innerHTML = `<i class="bi bi-upload"></i> Upload ${files.length} Files`;
+});
+
+// Clear files
+function clearSelectedFiles() {
+    document.getElementById('fileInput').value = '';
+    document.getElementById('fileList').innerHTML = '<p class="text-muted small">No files selected</p>';
+    document.getElementById('filePreviewThumbnails').innerHTML = '';
+    document.getElementById('uploadBtn').innerHTML = '<i class="bi bi-upload"></i> Upload Files';
+}
+
 // ============================================
-// FORM SUBMISSION - FIXED
+// FORM SUBMISSION
 // ============================================
 
 document.getElementById('uploadForm').addEventListener('submit', function(e) {
+    const fileInput = document.getElementById('fileInput');
     const comment = document.getElementById('receiptComment').value.trim();
     
-    if (selectedFiles.length === 0 && !comment) {
+    if (fileInput.files.length === 0 && !comment) {
         e.preventDefault();
         alert('Please select at least one file or add a comment.');
         return false;
-    }
-    
-    if (selectedFiles.length > 0) {
-        const fileInput = document.getElementById('fileInput');
-        const dataTransfer = new DataTransfer();
-        selectedFiles.forEach(file => dataTransfer.items.add(file));
-        fileInput.files = dataTransfer.files;
     }
     
     return true;
@@ -1283,7 +1212,7 @@ document.querySelectorAll('.alert').forEach(alert => {
     }, 5000);
 });
 
-console.log('Numeric Receipt Upload System initialized successfully.');
+console.log('Numeric Receipt Upload System initialized.');
 </script>
 
 <?php include '../includes/footer.php'; ?>
