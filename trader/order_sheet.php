@@ -62,7 +62,7 @@ try {
 // HANDLE ACTIONS
 // ============================================
 
-// Handle Receipt Upload - FIXED
+// Handle Receipt Upload
 if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
     $trade_id = (int) $_POST['trade_id'];
     $uploaded_files = [];
@@ -76,18 +76,15 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
         mkdir($upload_dir, 0777, true);
     }
     
-    // Debug logging
     error_log("=== Numeric Upload Debug ===");
     error_log("POST: " . print_r($_POST, true));
     error_log("FILES: " . print_r($_FILES, true));
     
-    // Get existing receipts
     $stmt = $db->prepare("SELECT payment_receipt FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
     $stmt->execute([$trade_id]);
     $existing = $stmt->fetch(PDO::FETCH_ASSOC);
     $existing_receipts = !empty($existing['payment_receipt']) ? explode(',', $existing['payment_receipt']) : [];
     
-    // Check if files were uploaded
     if (isset($_FILES['payment_receipts']) && !empty($_FILES['payment_receipts']['name'][0])) {
         $files = $_FILES['payment_receipts'];
         $total_files = count($files['name']);
@@ -95,7 +92,6 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
         for ($i = 0; $i < $total_files; $i++) {
             if ($files['error'][$i] !== UPLOAD_ERR_OK) {
                 $errors[] = "File '{$files['name'][$i]}' upload error: " . $files['error'][$i];
-                error_log("Upload error for {$files['name'][$i]}: " . $files['error'][$i]);
                 continue;
             }
             
@@ -115,10 +111,8 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
             
             if (move_uploaded_file($files['tmp_name'][$i], $filepath)) {
                 $uploaded_files[] = $filename;
-                error_log("Successfully uploaded: $filename");
             } else {
                 $errors[] = "Failed to upload file '{$files['name'][$i]}'";
-                error_log("Failed to move uploaded file: {$files['tmp_name'][$i]} to $filepath");
             }
         }
         
@@ -140,14 +134,12 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
                 $_SESSION['alert'] = [count($uploaded_files) . ' receipt(s) uploaded successfully!', 'success'];
             } else {
                 $_SESSION['alert'] = ['Failed to update database', 'danger'];
-                error_log("Database update failed for trade_id: $trade_id");
             }
         } else {
             $_SESSION['alert'] = ['No files were uploaded successfully. Errors: ' . implode('; ', $errors), 'danger'];
         }
     } else {
         $_SESSION['alert'] = ['No files selected for upload', 'danger'];
-        error_log("No files in FILES array or empty name");
     }
     header('Location: numeric_receipt_upload.php?' . http_build_query(array_filter([
         'filter' => $_GET['filter'] ?? 'pending',
@@ -248,7 +240,7 @@ $asset_class_filter = $_GET['asset_class'] ?? 'all';
 $search = $_GET['search'] ?? '';
 
 // ============================================
-// FETCH TRADES WITH ADDITIONAL_REFERENCE = NUMBER ONLY
+// FETCH TRADES
 // ============================================
 function getNumericTrades($db, $filter = 'pending', $asset_class_filter = 'all', $search = '') {
     $sql = "
@@ -470,7 +462,6 @@ include '../includes/header.php';
         color: #6c757d;
     }
     
-    /* Drop Zone */
     .drop-zone {
         border: 2px dashed #dee2e6;
         border-radius: 8px;
@@ -501,7 +492,6 @@ include '../includes/header.php';
         color: #0d6efd;
     }
     
-    /* File List */
     .file-list {
         margin-top: 10px;
         max-height: 200px;
@@ -549,7 +539,6 @@ include '../includes/header.php';
         color: #a71d2a;
     }
     
-    /* File Preview Thumbnails */
     .file-preview-thumbnails {
         display: flex;
         gap: 8px;
@@ -856,7 +845,7 @@ include '../includes/header.php';
     </div>
 </div>
 
-<!-- Upload Modal - COMPLETELY FIXED -->
+<!-- Upload Modal - SIMPLIFIED AND RELIABLE -->
 <div class="modal fade" id="uploadModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
@@ -872,33 +861,17 @@ include '../includes/header.php';
                     <input type="hidden" name="asset_class" value="<?php echo htmlspecialchars($asset_class_filter); ?>">
                     <input type="hidden" name="search" value="<?php echo htmlspecialchars($search); ?>">
                     
-                    <!-- Drop Zone -->
-                    <div class="drop-zone" id="dropZone">
-                        <div class="icon">
-                            <i class="bi bi-cloud-arrow-up"></i>
-                        </div>
-                        <div class="text">
-                            <strong>Click to browse</strong> or drag & drop files here
-                            <br><small class="text-muted">Supports: JPG, PNG, GIF, PDF (Max 5MB each)</small>
-                        </div>
-                        <input type="file" class="form-control" name="payment_receipts[]" id="fileInput" accept="image/*,.pdf" multiple style="display: none;">
+                    <!-- Simple file input -->
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Select Files</label>
+                        <input type="file" class="form-control" name="payment_receipts[]" id="fileInput" accept="image/*,.pdf" multiple required>
+                        <div class="form-text">Allowed: JPG, PNG, GIF, PDF (Max 5MB each)</div>
                     </div>
                     
-                    <!-- File Preview Thumbnails -->
-                    <div id="filePreviewThumbnails" class="file-preview-thumbnails"></div>
-                    
-                    <!-- Selected Files List -->
-                    <div class="file-list" id="fileList">
-                        <p class="text-muted small">No files selected</p>
-                    </div>
-                    
-                    <div class="mt-2">
-                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('fileInput').click()">
-                            <i class="bi bi-plus-circle"></i> Add More Files
-                        </button>
-                        <button type="button" class="btn btn-outline-danger btn-sm" onclick="clearSelectedFiles()">
-                            <i class="bi bi-x-circle"></i> Clear All
-                        </button>
+                    <!-- File list display -->
+                    <div id="fileListContainer" style="display:none;">
+                        <label class="form-label fw-bold">Selected Files:</label>
+                        <div class="file-list" id="fileList"></div>
                     </div>
                     
                     <div class="alert alert-info mt-3">
@@ -907,8 +880,8 @@ include '../includes/header.php';
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-success" id="uploadBtn" disabled>
-                        <i class="bi bi-upload"></i> Upload <span id="fileCount">0</span> Files
+                    <button type="submit" class="btn btn-success" id="uploadBtn">
+                        <i class="bi bi-upload"></i> Upload Files
                     </button>
                 </div>
             </form>
@@ -948,170 +921,15 @@ include '../includes/header.php';
 
 <script>
 // ============================================
-// FILE UPLOAD HANDLING - COMPLETELY FIXED
-// ============================================
-
-let selectedFiles = [];
-
-// File input change handler
-document.getElementById('fileInput').addEventListener('change', function(e) {
-    console.log('File input changed:', e.target.files);
-    const files = Array.from(e.target.files);
-    
-    // Clear existing selection and add new files
-    selectedFiles = [];
-    files.forEach(file => {
-        selectedFiles.push(file);
-    });
-    
-    console.log('Selected files:', selectedFiles);
-    updateFileList();
-});
-
-// Drag and drop
-const dropZone = document.getElementById('dropZone');
-
-dropZone.addEventListener('dragover', function(e) {
-    e.preventDefault();
-    this.classList.add('dragover');
-});
-
-dropZone.addEventListener('dragleave', function(e) {
-    e.preventDefault();
-    this.classList.remove('dragover');
-});
-
-dropZone.addEventListener('drop', function(e) {
-    e.preventDefault();
-    this.classList.remove('dragover');
-    
-    const files = Array.from(e.dataTransfer.files);
-    selectedFiles = [];
-    files.forEach(file => {
-        selectedFiles.push(file);
-    });
-    
-    console.log('Dropped files:', selectedFiles);
-    updateFileList();
-    
-    // Update the file input with dropped files
-    const dataTransfer = new DataTransfer();
-    selectedFiles.forEach(file => dataTransfer.items.add(file));
-    document.getElementById('fileInput').files = dataTransfer.files;
-});
-
-dropZone.addEventListener('click', function() {
-    document.getElementById('fileInput').click();
-});
-
-// Update file list display with thumbnails
-function updateFileList() {
-    const container = document.getElementById('fileList');
-    const fileCount = document.getElementById('fileCount');
-    const uploadBtn = document.getElementById('uploadBtn');
-    const thumbnailsContainer = document.getElementById('filePreviewThumbnails');
-    
-    // Clear thumbnails
-    thumbnailsContainer.innerHTML = '';
-    
-    console.log('Updating file list. Selected files count:', selectedFiles.length);
-    
-    if (selectedFiles.length === 0) {
-        container.innerHTML = '<p class="text-muted small">No files selected</p>';
-        fileCount.textContent = '0';
-        uploadBtn.disabled = true;
-        uploadBtn.innerHTML = '<i class="bi bi-upload"></i> Upload 0 Files';
-        return;
-    }
-    
-    // Build file list
-    let html = '';
-    selectedFiles.forEach((file, index) => {
-        const size = (file.size / 1024 / 1024).toFixed(2);
-        const icon = file.type.startsWith('image/') ? 'bi-file-image' :
-                    file.type === 'application/pdf' ? 'bi-file-pdf' :
-                    file.type.includes('word') ? 'bi-file-word' :
-                    file.type.includes('excel') ? 'bi-file-excel' : 'bi-file';
-        html += `
-            <div class="file-item">
-                <div class="file-info">
-                    <i class="bi ${icon}"></i>
-                    <span class="name" title="${file.name}">${file.name}</span>
-                    <span class="size">(${size} MB)</span>
-                </div>
-                <button type="button" class="remove-btn" onclick="removeFile(${index})" title="Remove file">
-                    <i class="bi bi-x-circle"></i>
-                </button>
-            </div>
-        `;
-    });
-    container.innerHTML = html;
-    
-    // Build thumbnails for images
-    selectedFiles.forEach((file, index) => {
-        if (file.type.startsWith('image/')) {
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                const thumb = document.createElement('div');
-                thumb.className = 'thumb';
-                thumb.innerHTML = `
-                    <img src="${e.target.result}" alt="${file.name}">
-                    <button type="button" class="thumb-remove" onclick="removeFile(${index})" title="Remove">×</button>
-                `;
-                thumbnailsContainer.appendChild(thumb);
-            };
-            reader.readAsDataURL(file);
-        } else {
-            const icon = file.type === 'application/pdf' ? 'bi-file-pdf' : 'bi-file';
-            const thumb = document.createElement('div');
-            thumb.className = 'thumb';
-            thumb.innerHTML = `
-                <div class="file-icon-big"><i class="bi ${icon}"></i></div>
-                <button type="button" class="thumb-remove" onclick="removeFile(${index})" title="Remove">×</button>
-            `;
-            thumbnailsContainer.appendChild(thumb);
-        }
-    });
-    
-    fileCount.textContent = selectedFiles.length;
-    uploadBtn.disabled = false;
-    uploadBtn.innerHTML = `<i class="bi bi-upload"></i> Upload ${selectedFiles.length} Files`;
-}
-
-// Remove a file from selection
-function removeFile(index) {
-    selectedFiles.splice(index, 1);
-    console.log('Removed file, remaining:', selectedFiles);
-    updateFileList();
-    
-    // Update the file input with remaining files
-    const dataTransfer = new DataTransfer();
-    selectedFiles.forEach(file => dataTransfer.items.add(file));
-    document.getElementById('fileInput').files = dataTransfer.files;
-}
-
-// Clear all selected files
-function clearSelectedFiles() {
-    selectedFiles = [];
-    console.log('Cleared all files');
-    updateFileList();
-    document.getElementById('fileInput').value = '';
-    document.getElementById('filePreviewThumbnails').innerHTML = '';
-}
-
-// ============================================
-// MODAL FUNCTIONS
+// SIMPLE FILE UPLOAD HANDLING
 // ============================================
 
 function openUploadModal(tradeId) {
-    console.log('Opening upload modal for trade:', tradeId);
-    // Reset file selection
-    selectedFiles = [];
-    updateFileList();
-    document.getElementById('fileInput').value = '';
-    document.getElementById('filePreviewThumbnails').innerHTML = '';
-    
     document.getElementById('upload_trade_id').value = tradeId;
+    document.getElementById('fileInput').value = '';
+    document.getElementById('fileListContainer').style.display = 'none';
+    document.getElementById('fileList').innerHTML = '';
+    
     const modal = new bootstrap.Modal(document.getElementById('uploadModal'));
     modal.show();
 }
@@ -1122,30 +940,36 @@ function openCommentModal(tradeId) {
     modal.show();
 }
 
-// ============================================
-// FORM SUBMISSION - COMPLETELY FIXED
-// ============================================
-
-document.getElementById('uploadForm').addEventListener('submit', function(e) {
-    console.log('Form submitting. Selected files:', selectedFiles);
+// Show selected files when user picks them
+document.getElementById('fileInput').addEventListener('change', function(e) {
+    const files = this.files;
+    const container = document.getElementById('fileListContainer');
+    const fileList = document.getElementById('fileList');
     
-    // If no files selected, prevent submission
-    if (selectedFiles.length === 0) {
-        e.preventDefault();
-        alert('Please select at least one file to upload.');
-        return false;
+    if (files.length === 0) {
+        container.style.display = 'none';
+        fileList.innerHTML = '';
+        return;
     }
     
-    // CRITICAL FIX: Ensure the file input has the files
-    const fileInput = document.getElementById('fileInput');
-    const dataTransfer = new DataTransfer();
-    selectedFiles.forEach(file => dataTransfer.items.add(file));
-    fileInput.files = dataTransfer.files;
-    
-    console.log('File input now has:', fileInput.files.length, 'files');
-    
-    // Let the form submit normally
-    return true;
+    container.style.display = 'block';
+    let html = '';
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const size = (file.size / 1024 / 1024).toFixed(2);
+        const icon = file.type.startsWith('image/') ? 'bi-file-image' :
+                    file.type === 'application/pdf' ? 'bi-file-pdf' : 'bi-file';
+        html += `
+            <div class="file-item">
+                <div class="file-info">
+                    <i class="bi ${icon}"></i>
+                    <span class="name">${file.name}</span>
+                    <span class="size">(${size} MB)</span>
+                </div>
+            </div>
+        `;
+    }
+    fileList.innerHTML = html;
 });
 
 // ============================================
@@ -1160,8 +984,7 @@ document.querySelectorAll('.alert').forEach(alert => {
     }, 5000);
 });
 
-console.log('Numeric Receipt Upload System initialized successfully.');
-console.log('Selected files:', selectedFiles.length);
+console.log('Numeric Receipt Upload System initialized.');
 </script>
 
 <?php include '../includes/footer.php'; ?>
