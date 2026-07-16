@@ -66,111 +66,131 @@ try {
 }
 
 // ============================================
-// HANDLE ACTIONS
+// HANDLE UPLOAD - EXACTLY LIKE DEALING_SHEET.PHP
 // ============================================
 
-// Handle Receipt Upload with Comment - FIXED
+// Handle Receipt Upload - IDENTICAL to dealing_sheet.php
 if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
     $trade_id = (int) $_POST['trade_id'];
     $uploaded_files = [];
     $errors = [];
     $comment = trim($_POST['receipt_comment'] ?? '');
     
-    $allowed_exts = ['jpg', 'jpeg', 'png', 'gif', 'pdf'];
-    $max_size = 5 * 1024 * 1024;
-    
-    $upload_dir = __DIR__ . '/../uploads/numeric_receipts/';
-    if (!file_exists($upload_dir)) {
-        mkdir($upload_dir, 0777, true);
-    }
-    
-    // Log for debugging
-    error_log("=== NUMERIC UPLOAD DEBUG ===");
-    error_log("Trade ID: " . $trade_id);
-    error_log("Comment: " . $comment);
-    error_log("FILES: " . print_r($_FILES, true));
-    
-    // Get existing receipts and comment
-    $stmt = $db->prepare("SELECT payment_receipt, comment FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
-    $stmt->execute([$trade_id]);
-    $existing = $stmt->fetch(PDO::FETCH_ASSOC);
-    $existing_receipts = !empty($existing['payment_receipt']) ? explode(',', $existing['payment_receipt']) : [];
-    $existing_comment = $existing['comment'] ?? '';
-    
     // Check if files were uploaded
     if (isset($_FILES['payment_receipts']) && !empty($_FILES['payment_receipts']['name'][0])) {
         $files = $_FILES['payment_receipts'];
         $total_files = count($files['name']);
+        $allowed_exts = ['jpg', 'jpeg', 'png', 'gif', 'pdf'];
+        $max_size = 5 * 1024 * 1024; // 5MB per file
+        
+        // Create upload directory if it doesn't exist
+        $upload_dir = __DIR__ . '/../uploads/numeric_receipts/';
+        if (!file_exists($upload_dir)) {
+            mkdir($upload_dir, 0777, true);
+        }
+        
+        // Get existing receipts and comment
+        $stmt = $db->prepare("SELECT payment_receipt, comment FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+        $stmt->execute([$trade_id]);
+        $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+        $existing_receipts = !empty($existing['payment_receipt']) ? explode(',', $existing['payment_receipt']) : [];
+        $existing_comment = $existing['comment'] ?? '';
         
         for ($i = 0; $i < $total_files; $i++) {
             if ($files['error'][$i] !== UPLOAD_ERR_OK) {
                 $errors[] = "File '{$files['name'][$i]}' upload error: " . $files['error'][$i];
-                error_log("Upload error for {$files['name'][$i]}: " . $files['error'][$i]);
                 continue;
             }
             
             $file_ext = strtolower(pathinfo($files['name'][$i], PATHINFO_EXTENSION));
             if (!in_array($file_ext, $allowed_exts)) {
                 $errors[] = "File '{$files['name'][$i]}' - Invalid type. Allowed: JPG, PNG, GIF, PDF";
-                error_log("Invalid type for {$files['name'][$i]}: " . $file_ext);
                 continue;
             }
             
             if ($files['size'][$i] > $max_size) {
                 $errors[] = "File '{$files['name'][$i]}' exceeds 5MB limit";
-                error_log("File too large {$files['name'][$i]}: " . $files['size'][$i]);
                 continue;
             }
             
+            // Generate unique filename - same as dealing_sheet
             $filename = 'receipt_' . $trade_id . '_' . date('Ymd_His') . '_' . ($i + 1) . '.' . $file_ext;
             $filepath = $upload_dir . $filename;
             
             if (move_uploaded_file($files['tmp_name'][$i], $filepath)) {
                 $uploaded_files[] = $filename;
-                error_log("Successfully uploaded: " . $filename);
             } else {
                 $errors[] = "Failed to upload file '{$files['name'][$i]}'";
-                error_log("Failed to move file: " . $files['tmp_name'][$i] . " to " . $filepath);
             }
         }
+        
+        // Combine comment
+        $full_comment = $existing_comment;
+        if (!empty($comment)) {
+            $timestamp = date('Y-m-d H:i:s');
+            $full_comment = $existing_comment 
+                ? $existing_comment . "\n---\n[" . $timestamp . "] " . $user_name . ": " . $comment 
+                : "[" . $timestamp . "] " . $user_name . ": " . $comment;
+        }
+        
+        if (!empty($uploaded_files)) {
+            // Merge with existing receipts
+            $all_receipts = array_merge($existing_receipts, $uploaded_files);
+            $receipts_str = implode(',', $all_receipts);
+            
+            $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+            $stmt->execute([$trade_id]);
+            if ($stmt->fetch()) {
+                $stmt = $db->prepare("UPDATE numeric_trade_receipts SET payment_receipt = ?, comment = ?, updated_at = NOW(), uploaded_by = ? WHERE trade_id = ? AND trade_type = 'trade'");
+                $result = $stmt->execute([$receipts_str, $full_comment, $user_name, $trade_id]);
+            } else {
+                $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, payment_receipt, comment, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, ?, NOW(), NOW())");
+                $result = $stmt->execute([$trade_id, $receipts_str, $full_comment, $user_name]);
+            }
+            
+            if ($result) {
+                $message = [];
+                if (!empty($uploaded_files)) $message[] = count($uploaded_files) . ' receipt(s) uploaded';
+                if (!empty($comment)) $message[] = 'comment added';
+                $_SESSION['alert'] = [implode(' and ', $message) . ' successfully!', 'success'];
+            } else {
+                $_SESSION['alert'] = ['Failed to update database', 'danger'];
+            }
+        } else {
+            $_SESSION['alert'] = ['No files were uploaded successfully. Errors: ' . implode('; ', $errors), 'danger'];
+        }
     } else {
-        error_log("No files in FILES array or empty name");
+        // If no files but comment only
+        if (!empty($comment)) {
+            $stmt = $db->prepare("SELECT comment FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+            $stmt->execute([$trade_id]);
+            $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+            $existing_comment = $existing['comment'] ?? '';
+            
+            $timestamp = date('Y-m-d H:i:s');
+            $full_comment = $existing_comment 
+                ? $existing_comment . "\n---\n[" . $timestamp . "] " . $user_name . ": " . $comment 
+                : "[" . $timestamp . "] " . $user_name . ": " . $comment;
+            
+            $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+            $stmt->execute([$trade_id]);
+            if ($stmt->fetch()) {
+                $stmt = $db->prepare("UPDATE numeric_trade_receipts SET comment = ?, updated_at = NOW(), uploaded_by = ? WHERE trade_id = ? AND trade_type = 'trade'");
+                $result = $stmt->execute([$full_comment, $user_name, $trade_id]);
+            } else {
+                $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, comment, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, NOW(), NOW())");
+                $result = $stmt->execute([$trade_id, $full_comment, $user_name]);
+            }
+            
+            if ($result) {
+                $_SESSION['alert'] = ['Comment added successfully!', 'success'];
+            } else {
+                $_SESSION['alert'] = ['Failed to add comment', 'danger'];
+            }
+        } else {
+            $_SESSION['alert'] = ['No files selected for upload', 'danger'];
+        }
     }
-    
-    // Combine comment
-    $full_comment = $existing_comment;
-    if (!empty($comment)) {
-        $timestamp = date('Y-m-d H:i:s');
-        $full_comment = $existing_comment 
-            ? $existing_comment . "\n---\n[" . $timestamp . "] " . $user_name . ": " . $comment 
-            : "[" . $timestamp . "] " . $user_name . ": " . $comment;
-    }
-    
-    // Update database
-    $receipts_str = !empty($uploaded_files) ? implode(',', array_merge($existing_receipts, $uploaded_files)) : $existing['payment_receipt'] ?? null;
-    
-    $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
-    $stmt->execute([$trade_id]);
-    if ($stmt->fetch()) {
-        $stmt = $db->prepare("UPDATE numeric_trade_receipts SET payment_receipt = ?, comment = ?, updated_at = NOW(), uploaded_by = ? WHERE trade_id = ? AND trade_type = 'trade'");
-        $result = $stmt->execute([$receipts_str, $full_comment, $user_name, $trade_id]);
-        error_log("UPDATE result: " . ($result ? 'success' : 'failed'));
-    } else {
-        $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, payment_receipt, comment, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, ?, NOW(), NOW())");
-        $result = $stmt->execute([$trade_id, $receipts_str, $full_comment, $user_name]);
-        error_log("INSERT result: " . ($result ? 'success' : 'failed'));
-    }
-    
-    if ($result) {
-        $message = [];
-        if (!empty($uploaded_files)) $message[] = count($uploaded_files) . ' file(s) uploaded';
-        if (!empty($comment)) $message[] = 'comment added';
-        $_SESSION['alert'] = [implode(' and ', $message) . ' successfully!', 'success'];
-    } else {
-        $_SESSION['alert'] = ['Failed to update database', 'danger'];
-        error_log("Database update failed for trade_id: " . $trade_id);
-    }
-    
     header('Location: numeric_receipt_upload.php?' . http_build_query(array_filter([
         'filter' => $_GET['filter'] ?? 'pending',
         'asset_class' => $_GET['asset_class'] ?? 'all',
@@ -425,7 +445,7 @@ include '../includes/header.php';
 ?>
 
 <style>
-    /* Simple clean styles - NO COLORS */
+    /* Same styles as dealing_sheet.php */
     .receipt-thumbnails {
         display: flex;
         gap: 5px;
@@ -507,135 +527,6 @@ include '../includes/header.php';
         max-height: 60px;
         overflow-y: auto;
     }
-    .comment-actions .btn-sm {
-        font-size: 10px;
-        padding: 1px 6px;
-    }
-    
-    .drop-zone {
-        border: 2px dashed #ddd;
-        border-radius: 6px;
-        padding: 30px;
-        text-align: center;
-        transition: border-color 0.3s, background-color 0.3s;
-        cursor: pointer;
-        margin-bottom: 15px;
-    }
-    .drop-zone:hover {
-        border-color: #666;
-        background-color: #f8f9fa;
-    }
-    .drop-zone.dragover {
-        border-color: #666;
-        background-color: #f0f0f0;
-    }
-    .drop-zone .icon {
-        font-size: 40px;
-        color: #999;
-        margin-bottom: 10px;
-    }
-    .drop-zone .text {
-        color: #666;
-        font-size: 14px;
-    }
-    .drop-zone .text strong {
-        color: #333;
-    }
-    
-    .file-list {
-        margin-top: 10px;
-        max-height: 200px;
-        overflow-y: auto;
-    }
-    .file-item {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 8px 12px;
-        background: #f8f9fa;
-        border-radius: 4px;
-        margin-bottom: 4px;
-        font-size: 13px;
-    }
-    .file-item .file-info {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        flex: 1;
-        min-width: 0;
-    }
-    .file-item .file-info .name {
-        font-weight: 500;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        max-width: 200px;
-    }
-    .file-item .file-info .size {
-        color: #999;
-        font-size: 12px;
-        white-space: nowrap;
-    }
-    .file-item .remove-btn {
-        color: #dc3545;
-        cursor: pointer;
-        font-size: 18px;
-        background: none;
-        border: none;
-        padding: 0 4px;
-        line-height: 1;
-    }
-    .file-item .remove-btn:hover {
-        color: #a71d2a;
-    }
-    
-    .file-preview-thumbnails {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-        margin-top: 10px;
-    }
-    .file-preview-thumbnails .thumb {
-        width: 70px;
-        height: 70px;
-        border: 1px solid #ddd;
-        border-radius: 4px;
-        overflow: hidden;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: #f8f9fa;
-        position: relative;
-    }
-    .file-preview-thumbnails .thumb img {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-    }
-    .file-preview-thumbnails .thumb .file-icon-big {
-        font-size: 30px;
-        color: #999;
-    }
-    .file-preview-thumbnails .thumb .thumb-remove {
-        position: absolute;
-        top: -6px;
-        right: -6px;
-        background: #dc3545;
-        color: white;
-        border-radius: 50%;
-        width: 20px;
-        height: 20px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 12px;
-        cursor: pointer;
-        border: none;
-        padding: 0;
-    }
-    .file-preview-thumbnails .thumb .thumb-remove:hover {
-        background: #a71d2a;
-    }
     
     .stat-box {
         background: #f8f9fa;
@@ -667,11 +558,6 @@ include '../includes/header.php';
         font-weight: 600;
         color: #495057;
         margin-bottom: 4px;
-    }
-    
-    .table-condensed td, .table-condensed th {
-        padding: 6px 8px;
-        font-size: 13px;
     }
     
     .badge-status {
@@ -819,7 +705,7 @@ include '../includes/header.php';
                 </div>
             <?php else: ?>
                 <div class="table-responsive">
-                    <table class="table table-sm table-hover mb-0 table-condensed">
+                    <table class="table table-sm table-hover mb-0">
                         <thead class="table-light">
                             <tr>
                                 <th>Ref</th>
@@ -917,10 +803,10 @@ include '../includes/header.php';
                                             <div class="comment-display">
                                                 <div class="comment-text"><?php echo nl2br(htmlspecialchars($commentText)); ?></div>
                                             </div>
-                                            <div class="comment-actions">
+                                            <div class="mt-1">
                                                 <a href="numeric_receipt_upload.php?delete_comment=1&trade_id=<?php echo $trade['id']; ?>&filter=<?php echo urlencode($filter); ?>&asset_class=<?php echo urlencode($asset_class_filter); ?>&search=<?php echo urlencode($search); ?>" 
                                                    class="text-danger small" onclick="return confirm('Delete this comment?')">
-                                                    <i class="bi bi-trash"></i> Delete
+                                                    <i class="bi bi-trash"></i> Delete Comment
                                                 </a>
                                             </div>
                                         <?php endif; ?>
@@ -949,77 +835,52 @@ include '../includes/header.php';
 </div>
 
 <!-- ============================================ -->
-<!-- UPLOAD MODAL - Combined Upload + Comment -->
+<!-- UPLOAD MODAL - IDENTICAL TO DEALING_SHEET.PHP -->
 <!-- ============================================ -->
 <div class="modal fade" id="uploadModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-lg">
+    <div class="modal-dialog modal-md">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="bi bi-upload"></i> Upload Receipt & Add Comment
-                </h5>
+                <h5 class="modal-title"><i class="bi bi-upload me-2"></i>Upload Receipt & Add Comment</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form method="POST" enctype="multipart/form-data" action="numeric_receipt_upload.php" id="uploadForm">
+            <form method="POST" enctype="multipart/form-data" action="numeric_receipt_upload.php" id="receiptUploadForm">
                 <div class="modal-body">
-                    <input type="hidden" name="trade_id" id="upload_trade_id" value="">
+                    <input type="hidden" name="trade_id" id="receipt_trade_id" value="">
                     <input type="hidden" name="upload_receipt" value="1">
                     <input type="hidden" name="filter" value="<?php echo htmlspecialchars($filter); ?>">
                     <input type="hidden" name="asset_class" value="<?php echo htmlspecialchars($asset_class_filter); ?>">
                     <input type="hidden" name="search" value="<?php echo htmlspecialchars($search); ?>">
                     
-                    <div class="alert alert-info">
-                        <i class="bi bi-info-circle"></i> 
-                        <strong>Trade ID:</strong> <span id="tradeIdDisplay">-</span>
-                    </div>
-                    
-                    <!-- File Upload Area -->
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">Select Files</label>
-                        <div class="drop-zone" id="dropZone">
-                            <div class="icon">
-                                <i class="bi bi-cloud-arrow-up"></i>
-                            </div>
-                            <div class="text">
-                                <strong>Click to browse</strong> or drag & drop files here
-                                <br><small class="text-muted">Supports: JPG, PNG, GIF, PDF (Max 5MB each)</small>
-                            </div>
-                            <input type="file" class="form-control" name="payment_receipts[]" id="fileInput" accept="image/*,.pdf" multiple style="display: none;">
+                    <div class="text-center mb-3">
+                        <div class="receipt-preview-container" id="receiptPreviews">
+                            <!-- Previews will be inserted here -->
                         </div>
                     </div>
                     
-                    <!-- File Preview Thumbnails -->
-                    <div id="filePreviewThumbnails" class="file-preview-thumbnails"></div>
-                    
-                    <!-- Selected Files List -->
-                    <div class="file-list" id="fileList">
-                        <p class="text-muted small">No files selected</p>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Select Receipt Files</label>
+                        <div class="file-input-wrapper">
+                            <input type="file" class="form-control" name="payment_receipts[]" id="receipt_files" accept="image/*,.pdf" multiple>
+                            <div class="form-text">Allowed formats: JPG, PNG, GIF, PDF (Max 5MB each)</div>
+                            <div class="file-list" id="fileList"></div>
+                        </div>
                     </div>
                     
-                    <div class="mt-2">
-                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('fileInput').click()">
-                            <i class="bi bi-plus-circle"></i> Add More Files
-                        </button>
-                        <button type="button" class="btn btn-outline-danger btn-sm" onclick="clearSelectedFiles()">
-                            <i class="bi bi-x-circle"></i> Clear All
-                        </button>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Add Comment (Optional)</label>
+                        <textarea class="form-control" name="receipt_comment" id="receipt_comment" rows="3" placeholder="Add a comment about this trade..."></textarea>
                     </div>
                     
-                    <!-- Comment Section -->
-                    <div class="mt-3">
-                        <label class="form-label fw-bold">Add Comment (Optional)</label>
-                        <textarea class="form-control" name="receipt_comment" id="receiptComment" rows="3" placeholder="Add a comment about this trade..."></textarea>
-                    </div>
-                    
-                    <div class="alert alert-info mt-3">
-                        <i class="bi bi-info-circle"></i> Upload clear copies of payment receipts or confirmations. Multiple files allowed.
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle me-2"></i>
+                        You can select multiple files at once. Upload clear photos or scanned copies of payment receipts/confirmations.
+                        <br><small class="text-muted">Supported: Images (JPG, PNG, GIF) and PDF documents.</small>
                     </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-secondary" id="uploadBtn">
-                        <i class="bi bi-upload"></i> Upload Files
-                    </button>
+                    <button type="submit" class="btn btn-secondary" id="uploadReceiptBtn">Upload</button>
                 </div>
             </form>
         </div>
@@ -1050,22 +911,56 @@ include '../includes/header.php';
 
 <script>
 // ============================================
-// SIMPLE FILE UPLOAD
+// RECEIPT UPLOAD - IDENTICAL TO DEALING_SHEET.PHP
 // ============================================
 
 function openUploadModal(tradeId) {
-    document.getElementById('upload_trade_id').value = tradeId;
-    document.getElementById('tradeIdDisplay').textContent = tradeId === 0 ? 'New Trade' : tradeId;
-    document.getElementById('fileInput').value = '';
-    document.getElementById('receiptComment').value = '';
-    document.getElementById('fileList').innerHTML = '<p class="text-muted small">No files selected</p>';
-    document.getElementById('filePreviewThumbnails').innerHTML = '';
-    document.getElementById('uploadBtn').innerHTML = '<i class="bi bi-upload"></i> Upload Files';
-    document.getElementById('uploadBtn').disabled = false;
-    
+    document.getElementById('receipt_trade_id').value = tradeId;
+    document.getElementById('receipt_files').value = '';
+    document.getElementById('receiptPreviews').innerHTML = '';
+    document.getElementById('fileList').innerHTML = '';
+    document.getElementById('receipt_comment').value = '';
     const modal = new bootstrap.Modal(document.getElementById('uploadModal'));
     modal.show();
 }
+
+// File preview - same as dealing_sheet.php
+document.getElementById('receipt_files')?.addEventListener('change', function(e) {
+    const files = this.files;
+    const fileList = document.getElementById('fileList');
+    const previewContainer = document.getElementById('receiptPreviews');
+    
+    fileList.innerHTML = '';
+    previewContainer.innerHTML = '';
+    
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        
+        const fileItem = document.createElement('div');
+        fileItem.className = 'file-item';
+        fileItem.innerHTML = `
+            <span class="file-name" title="${file.name}">${file.name}</span>
+            <span class="file-size">${(file.size / 1024).toFixed(1)} KB</span>
+        `;
+        fileList.appendChild(fileItem);
+        
+        if (file.type.startsWith('image/')) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = document.createElement('img');
+                img.src = e.target.result;
+                img.style.maxWidth = '80px';
+                img.style.maxHeight = '60px';
+                img.style.objectFit = 'cover';
+                img.style.borderRadius = '4px';
+                img.style.margin = '3px';
+                img.style.border = '1px solid #ddd';
+                previewContainer.appendChild(img);
+            };
+            reader.readAsDataURL(file);
+        }
+    }
+});
 
 function viewTrade(tradeId) {
     const modal = new bootstrap.Modal(document.getElementById('viewTradeModal'));
@@ -1128,94 +1023,6 @@ function viewTrade(tradeId) {
         `;
     }, 500);
 }
-
-// Show selected files when user picks them
-document.getElementById('fileInput').addEventListener('change', function(e) {
-    const files = this.files;
-    const fileList = document.getElementById('fileList');
-    const thumbnailsContainer = document.getElementById('filePreviewThumbnails');
-    const uploadBtn = document.getElementById('uploadBtn');
-    
-    fileList.innerHTML = '';
-    thumbnailsContainer.innerHTML = '';
-    
-    if (files.length === 0) {
-        fileList.innerHTML = '<p class="text-muted small">No files selected</p>';
-        uploadBtn.innerHTML = '<i class="bi bi-upload"></i> Upload Files';
-        return;
-    }
-    
-    let html = '';
-    for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        const size = (file.size / 1024 / 1024).toFixed(2);
-        const icon = file.type.startsWith('image/') ? 'bi-file-image' :
-                    file.type === 'application/pdf' ? 'bi-file-pdf' : 'bi-file';
-        html += `
-            <div class="file-item">
-                <div class="file-info">
-                    <i class="bi ${icon}"></i>
-                    <span class="name" title="${file.name}">${file.name}</span>
-                    <span class="size">(${size} MB)</span>
-                </div>
-            </div>
-        `;
-    }
-    fileList.innerHTML = html;
-    
-    for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        if (file.type.startsWith('image/')) {
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                const thumb = document.createElement('div');
-                thumb.className = 'thumb';
-                thumb.innerHTML = `
-                    <img src="${e.target.result}" alt="${file.name}">
-                `;
-                thumbnailsContainer.appendChild(thumb);
-            };
-            reader.readAsDataURL(file);
-        } else {
-            const icon = file.type === 'application/pdf' ? 'bi-file-pdf' : 'bi-file';
-            const thumb = document.createElement('div');
-            thumb.className = 'thumb';
-            thumb.innerHTML = `
-                <div class="file-icon-big"><i class="bi ${icon}"></i></div>
-            `;
-            thumbnailsContainer.appendChild(thumb);
-        }
-    }
-    
-    uploadBtn.innerHTML = `<i class="bi bi-upload"></i> Upload ${files.length} Files`;
-});
-
-function clearSelectedFiles() {
-    document.getElementById('fileInput').value = '';
-    document.getElementById('fileList').innerHTML = '<p class="text-muted small">No files selected</p>';
-    document.getElementById('filePreviewThumbnails').innerHTML = '';
-    document.getElementById('uploadBtn').innerHTML = '<i class="bi bi-upload"></i> Upload Files';
-}
-
-// ============================================
-// FORM SUBMISSION - FIXED: Submit the form normally
-// ============================================
-
-document.getElementById('uploadForm').addEventListener('submit', function(e) {
-    const fileInput = document.getElementById('fileInput');
-    const comment = document.getElementById('receiptComment').value.trim();
-    
-    // If no files and no comment, prevent submission
-    if (fileInput.files.length === 0 && !comment) {
-        e.preventDefault();
-        alert('Please select at least one file or add a comment.');
-        return false;
-    }
-    
-    // Allow the form to submit normally with files
-    console.log('Submitting form with', fileInput.files.length, 'files');
-    return true;
-});
 
 // ============================================
 // INITIALIZATION
