@@ -66,7 +66,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $token = bin2hex(random_bytes(32));
             $expires_at = date('Y-m-d H:i:s', time() + 3600); // 1 hour expiry
 
-            // Store token in database (create password_resets table if not exists)
             try {
                 // Ensure table exists
                 $db->exec("CREATE TABLE IF NOT EXISTS password_resets (
@@ -80,43 +79,112 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     INDEX idx_user (user_id)
                 )");
 
-                // Insert token
+                // Delete any existing tokens for this user
+                $delete = $db->prepare("DELETE FROM password_resets WHERE user_id = ?");
+                $delete->execute([$user['id']]);
+
+                // Insert new token
                 $insert = $db->prepare("INSERT INTO password_resets (user_id, token, expires_at) VALUES (?, ?, ?)");
                 $insert->execute([$user['id'], $token, $expires_at]);
 
                 // Build reset link
-                $reset_link = "https://" . $_SERVER['HTTP_HOST'] . dirname($_SERVER['SCRIPT_NAME']) . "/forgot_password.php?token=" . $token . "&email=" . urlencode($email);
+                $protocol = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https://' : 'http://';
+                $reset_link = $protocol . $_SERVER['HTTP_HOST'] . dirname($_SERVER['SCRIPT_NAME']) . "/forgot_password.php?token=" . $token . "&email=" . urlencode($email);
 
-                // Send email (using a simple mail function - in production use PHPMailer or similar)
-                $subject = "Password Reset Request - Stock Exchange System";
-                $message = "Hello " . $user['full_name'] . ",\n\n";
-                $message .= "We received a request to reset your password for the Stock Exchange System.\n\n";
-                $message .= "Click the link below to reset your password:\n";
-                $message .= $reset_link . "\n\n";
-                $message .= "This link will expire in 1 hour.\n\n";
-                $message .= "If you did not request this, please ignore this email.\n\n";
-                $message .= "Regards,\nStock Exchange Team";
+                // --- EMAIL SENDING USING PHPMailer ---
+                require_once '../vendor/autoload.php'; // Adjust path to your autoloader
 
-                $headers = "From: no-reply@stockexchange.com\r\n";
-                $headers .= "Reply-To: support@stockexchange.com\r\n";
-                $headers .= "X-Mailer: PHP/" . phpversion();
+                use PHPMailer\PHPMailer\PHPMailer;
+                use PHPMailer\PHPMailer\SMTP;
+                use PHPMailer\PHPMailer\Exception;
 
-                // In production, use a proper mail library.
-                // For demo, we simulate sending (always success)
-                $mail_sent = mail($email, $subject, $message, $headers);
+                $mail = new PHPMailer(true);
 
-                // For demonstration, we assume mail is sent.
-                // In a real environment, check $mail_sent and handle errors.
-                $success_message = "A password reset link has been sent to your email address. Please check your inbox.";
-
-                // Log the request (optional)
                 try {
-                    $log_check = $db->query("SHOW TABLES LIKE 'login_logs'")->fetch();
-                    if ($log_check) {
-                        $log = $db->prepare("INSERT INTO login_logs (user_id, ip_address, user_agent, success) VALUES (?, ?, ?, 1)");
-                        $log->execute([$user['id'], $_SERVER['REMOTE_ADDR'], $_SERVER['HTTP_USER_AGENT']]);
-                    }
-                } catch (PDOException $e) { /* ignore */ }
+                    // Server settings
+                    $mail->isSMTP();
+                    $mail->Host       = 'smtp.gmail.com';                     // Your SMTP server
+                    $mail->SMTPAuth   = true;
+                    $mail->Username   = 'your-email@gmail.com';               // Your email
+                    $mail->Password   = 'your-app-password';                  // Your app password
+                    $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+                    $mail->Port       = 587;
+
+                    // Recipients
+                    $mail->setFrom('no-reply@stockexchange.com', 'Stock Exchange System');
+                    $mail->addAddress($email, $user['full_name']);
+                    $mail->addReplyTo('support@stockexchange.com', 'Support');
+
+                    // Content
+                    $mail->isHTML(true);
+                    $mail->Subject = 'Password Reset Request - Stock Exchange System';
+                    
+                    // HTML Email Body
+                    $mail->Body = "
+                        <html>
+                        <head>
+                            <style>
+                                body { font-family: Arial, sans-serif; color: #333; }
+                                .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+                                .header { background: #164e63; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
+                                .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }
+                                .button { display: inline-block; padding: 12px 30px; background: #164e63; color: white; text-decoration: none; border-radius: 6px; margin: 20px 0; }
+                                .footer { text-align: center; margin-top: 20px; font-size: 12px; color: #6c757d; }
+                            </style>
+                        </head>
+                        <body>
+                            <div class='container'>
+                                <div class='header'>
+                                    <h2>🔐 Password Reset Request</h2>
+                                </div>
+                                <div class='content'>
+                                    <h3>Hello " . htmlspecialchars($user['full_name']) . ",</h3>
+                                    <p>We received a request to reset your password for the <strong>Stock Exchange System</strong>.</p>
+                                    <p>Click the button below to reset your password:</p>
+                                    <p style='text-align: center;'>
+                                        <a href='" . $reset_link . "' class='button'>Reset Password</a>
+                                    </p>
+                                    <p>Or copy and paste this link into your browser:</p>
+                                    <p style='background: #e9ecef; padding: 10px; border-radius: 4px; word-break: break-all;'>" . $reset_link . "</p>
+                                    <p><strong>⚠️ This link will expire in 1 hour.</strong></p>
+                                    <p>If you did not request this, please ignore this email.</p>
+                                    <hr>
+                                    <p style='font-size: 14px; color: #6c757d;'>This is an automated message. Please do not reply to this email.</p>
+                                </div>
+                                <div class='footer'>
+                                    &copy; " . date('Y') . " Stock Exchange System. All rights reserved.
+                                </div>
+                            </div>
+                        </body>
+                        </html>
+                    ";
+
+                    // Plain text alternative
+                    $mail->AltBody = "Password Reset Request\n\n";
+                    $mail->AltBody .= "Hello " . $user['full_name'] . ",\n\n";
+                    $mail->AltBody .= "We received a request to reset your password for the Stock Exchange System.\n\n";
+                    $mail->AltBody .= "Click the link below to reset your password:\n";
+                    $mail->AltBody .= $reset_link . "\n\n";
+                    $mail->AltBody .= "This link will expire in 1 hour.\n\n";
+                    $mail->AltBody .= "If you did not request this, please ignore this email.\n\n";
+                    $mail->AltBody .= "Regards,\nStock Exchange Team";
+
+                    $mail->send();
+                    $success_message = "A password reset link has been sent to your email address. Please check your inbox (and spam folder).";
+                    
+                    // Log successful email send
+                    try {
+                        $log_check = $db->query("SHOW TABLES LIKE 'login_logs'")->fetch();
+                        if ($log_check) {
+                            $log = $db->prepare("INSERT INTO login_logs (user_id, ip_address, user_agent, success) VALUES (?, ?, ?, 1)");
+                            $log->execute([$user['id'], $_SERVER['REMOTE_ADDR'], $_SERVER['HTTP_USER_AGENT']]);
+                        }
+                    } catch (PDOException $e) { /* ignore */ }
+
+                } catch (Exception $e) {
+                    error_log("Email sending failed: " . $mail->ErrorInfo);
+                    $error_message = "We couldn't send the email. Please try again later or contact support.";
+                }
 
             } catch (PDOException $e) {
                 error_log("Password reset error: " . $e->getMessage());
