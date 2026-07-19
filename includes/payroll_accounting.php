@@ -557,3 +557,4 @@ function postStatutoryPaymentsToGL($db, $reference_no, $payments, $payment_date,
         return false;
     }
 }
+?>
