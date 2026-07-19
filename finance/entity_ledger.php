@@ -180,238 +180,302 @@ function getEntityDetails($db, $entity_type, $entity_id) {
     }
 }
 
-// Get all transactions for an entity
+// Get all transactions for an entity - FIXED TO PREVENT DUPLICATES
 function getEntityTransactions($db, $entity_type, $entity_id, $start_date = null, $end_date = null, $search = '') {
     $transactions = [];
     $ledger_code = getLedgerCode($entity_type);
     
-    // Get receipts
-    $receipts_query = "SELECT receipt_date as transaction_date, 'receipt' as transaction_type, 
-                       receipt_no as reference, narration as description, 
-                       amount, currency, account_no as account, 
-                       'receipts' as source_table, id as source_id,
-                       created_at, created_by
-                       FROM receipts 
-                       WHERE (account_of = ? OR (account_of = 'O' AND source_type = ?))
-                       AND name_id = ? 
-                       AND record_in_financial = 'yes'";
-    $receipts_params = [$ledger_code, $entity_type, $entity_id];
+    // ============================================================
+    // FIX: Get ONLY GL entries, not payment/receipt records
+    // The GL entries already contain the financial impact
+    // ============================================================
     
-    if ($start_date && $end_date) {
-        $receipts_query .= " AND receipt_date BETWEEN ? AND ?";
-        $receipts_params[] = $start_date;
-        $receipts_params[] = $end_date;
-    }
+    // Build GL query based on entity type
+    $gl_query = "";
+    $gl_params = [];
     
-    if (!empty($search)) {
-        $receipts_query .= " AND (receipt_no LIKE ? OR narration LIKE ?)";
-        $search_param = "%$search%";
-        $receipts_params[] = $search_param;
-        $receipts_params[] = $search_param;
-    }
-    
-    $receipts_query .= " ORDER BY receipt_date DESC";
-    
-    $receipts_stmt = $db->prepare($receipts_query);
-    $receipts_stmt->execute($receipts_params);
-    $receipts = $receipts_stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    foreach ($receipts as $receipt) {
-        $transactions[] = $receipt;
-    }
-    
-    // Get payments
-    $payments_query = "SELECT payment_date as transaction_date, 'payment' as transaction_type,
-                       payment_no as reference, narration as description,
-                       amount, currency, account_no as account,
-                       'payments' as source_table, id as source_id,
-                       created_at, created_by
-                       FROM payments 
-                       WHERE (paid_to = ? OR (paid_to = 'O' AND source_type = ?))
-                       AND name_id = ? 
-                       AND record_in_financial = 'yes'";
-    $payments_params = [$ledger_code, $entity_type, $entity_id];
-    
-    if ($start_date && $end_date) {
-        $payments_query .= " AND payment_date BETWEEN ? AND ?";
-        $payments_params[] = $start_date;
-        $payments_params[] = $end_date;
-    }
-    
-    if (!empty($search)) {
-        $payments_query .= " AND (payment_no LIKE ? OR narration LIKE ?)";
-        $search_param = "%$search%";
-        $payments_params[] = $search_param;
-        $payments_params[] = $search_param;
-    }
-    
-    $payments_query .= " ORDER BY payment_date DESC";
-    
-    $payments_stmt = $db->prepare($payments_query);
-    $payments_stmt->execute($payments_params);
-    $payments = $payments_stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    foreach ($payments as $payment) {
-        $transactions[] = $payment;
-    }
-    
-    // Get GL entries
-    try {
-        if ($entity_type === 'chart_account') {
-            $gl_query = "SELECT gl.transaction_date, 'gl_entry' as transaction_type,
-                         gl.reference_no as reference, gl.description,
-                         gl.debit_amount, gl.credit_amount, 'TZS' as currency,
-                         gl.account_code as account,
-                         'general_ledger' as source_table, gl.id as source_id,
-                         gl.created_at, gl.created_by
-                         FROM general_ledger gl
-                         WHERE gl.account_code = ?";
-            $gl_params = [$entity_id];
-        } elseif ($entity_type === 'client') {
-            $gl_query = "SELECT gl.transaction_date, 'gl_entry' as transaction_type,
-                         gl.reference_no as reference, gl.description,
-                         gl.debit_amount, gl.credit_amount, 'TZS' as currency,
-                         gl.account_code as account,
-                         'general_ledger' as source_table, gl.id as source_id,
-                         gl.created_at, gl.created_by
-                         FROM general_ledger gl
-                         LEFT JOIN trades t ON gl.reference_no = t.trade_reference
-                         WHERE t.client_cds_account = ? OR t.client_name = ?";
-            $gl_params = [$entity_id, $entity_id];
-        } else {
-            $gl_query = null;
-            $gl_params = [];
-        }
+    if ($entity_type === 'chart_account') {
+        // For chart accounts, get GL entries for that account
+        $gl_query = "SELECT 
+                        gl.transaction_date, 
+                        'gl_entry' as transaction_type,
+                        gl.reference_no as reference, 
+                        gl.description,
+                        gl.debit_amount, 
+                        gl.credit_amount, 
+                        'TZS' as currency,
+                        gl.account_code as account,
+                        'general_ledger' as source_table, 
+                        gl.id as source_id,
+                        gl.created_at, 
+                        gl.created_by
+                     FROM general_ledger gl
+                     WHERE gl.account_code = ?
+                     AND gl.status = 'active'";
+        $gl_params = [$entity_id];
         
-        if ($gl_query) {
-            if ($start_date && $end_date) {
-                $gl_query .= " AND gl.transaction_date BETWEEN ? AND ?";
-                $gl_params[] = $start_date;
-                $gl_params[] = $end_date;
+    } elseif ($entity_type === 'client') {
+        // For clients, get GL entries related to client trades
+        $gl_query = "SELECT 
+                        gl.transaction_date, 
+                        'gl_entry' as transaction_type,
+                        gl.reference_no as reference, 
+                        gl.description,
+                        gl.debit_amount, 
+                        gl.credit_amount, 
+                        'TZS' as currency,
+                        gl.account_code as account,
+                        'general_ledger' as source_table, 
+                        gl.id as source_id,
+                        gl.created_at, 
+                        gl.created_by
+                     FROM general_ledger gl
+                     LEFT JOIN trades t ON gl.reference_no = t.trade_reference
+                     WHERE (t.client_cds_account = ? OR t.client_name = ? OR gl.entity_name = ?)
+                     AND gl.status = 'active'";
+        $gl_params = [$entity_id, $entity_id, $entity_id];
+        
+    } elseif ($entity_type === 'bank_account') {
+        // For bank accounts, get GL entries for bank account
+        $gl_query = "SELECT 
+                        gl.transaction_date, 
+                        'gl_entry' as transaction_type,
+                        gl.reference_no as reference, 
+                        gl.description,
+                        gl.debit_amount, 
+                        gl.credit_amount, 
+                        'TZS' as currency,
+                        gl.account_code as account,
+                        'general_ledger' as source_table, 
+                        gl.id as source_id,
+                        gl.created_at, 
+                        gl.created_by
+                     FROM general_ledger gl
+                     WHERE gl.entity_name = ? 
+                     OR gl.account_code = (SELECT code FROM banks_accounts WHERE id = ?)
+                     AND gl.status = 'active'";
+        $gl_params = [$entity_id, $entity_id];
+        
+    } else {
+        // For other entities (agent, broker, custodian, employee, supplier)
+        // Get GL entries by entity reference
+        $gl_query = "SELECT 
+                        gl.transaction_date, 
+                        'gl_entry' as transaction_type,
+                        gl.reference_no as reference, 
+                        gl.description,
+                        gl.debit_amount, 
+                        gl.credit_amount, 
+                        'TZS' as currency,
+                        gl.account_code as account,
+                        'general_ledger' as source_table, 
+                        gl.id as source_id,
+                        gl.created_at, 
+                        gl.created_by
+                     FROM general_ledger gl
+                     WHERE gl.entity_id = ?
+                     AND gl.status = 'active'";
+        $gl_params = [$entity_id];
+    }
+    
+    // Add date filters
+    if ($start_date && $end_date) {
+        $gl_query .= " AND gl.transaction_date BETWEEN ? AND ?";
+        $gl_params[] = $start_date;
+        $gl_params[] = $end_date;
+    }
+    
+    // Add search filter
+    if (!empty($search)) {
+        $gl_query .= " AND (gl.reference_no LIKE ? OR gl.description LIKE ?)";
+        $search_param = "%$search%";
+        $gl_params[] = $search_param;
+        $gl_params[] = $search_param;
+    }
+    
+    $gl_query .= " ORDER BY gl.transaction_date DESC, gl.id DESC";
+    
+    try {
+        $gl_stmt = $db->prepare($gl_query);
+        $gl_stmt->execute($gl_params);
+        $gl_entries = $gl_stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        foreach ($gl_entries as $gl) {
+            // Determine the amount and direction
+            if ((float)$gl['debit_amount'] > 0) {
+                $gl['amount'] = (float)$gl['debit_amount'];
+                $gl['amount_type'] = 'debit';
+                $gl['debit'] = (float)$gl['debit_amount'];
+                $gl['credit'] = 0;
+            } elseif ((float)$gl['credit_amount'] > 0) {
+                $gl['amount'] = (float)$gl['credit_amount'];
+                $gl['amount_type'] = 'credit';
+                $gl['debit'] = 0;
+                $gl['credit'] = (float)$gl['credit_amount'];
+            } else {
+                $gl['amount'] = 0;
+                $gl['amount_type'] = 'none';
+                $gl['debit'] = 0;
+                $gl['credit'] = 0;
             }
             
-            if (!empty($search)) {
-                $gl_query .= " AND (gl.reference_no LIKE ? OR gl.description LIKE ?)";
-                $search_param = "%$search%";
-                $gl_params[] = $search_param;
-                $gl_params[] = $search_param;
-            }
-            
-            $gl_query .= " ORDER BY gl.transaction_date DESC";
-            
-            $gl_stmt = $db->prepare($gl_query);
-            $gl_stmt->execute($gl_params);
-            $gl_entries = $gl_stmt->fetchAll(PDO::FETCH_ASSOC);
-            
-            foreach ($gl_entries as $gl) {
-                if ((float)$gl['debit_amount'] > 0) {
-                    $gl['amount'] = (float)$gl['debit_amount'];
-                    $gl['amount_type'] = 'debit';
-                } elseif ((float)$gl['credit_amount'] > 0) {
-                    $gl['amount'] = (float)$gl['credit_amount'];
-                    $gl['amount_type'] = 'credit';
+            // Map account name if possible
+            try {
+                $acc_stmt = $db->prepare("SELECT account_name FROM chart_of_accounts WHERE account_code = ?");
+                $acc_stmt->execute([$gl['account']]);
+                $acc = $acc_stmt->fetch(PDO::FETCH_ASSOC);
+                if ($acc) {
+                    $gl['account_name'] = $acc['account_name'];
                 } else {
-                    $gl['amount'] = 0;
-                    $gl['amount_type'] = 'none';
+                    $gl['account_name'] = $gl['account'];
                 }
-                $transactions[] = $gl;
+            } catch (Exception $e) {
+                $gl['account_name'] = $gl['account'];
             }
+            
+            $transactions[] = $gl;
         }
     } catch (Exception $e) {
         error_log("Error getting GL entries: " . $e->getMessage());
     }
     
+    // ============================================================
+    // Also include payroll entries for employees
+    // ============================================================
+    if ($entity_type === 'employee') {
+        try {
+            $payroll_query = "SELECT 
+                                transaction_date, 
+                                'gl_entry' as transaction_type,
+                                reference_no as reference, 
+                                description,
+                                debit_amount, 
+                                credit_amount, 
+                                'TZS' as currency,
+                                account_code as account,
+                                'general_ledger' as source_table, 
+                                id as source_id,
+                                created_at, 
+                                created_by
+                             FROM general_ledger 
+                             WHERE reference_type IN ('payroll', 'salary_payment')
+                             AND entity_id = ?
+                             AND status = 'active'";
+            
+            $payroll_params = [$entity_id];
+            
+            if ($start_date && $end_date) {
+                $payroll_query .= " AND transaction_date BETWEEN ? AND ?";
+                $payroll_params[] = $start_date;
+                $payroll_params[] = $end_date;
+            }
+            
+            if (!empty($search)) {
+                $payroll_query .= " AND (reference_no LIKE ? OR description LIKE ?)";
+                $search_param = "%$search%";
+                $payroll_params[] = $search_param;
+                $payroll_params[] = $search_param;
+            }
+            
+            $payroll_query .= " ORDER BY transaction_date DESC, id DESC";
+            
+            $payroll_stmt = $db->prepare($payroll_query);
+            $payroll_stmt->execute($payroll_params);
+            $payroll_entries = $payroll_stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            foreach ($payroll_entries as $pe) {
+                if ((float)$pe['debit_amount'] > 0) {
+                    $pe['amount'] = (float)$pe['debit_amount'];
+                    $pe['amount_type'] = 'debit';
+                    $pe['debit'] = (float)$pe['debit_amount'];
+                    $pe['credit'] = 0;
+                } elseif ((float)$pe['credit_amount'] > 0) {
+                    $pe['amount'] = (float)$pe['credit_amount'];
+                    $pe['amount_type'] = 'credit';
+                    $pe['debit'] = 0;
+                    $pe['credit'] = (float)$pe['credit_amount'];
+                } else {
+                    $pe['amount'] = 0;
+                    $pe['amount_type'] = 'none';
+                    $pe['debit'] = 0;
+                    $pe['credit'] = 0;
+                }
+                $transactions[] = $pe;
+            }
+        } catch (Exception $e) {
+            error_log("Error getting payroll entries: " . $e->getMessage());
+        }
+    }
+    
     // Sort transactions by date (newest first)
     usort($transactions, function($a, $b) {
-        return strtotime($b['transaction_date']) - strtotime($a['transaction_date']);
+        $date_a = strtotime($a['transaction_date'] ?? '1970-01-01');
+        $date_b = strtotime($b['transaction_date'] ?? '1970-01-01');
+        if ($date_a == $date_b) {
+            return strcmp($b['reference'] ?? '', $a['reference'] ?? '');
+        }
+        return $date_b - $date_a;
     });
+    
+    // Remove duplicate transactions by reference + account + amount
+    $unique_transactions = [];
+    $seen_keys = [];
+    
+    foreach ($transactions as $t) {
+        $key = ($t['reference'] ?? '') . '|' . ($t['account'] ?? '') . '|' . ($t['debit'] ?? 0) . '|' . ($t['credit'] ?? 0);
+        if (!in_array($key, $seen_keys)) {
+            $seen_keys[] = $key;
+            $unique_transactions[] = $t;
+        }
+    }
+    
+    $transactions = $unique_transactions;
     
     // Calculate running balance (oldest to newest)
     $running_balance = 0;
     $debit_total = 0;
     $credit_total = 0;
     
-    // Reverse for balance calculation
+    // Reverse for balance calculation (oldest first)
     $reversed = array_reverse($transactions);
     
     foreach ($reversed as &$transaction) {
+        // Determine if this is a debit or credit impact on the balance
+        $is_debit = false;
+        $is_credit = false;
+        
+        if (isset($transaction['debit']) && $transaction['debit'] > 0) {
+            $is_debit = true;
+            $debit_total += $transaction['debit'];
+        } elseif (isset($transaction['credit']) && $transaction['credit'] > 0) {
+            $is_credit = true;
+            $credit_total += $transaction['credit'];
+        }
+        
+        // For bank accounts: debit = money out, credit = money in
+        // For other entities: debit = we owe, credit = they owe us
         if ($entity_type === 'bank_account') {
-            // Bank accounts: receipts = inflow (credit), payments = outflow (debit)
-            if ($transaction['transaction_type'] === 'receipt') {
-                $amount = (float)$transaction['amount'];
-                $running_balance += $amount;
-                $credit_total += $amount;
-                $transaction['debit'] = 0;
-                $transaction['credit'] = $amount;
-                $transaction['balance_impact'] = $amount;
-            } elseif ($transaction['transaction_type'] === 'payment') {
-                $amount = (float)$transaction['amount'];
-                $running_balance -= $amount;
-                $debit_total += $amount;
-                $transaction['debit'] = $amount;
-                $transaction['credit'] = 0;
-                $transaction['balance_impact'] = -$amount;
+            if ($is_debit) {
+                $running_balance -= $transaction['debit'];
+                $transaction['balance_impact'] = -$transaction['debit'];
+            } elseif ($is_credit) {
+                $running_balance += $transaction['credit'];
+                $transaction['balance_impact'] = $transaction['credit'];
             } else {
-                // GL entries
-                if (isset($transaction['amount_type']) && $transaction['amount_type'] === 'debit') {
-                    $amount = (float)$transaction['amount'];
-                    $running_balance -= $amount;
-                    $debit_total += $amount;
-                    $transaction['debit'] = $amount;
-                    $transaction['credit'] = 0;
-                    $transaction['balance_impact'] = -$amount;
-                } elseif (isset($transaction['amount_type']) && $transaction['amount_type'] === 'credit') {
-                    $amount = (float)$transaction['amount'];
-                    $running_balance += $amount;
-                    $credit_total += $amount;
-                    $transaction['debit'] = 0;
-                    $transaction['credit'] = $amount;
-                    $transaction['balance_impact'] = $amount;
-                } else {
-                    $transaction['debit'] = 0;
-                    $transaction['credit'] = 0;
-                    $transaction['balance_impact'] = 0;
-                }
+                $transaction['balance_impact'] = 0;
             }
         } else {
-            // Non-bank entities: receipts = credit (entity owes us), payments = debit (we owe entity)
-            if ($transaction['transaction_type'] === 'receipt') {
-                $amount = (float)$transaction['amount'];
-                $running_balance -= $amount;
-                $credit_total += $amount;
-                $transaction['debit'] = 0;
-                $transaction['credit'] = $amount;
-                $transaction['balance_impact'] = -$amount;
-            } elseif ($transaction['transaction_type'] === 'payment') {
-                $amount = (float)$transaction['amount'];
-                $running_balance += $amount;
-                $debit_total += $amount;
-                $transaction['debit'] = $amount;
-                $transaction['credit'] = 0;
-                $transaction['balance_impact'] = $amount;
+            if ($is_debit) {
+                $running_balance += $transaction['debit'];
+                $transaction['balance_impact'] = $transaction['debit'];
+            } elseif ($is_credit) {
+                $running_balance -= $transaction['credit'];
+                $transaction['balance_impact'] = -$transaction['credit'];
             } else {
-                // GL entries
-                if (isset($transaction['amount_type']) && $transaction['amount_type'] === 'debit') {
-                    $amount = (float)$transaction['amount'];
-                    $running_balance += $amount;
-                    $debit_total += $amount;
-                    $transaction['debit'] = $amount;
-                    $transaction['credit'] = 0;
-                    $transaction['balance_impact'] = $amount;
-                } elseif (isset($transaction['amount_type']) && $transaction['amount_type'] === 'credit') {
-                    $amount = (float)$transaction['amount'];
-                    $running_balance -= $amount;
-                    $credit_total += $amount;
-                    $transaction['debit'] = 0;
-                    $transaction['credit'] = $amount;
-                    $transaction['balance_impact'] = -$amount;
-                } else {
-                    $transaction['debit'] = 0;
-                    $transaction['credit'] = 0;
-                    $transaction['balance_impact'] = 0;
-                }
+                $transaction['balance_impact'] = 0;
             }
         }
+        
         $transaction['running_balance'] = $running_balance;
     }
     
@@ -535,7 +599,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'pdf') {
         $desc = $t['description'] ?? '';
         $account = $t['account'] ?? '';
         $type = $t['transaction_type'] ?? '';
-        $type_label = $type === 'receipt' ? 'Receipt' : ($type === 'payment' ? 'Payment' : 'GL Entry');
+        $type_label = 'GL Entry';
         $debit = isset($t['debit']) && $t['debit'] > 0 ? number_format($t['debit'], 2) : '';
         $credit = isset($t['credit']) && $t['credit'] > 0 ? number_format($t['credit'], 2) : '';
         $balance_val = isset($t['running_balance']) ? number_format($t['running_balance'], 2) : '';
@@ -609,8 +673,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'excel') {
         $ref = $t['reference'] ?? '';
         $desc = $t['description'] ?? '';
         $account = $t['account'] ?? '';
-        $type = $t['transaction_type'] ?? '';
-        $type_label = $type === 'receipt' ? 'Receipt' : ($type === 'payment' ? 'Payment' : 'GL Entry');
+        $type_label = 'GL Entry';
         $debit = isset($t['debit']) && $t['debit'] > 0 ? number_format($t['debit'], 2) : '';
         $credit = isset($t['credit']) && $t['credit'] > 0 ? number_format($t['credit'], 2) : '';
         $balance_val = isset($t['running_balance']) ? number_format($t['running_balance'], 2) : '';
@@ -1118,16 +1181,6 @@ include '../includes/header.php';
             letter-spacing: 0.3px;
         }
 
-        .type-badge.receipt {
-            background: #D1FAE5;
-            color: #065F46;
-        }
-
-        .type-badge.payment {
-            background: #FEE2E2;
-            color: #991B1B;
-        }
-
         .type-badge.gl_entry {
             background: #E0E7FF;
             color: #3730A3;
@@ -1504,6 +1557,9 @@ include '../includes/header.php';
                 <h6>
                     <i class="bi bi-list-ul"></i>
                     Transaction History
+                    <small style="font-weight:400;color:var(--gray-400);font-size:12px;">
+                        (GL Entries Only)
+                    </small>
                 </h6>
                 <div>
                     <span class="badge-count">
@@ -1546,8 +1602,7 @@ include '../includes/header.php';
                                 $desc = $transaction['description'] ?? '';
                                 $account = $transaction['account'] ?? '';
                                 $type = $transaction['transaction_type'] ?? '';
-                                $type_label = $type === 'receipt' ? 'Receipt' : ($type === 'payment' ? 'Payment' : 'GL Entry');
-                                $type_class = $type === 'receipt' ? 'receipt' : ($type === 'payment' ? 'payment' : 'gl_entry');
+                                $type_label = 'GL Entry';
                                 
                                 $debit = isset($transaction['debit']) && $transaction['debit'] > 0 ? $transaction['debit'] : 0;
                                 $credit = isset($transaction['credit']) && $transaction['credit'] > 0 ? $transaction['credit'] : 0;
@@ -1561,8 +1616,8 @@ include '../includes/header.php';
                                     <td><?php echo htmlspecialchars($desc); ?></td>
                                     <td><span style="background: var(--gray-100); padding: 2px 8px; border-radius: 4px; font-size: 12px;"><?php echo htmlspecialchars($account); ?></span></td>
                                     <td>
-                                        <span class="type-badge <?php echo $type_class; ?>">
-                                            <?php echo $type_label; ?>
+                                        <span class="type-badge gl_entry">
+                                            GL Entry
                                         </span>
                                     </td>
                                     <td class="text-end text-debit">
