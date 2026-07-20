@@ -1337,12 +1337,14 @@ include '../includes/header.php';
     </div>
 
     <!-- Floating Bulk Payment Button -->
+    <?php if ($user_role !== 'trader'): ?>
     <div class="floating-bulk-payment" id="floatingBulkPayment" style="display: none;">
         <button type="button" class="btn btn-success btn-lg rounded-circle shadow-lg" onclick="showBulkPaymentModal()" data-bs-toggle="tooltip" data-bs-placement="left" title="Pay Selected Trades">
             <i class="bi bi-cash-coin"></i>
             <span class="badge bg-danger position-absolute top-0 start-100 translate-middle" id="selectedCountBadge">0</span>
         </button>
     </div>
+    <?php endif; ?>
 
     <!-- Status Filter Tabs -->
     <div class="card mb-4">
@@ -1561,9 +1563,11 @@ include '../includes/header.php';
                                                     </div>
                                                 <?php elseif ($trade['trade_side'] === 'sell'): ?>
                                                     <div class="btn-group btn-group-sm">
+                                                        <?php if ($user_role !== 'trader'): ?>
                                                         <button type="button" class="btn btn-outline-success" onclick="showPaymentModal(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-cash-coin"></i> Pay
                                                         </button>
+                                                        <?php endif; ?>
                                                         <button type="button" class="btn btn-outline-info" onclick="showLinkTradeModal(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-link"></i> Link
                                                         </button>
@@ -1576,9 +1580,11 @@ include '../includes/header.php';
                                                     </div>
                                                 <?php else: ?>
                                                     <div class="btn-group btn-group-sm">
+                                                        <?php if ($user_role !== 'trader'): ?>
                                                         <button type="button" class="btn btn-outline-success" onclick="showPaymentModal(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-cash-coin"></i> Pay
                                                         </button>
+                                                        <?php endif; ?>
                                                         <button type="button" class="btn btn-outline-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-x-lg"></i> Failed
                                                         </button>
@@ -1714,9 +1720,11 @@ include '../includes/header.php';
                                             <td>
                                                 <?php if ($trade['trade_side'] === 'sell'): ?>
                                                     <div class="btn-group btn-group-sm">
+                                                        <?php if ($user_role !== 'trader'): ?>
                                                         <button type="button" class="btn btn-success" onclick="showPaymentModal(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-cash-coin"></i> Pay Now
                                                         </button>
+                                                        <?php endif; ?>
                                                         <button type="button" class="btn btn-info" onclick="showLinkTradeModal(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-link"></i> Link
                                                         </button>
@@ -1729,9 +1737,11 @@ include '../includes/header.php';
                                                     </div>
                                                 <?php else: ?>
                                                     <div class="btn-group btn-group-sm">
+                                                        <?php if ($user_role !== 'trader'): ?>
                                                         <button type="button" class="btn btn-success" onclick="showPaymentModal(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-cash-coin"></i> Pay Now
                                                         </button>
+                                                        <?php endif; ?>
                                                         <button type="button" class="btn btn-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-x-lg"></i> Failed
                                                         </button>
@@ -1805,9 +1815,11 @@ include '../includes/header.php';
                                             <td>
                                                 <?php if ($trade['trade_side'] === 'sell'): ?>
                                                     <div class="btn-group btn-group-sm">
+                                                        <?php if ($user_role !== 'trader'): ?>
                                                         <button type="button" class="btn btn-success" onclick="showPaymentModal(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-cash-coin"></i> Pay Now
                                                         </button>
+                                                        <?php endif; ?>
                                                         <button type="button" class="btn btn-info" onclick="showLinkTradeModal(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-link"></i> Link
                                                         </button>
@@ -1820,9 +1832,11 @@ include '../includes/header.php';
                                                     </div>
                                                 <?php else: ?>
                                                     <div class="btn-group btn-group-sm">
+                                                        <?php if ($user_role !== 'trader'): ?>
                                                         <button type="button" class="btn btn-success" onclick="showPaymentModal(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-cash-coin"></i> Pay Now
                                                         </button>
+                                                        <?php endif; ?>
                                                         <button type="button" class="btn btn-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-x-lg"></i> Failed
                                                         </button>
@@ -2210,15 +2224,19 @@ include '../includes/header.php';
                 
                 <div class="modal-body">
                     <div class="mb-3">
+                        <label for="link_trade_search" class="form-label">Search Buy Trade</label>
+                        <input type="text" class="form-control" id="link_trade_search" placeholder="Type to search trade..." oninput="filterLinkTrades(this.value)">
+                    </div>
+                    <div class="mb-3">
                         <label for="linked_trade_id" class="form-label">Select Buy Trade to Link <span class="text-danger">*</span></label>
-                        <select class="form-select" id="linked_trade_id" name="linked_trade_id" required>
+                        <select class="form-select" id="linked_trade_id" name="linked_trade_id" required size="6">
                             <option value="">Select Buy Trade</option>
                             <?php 
                             $buy_trades = array_filter($all_trades, function($trade) {
                                 return $trade['trade_side'] === 'buy' && $trade['settlement_status'] !== 'linked';
                             });
                             foreach ($buy_trades as $trade): ?>
-                                <option value="<?php echo $trade['id']; ?>">
+                                <option value="<?php echo $trade['id']; ?>" data-search="<?php echo htmlspecialchars(strtolower($trade['trade_reference'] . ' ' . $trade['client_name'] . ' ' . $trade['security_id'] . ' ' . $trade['counterparty_name'])); ?>">
                                     <?php echo htmlspecialchars($trade['trade_reference'] . ' - ' . $trade['client_name'] . ' - ' . $trade['security_id'] . ' - TZS ' . number_format($trade['consideration'], 2)); ?>
                                 </option>
                             <?php endforeach; ?>
@@ -2580,9 +2598,24 @@ function showLinkTradeModal(tradeId) {
     currentTradeId = tradeId;
     document.getElementById('linkTradeId').value = tradeId;
     document.getElementById('linkTradeForm').reset();
+    document.getElementById('link_trade_search').value = '';
+    document.querySelectorAll('#linked_trade_id option').forEach(o => o.style.display = '');
     
     const linkModal = new bootstrap.Modal(document.getElementById('linkTradeModal'));
     linkModal.show();
+}
+
+function filterLinkTrades(query) {
+    const q = query.toLowerCase().trim();
+    document.querySelectorAll('#linked_trade_id option').forEach(function(opt) {
+        if (!opt.value) return;
+        if (!q) {
+            opt.style.display = '';
+            return;
+        }
+        const searchData = (opt.getAttribute('data-search') || opt.textContent).toLowerCase();
+        opt.style.display = searchData.includes(q) ? '' : 'none';
+    });
 }
 
 function showLinkedDetails(tradeId, linkedTradeId, linkedRef, linkedClient, linkedSecurity, linkedAmount) {
