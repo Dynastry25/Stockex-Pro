@@ -237,22 +237,50 @@ function createJournalEntry($db, $payment_no, $trade, $bank_account, $amount, $d
     }
 }
 
-function updateOrderSheetStatus($db, $trade_id, $status, $notes = '') {
+// ============================================
+// UPDATE ORDER_SHEET STATUS FUNCTION
+// ============================================
+function updateOrderSheetStatus($db, $trade_id, $status, $notes = '', $linked_trade_id = null, $linked_trade_ref = null) {
     try {
+        // First check if trade exists in order_sheet
         $check_stmt = $db->prepare("SELECT id FROM order_sheet WHERE trade_id = ?");
         $check_stmt->execute([$trade_id]);
         $order_sheet = $check_stmt->fetch();
         
         if ($order_sheet) {
-            $update_stmt = $db->prepare("
-                UPDATE order_sheet 
-                SET settlement_status = ?, 
-                    settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?),
-                    settled_at = NOW(),
-                    settled_by = ?
-                WHERE trade_id = ?
-            ");
-            $update_stmt->execute([$status, "\n" . $notes, $_SESSION['username'] ?? 'system', $trade_id]);
+            // Update order_sheet with all fields
+            if ($status === 'linked' && $linked_trade_id) {
+                $update_stmt = $db->prepare("
+                    UPDATE order_sheet 
+                    SET settlement_status = ?, 
+                        settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?),
+                        settled_at = NOW(),
+                        settled_by = ?,
+                        linked_trade_id = ?,
+                        linked_trade_ref = ?
+                    WHERE trade_id = ?
+                ");
+                $update_stmt->execute([
+                    $status, 
+                    "\n" . $notes, 
+                    $_SESSION['username'] ?? 'system', 
+                    $linked_trade_id,
+                    $linked_trade_ref,
+                    $trade_id
+                ]);
+            } else {
+                $update_stmt = $db->prepare("
+                    UPDATE order_sheet 
+                    SET settlement_status = ?, 
+                        settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?),
+                        settled_at = NOW(),
+                        settled_by = ?
+                    WHERE trade_id = ?
+                ");
+                $update_stmt->execute([$status, "\n" . $notes, $_SESSION['username'] ?? 'system', $trade_id]);
+            }
+            
+            error_log("Order sheet updated for trade $trade_id: status = $status");
             return true;
         }
         return false;
@@ -264,8 +292,6 @@ function updateOrderSheetStatus($db, $trade_id, $status, $notes = '') {
 
 // ============================================
 // GET GROUPED TRADES
-// ============================================
-// GET GROUPED TRADES - FIXED FOR only_full_group_by
 // ============================================
 function getGroupedTrades($db, $date_from, $date_to, $hide_buy_orders = true, $trade_side_filter = 'sell_only') {
     $today = date('Y-m-d');
@@ -296,7 +322,9 @@ function getGroupedTrades($db, $date_from, $date_to, $hide_buy_orders = true, $t
             ANY_VALUE(t.settled_at) as settled_at,
             ANY_VALUE(t.failure_reason) as failure_reason,
             ANY_VALUE(t.action_needed) as action_needed,
-            ANY_VALUE(t.settlement_notes) as settlement_notes
+            ANY_VALUE(t.settlement_notes) as settlement_notes,
+            ANY_VALUE(t.linked_trade_id) as linked_trade_id,
+            ANY_VALUE(t.linked_trade_ref) as linked_trade_ref
         FROM trades t
         WHERE t.status = 'active'
         AND t.settlement_date IS NOT NULL 
@@ -314,7 +342,6 @@ function getGroupedTrades($db, $date_from, $date_to, $hide_buy_orders = true, $t
         $sql .= " AND t.trade_side = 'sell' ";
     }
     
-    // GROUP BY all non-aggregated columns
     $sql .= " GROUP BY 
                 t.client_name, 
                 t.client_cds_account,
@@ -490,38 +517,591 @@ try {
 }
 
 // ============================================
-// HANDLE POST REQUESTS
+// HANDLE SINGLE PAYMENT
 // ============================================
-
-// Handle Single Payment
 if (isset($_POST['single_payment']) && isset($_POST['trade_id'])) {
-    // ... (keep existing payment handling code)
-    // To keep this response manageable, I'll include the full code in the final output
+    $trade_id = (int)$_POST['trade_id'];
+    $bank_account_id = isset($_POST['bank_account']) ? (int)$_POST['bank_account'] : 0;
+    $payment_mode = (int)$_POST['payment_mode'];
+    $narration = sanitize_input($_POST['narration'] ?? '');
+    $user_id = $_SESSION['user_id'];
+    $username = $_SESSION['username'] ?? 'system';
+    
+    $payment_method_stmt = $db->prepare("SELECT description FROM payment_methods WHERE id = ?");
+    $payment_method_stmt->execute([$payment_mode]);
+    $payment_method = $payment_method_stmt->fetch();
+    $payment_method_desc = $payment_method['description'] ?? '';
+    
+    $bank_account = null;
+    if ($bank_account_id > 0) {
+        $bank_stmt = $db->prepare("SELECT * FROM banks_accounts WHERE id = ?");
+        $bank_stmt->execute([$bank_account_id]);
+        $bank_account = $bank_stmt->fetch();
+    }
+    
+    $stmt = $db->prepare("SELECT * FROM trades WHERE id = ?");
+    $stmt->execute([$trade_id]);
+    $trade = $stmt->fetch();
+    
+    if ($trade) {
+        if ($trade['settlement_status'] === 'paid' || $trade['settlement_status'] === 'linked') {
+            $error_message = "Trade is already settled (Status: " . $trade['settlement_status'] . ")";
+        } else {
+            $db->beginTransaction();
+            try {
+                $current_time = date('Y-m-d H:i:s');
+                $notes = "\nPaid using " . $payment_method_desc . " by user $username on $current_time";
+                if ($bank_account) {
+                    $notes .= " - Bank: " . $bank_account['bank_name'] . " (" . $bank_account['account_number'] . ")";
+                }
+                if ($narration) {
+                    $notes .= "\nNarration: " . $narration;
+                }
+                
+                $existing_payment_stmt = $db->prepare("SELECT id, payment_no FROM payments WHERE source_id = ? AND source_type = 'trade_settlement'");
+                $existing_payment_stmt->execute([$trade_id]);
+                $existing_payment = $existing_payment_stmt->fetch();
+                
+                $payment_no = '';
+                if ($existing_payment) {
+                    $update_payment_stmt = $db->prepare("
+                        UPDATE payments 
+                        SET status = 'active',
+                            updated_at = NOW(),
+                            payment_mode = ?,
+                            ac_credit = ?,
+                            narration = ?
+                        WHERE id = ?
+                    ");
+                    $update_payment_stmt->execute([$payment_mode, $bank_account_id > 0 ? $bank_account_id : null, $narration, $existing_payment['id']]);
+                    $payment_no = $existing_payment['payment_no'];
+                } else {
+                    $payment_no = generateUniquePaymentNo($db);
+                }
+                
+                // Update trade as paid
+                $update_stmt = $db->prepare("
+                    UPDATE trades 
+                    SET settlement_status = 'paid', 
+                        settled_by = ?, 
+                        settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?),
+                        settled_at = NOW()
+                    WHERE id = ?
+                ");
+                
+                if ($update_stmt->execute([$user_id, $notes, $trade_id])) {
+                    // Update order_sheet
+                    $order_sheet_notes = "\nPaid using " . $payment_method_desc . " by user $username on $current_time";
+                    updateOrderSheetStatus($db, $trade_id, 'settled', $order_sheet_notes);
+                    
+                    syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
+                    recordBankChargesForTrade($db, $trade_id, $trade['consideration'], $trade['settlement_date'] ?: $trade['trade_date']);
+                    
+                    if (!$existing_payment) {
+                        $amount = $trade['consideration'];
+                        $description = $narration ?: "Payment for " . $trade['security_id'] . " shares " . ($trade['trade_side'] === 'sell' ? 'sold' : 'purchased');
+                        
+                        if ($trade['trade_side'] === 'sell') {
+                            $payee_name = $trade['counterparty_name'];
+                            $payee_type = 'C';
+                        } else {
+                            $payee_name = $trade['client_name'];
+                            $payee_type = 'C';
+                        }
+                        
+                        $ac_credit_id = $bank_account_id > 0 ? $bank_account_id : 1;
+                        if ($bank_account_id <= 0) {
+                            $default_bank_stmt = $db->query("SELECT id FROM banks_accounts WHERE status = 'active' LIMIT 1");
+                            $default_bank = $default_bank_stmt->fetch();
+                            if ($default_bank) {
+                                $ac_credit_id = $default_bank['id'];
+                            }
+                        }
+                        
+                        $payment_stmt = $db->prepare("
+                            INSERT INTO payments (
+                                payment_no, payment_date, payment_mode, paid_to,
+                                name, record_in_financial, ac_credit,
+                                currency, amount, narration,
+                                created_by_username, created_at, status,
+                                bank_name, bank_account_number, source_type, source_id
+                            ) VALUES (?, NOW(), ?, ?, ?, 'yes', ?, ?, ?, ?, ?, NOW(), 'active', ?, ?, 'trade_settlement', ?)
+                        ");
+                        
+                        $payment_stmt->execute([
+                            $payment_no,
+                            $payment_mode,
+                            $payee_type,
+                            $payee_name,
+                            $ac_credit_id,
+                            'Tsh',
+                            $amount,
+                            $description,
+                            $username,
+                            $bank_account ? $bank_account['bank_name'] : '',
+                            $bank_account ? $bank_account['account_number'] : '',
+                            $trade_id
+                        ]);
+                    }
+                    
+                    if ($bank_account_id > 0 && $bank_account) {
+                        $is_payment_out = ($trade['trade_side'] === 'sell');
+                        updateBankBalance($db, $bank_account_id, $trade['consideration'], $is_payment_out);
+                        if (!$existing_payment) {
+                            createJournalEntry($db, $payment_no, $trade, $bank_account, $trade['consideration'], 
+                                $narration ?: "Payment for " . $trade['security_id'] . " shares " . ($trade['trade_side'] === 'sell' ? 'sold' : 'purchased'));
+                        }
+                    }
+                    
+                    $db->commit();
+                    $success_message = 'Payment recorded successfully! Payment No: ' . $payment_no;
+                } else {
+                    throw new Exception("Error updating trade as paid.");
+                }
+            } catch (Exception $e) {
+                $db->rollBack();
+                $error_message = "Error: " . $e->getMessage();
+                error_log("Payment error: " . $e->getMessage());
+            }
+        }
+    } else {
+        $error_message = 'Trade not found.';
+    }
+    
+    header('Location: settlement.php?message=' . urlencode($success_message ?: $error_message) . '&type=' . ($success_message ? 'success' : 'danger'));
+    exit;
 }
 
-// Handle Bulk Payment
+// ============================================
+// HANDLE BULK PAYMENT
+// ============================================
 if (isset($_POST['bulk_payment']) && isset($_POST['trade_ids'])) {
-    // ... (keep existing bulk payment handling code)
+    $trade_ids = $_POST['trade_ids'];
+    $bank_account_id = isset($_POST['bank_account']) ? (int)$_POST['bank_account'] : 0;
+    $payment_mode = (int)$_POST['payment_mode'];
+    $narration = sanitize_input($_POST['narration'] ?? '');
+    $user_id = $_SESSION['user_id'];
+    $username = $_SESSION['username'] ?? 'system';
+    $processed = 0;
+    $failed = 0;
+    $payment_nos = [];
+    $failed_trades = [];
+    
+    $payment_method_stmt = $db->prepare("SELECT description FROM payment_methods WHERE id = ?");
+    $payment_method_stmt->execute([$payment_mode]);
+    $payment_method = $payment_method_stmt->fetch();
+    $payment_method_desc = $payment_method['description'] ?? '';
+    
+    $bank_account = null;
+    if ($bank_account_id > 0) {
+        $bank_stmt = $db->prepare("SELECT * FROM banks_accounts WHERE id = ?");
+        $bank_stmt->execute([$bank_account_id]);
+        $bank_account = $bank_stmt->fetch();
+    }
+    
+    if (!empty($trade_ids) && is_array($trade_ids)) {
+        $payment_nos = [];
+        foreach ($trade_ids as $trade_id) {
+            $payment_nos[] = generateUniquePaymentNo($db);
+        }
+        
+        $db->beginTransaction();
+        
+        try {
+            foreach ($trade_ids as $index => $trade_id) {
+                $trade_id = (int)$trade_id;
+                
+                $stmt = $db->prepare("SELECT * FROM trades WHERE id = ?");
+                $stmt->execute([$trade_id]);
+                $trade = $stmt->fetch();
+                
+                if ($trade && $trade['settlement_status'] !== 'paid' && $trade['settlement_status'] !== 'linked') {
+                    $current_time = date('Y-m-d H:i:s');
+                    $payment_no = $payment_nos[$index];
+                    
+                    $notes = "\nPaid via bulk payment using " . $payment_method_desc . " by user $username on $current_time";
+                    if ($bank_account) {
+                        $notes .= " - Bank: " . $bank_account['bank_name'] . " (" . $bank_account['account_number'] . ")";
+                    }
+                    if ($narration) {
+                        $notes .= "\nNarration: " . $narration;
+                    }
+                    
+                    $update_stmt = $db->prepare("
+                        UPDATE trades 
+                        SET settlement_status = 'paid', 
+                            settled_by = ?, 
+                            settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?),
+                            settled_at = NOW()
+                        WHERE id = ?
+                    ");
+                    
+                    if ($update_stmt->execute([$user_id, $notes, $trade_id])) {
+                        // Update order_sheet
+                        $order_sheet_notes = "\nPaid via bulk payment using " . $payment_method_desc . " by user $username on $current_time";
+                        updateOrderSheetStatus($db, $trade_id, 'settled', $order_sheet_notes);
+                        
+                        syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
+                        recordBankChargesForTrade($db, $trade_id, $trade['consideration'], $trade['settlement_date'] ?: $trade['trade_date']);
+                        
+                        $amount = $trade['consideration'];
+                        $description = $narration ?: "Payment for " . $trade['security_id'] . " shares " . ($trade['trade_side'] === 'sell' ? 'sold' : 'purchased');
+                        
+                        if ($trade['trade_side'] === 'sell') {
+                            $payee_name = $trade['counterparty_name'];
+                            $payee_type = 'C';
+                        } else {
+                            $payee_name = $trade['client_name'];
+                            $payee_type = 'C';
+                        }
+                        
+                        $existing_stmt = $db->prepare("SELECT id FROM payments WHERE source_id = ? AND source_type = 'trade_settlement'");
+                        $existing_stmt->execute([$trade_id]);
+                        $existing_payment = $existing_stmt->fetch();
+                        
+                        if (!$existing_payment) {
+                            $ac_credit_id = $bank_account_id > 0 ? $bank_account_id : 1;
+                            if ($bank_account_id <= 0) {
+                                $default_bank_stmt = $db->query("SELECT id FROM banks_accounts WHERE status = 'active' LIMIT 1");
+                                $default_bank = $default_bank_stmt->fetch();
+                                if ($default_bank) {
+                                    $ac_credit_id = $default_bank['id'];
+                                }
+                            }
+                            
+                            $payment_stmt = $db->prepare("
+                                INSERT INTO payments (
+                                    payment_no, payment_date, payment_mode, paid_to,
+                                    name, record_in_financial, ac_credit,
+                                    currency, amount, narration,
+                                    created_by_username, created_at, status,
+                                    bank_name, bank_account_number, source_type, source_id
+                                ) VALUES (?, NOW(), ?, ?, ?, 'yes', ?, ?, ?, ?, ?, NOW(), 'active', ?, ?, 'trade_settlement', ?)
+                            ");
+                            
+                            $payment_result = $payment_stmt->execute([
+                                $payment_no,
+                                $payment_mode,
+                                $payee_type,
+                                $payee_name,
+                                $ac_credit_id,
+                                'Tsh',
+                                $amount,
+                                $description,
+                                $username,
+                                $bank_account ? $bank_account['bank_name'] : '',
+                                $bank_account ? $bank_account['account_number'] : '',
+                                $trade_id
+                            ]);
+                            
+                            if ($payment_result) {
+                                if ($bank_account_id > 0 && $bank_account) {
+                                    $is_payment_out = ($trade['trade_side'] === 'sell');
+                                    updateBankBalance($db, $bank_account_id, $amount, $is_payment_out);
+                                    createJournalEntry($db, $payment_no, $trade, $bank_account, $amount, $description);
+                                }
+                                $processed++;
+                            } else {
+                                throw new Exception("Failed to create payment record for trade ID: $trade_id");
+                            }
+                        } else {
+                            $update_payment_stmt = $db->prepare("
+                                UPDATE payments 
+                                SET status = 'active',
+                                    updated_at = NOW(),
+                                    payment_mode = ?,
+                                    ac_credit = ?,
+                                    narration = ?
+                                WHERE id = ?
+                            ");
+                            $update_payment_stmt->execute([$payment_mode, $ac_credit_id, $narration, $existing_payment['id']]);
+                            $processed++;
+                        }
+                    } else {
+                        throw new Exception("Failed to update trade status for trade ID: $trade_id");
+                    }
+                } else {
+                    $failed++;
+                    $status = $trade ? $trade['settlement_status'] : 'not found';
+                    $failed_trades[] = "Trade ID $trade_id: Already paid/linked or not found (Status: $status)";
+                }
+            }
+            
+            $db->commit();
+            if ($processed > 0) {
+                $success_message = "Successfully processed $processed payments.";
+                if (count($payment_nos) <= 5) {
+                    $success_message .= " Payment Numbers: " . implode(', ', $payment_nos);
+                }
+            }
+            if ($failed > 0) {
+                $error_message = "Failed to process $failed payments. " . implode('; ', $failed_trades);
+            }
+        } catch (Exception $e) {
+            $db->rollBack();
+            $error_message = "Error processing bulk payment: " . $e->getMessage();
+            error_log("Bulk payment error: " . $e->getMessage());
+        }
+    } else {
+        $error_message = "No trades selected for payment.";
+    }
+    
+    $message = $success_message ?: $error_message;
+    $type = $success_message ? 'success' : 'danger';
+    header('Location: settlement.php?message=' . urlencode($message) . '&type=' . $type);
+    exit;
 }
 
-// Handle Link Trade
+// ============================================
+// HANDLE LINK TRADE - UPDATED
+// ============================================
 if (isset($_POST['link_trade']) && isset($_POST['trade_id']) && isset($_POST['linked_trade_ids'])) {
-    // ... (keep existing link trade handling code)
+    $trade_id = (int)$_POST['trade_id'];
+    $linked_trade_ids = $_POST['linked_trade_ids'];
+    $user_id = $_SESSION['user_id'];
+    $username = $_SESSION['username'] ?? 'system';
+    $linked_refs = [];
+    $linked_ids = [];
+    
+    try {
+        $db->beginTransaction();
+        
+        // Get the sale trade
+        $trade_stmt = $db->prepare("SELECT * FROM trades WHERE id = ?");
+        $trade_stmt->execute([$trade_id]);
+        $trade = $trade_stmt->fetch();
+        
+        if (!$trade) {
+            throw new Exception("Sale trade not found.");
+        }
+        
+        foreach ($linked_trade_ids as $linked_trade_id) {
+            $linked_trade_id = (int)$linked_trade_id;
+            $linked_trade_stmt = $db->prepare("SELECT * FROM trades WHERE id = ?");
+            $linked_trade_stmt->execute([$linked_trade_id]);
+            $linked_trade = $linked_trade_stmt->fetch();
+            
+            if (!$linked_trade) {
+                continue;
+            }
+            
+            if ($linked_trade['trade_side'] !== 'buy') {
+                continue;
+            }
+            
+            if ($linked_trade['client_name'] !== $trade['client_name']) {
+                continue;
+            }
+            
+            // Insert link record
+            $link_stmt = $db->prepare("
+                INSERT INTO linked_trades (trade_id, linked_trade_id, linked_by, linked_at)
+                VALUES (?, ?, ?, NOW())
+                ON DUPLICATE KEY UPDATE linked_trade_id = ?, linked_at = NOW()
+            ");
+            $link_stmt->execute([$trade_id, $linked_trade_id, $user_id, $linked_trade_id]);
+            
+            // Update the buy trade with link info
+            $update_buy = $db->prepare("
+                UPDATE trades 
+                SET settlement_status = 'linked',
+                    linked_trade_id = ?,
+                    linked_trade_ref = ?,
+                    settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?),
+                    settled_by = ?,
+                    settled_at = NOW()
+                WHERE id = ?
+            ");
+            $update_buy->execute([
+                $trade_id,
+                $trade['trade_reference'],
+                "\nLinked to sale trade ID: $trade_id (Ref: " . $trade['trade_reference'] . ") by user $username on " . date('Y-m-d H:i:s'),
+                $user_id,
+                $linked_trade_id
+            ]);
+            
+            // Update order_sheet for buy trade
+            updateOrderSheetStatus($db, $linked_trade_id, 'linked', 
+                "\nLinked to sale trade ID: $trade_id (Ref: " . $trade['trade_reference'] . ") by user $username",
+                $trade_id,
+                $trade['trade_reference']
+            );
+            
+            $linked_ids[] = $linked_trade_id;
+            $linked_refs[] = $linked_trade['trade_reference'];
+            
+            syncSettlementTradeToDealingSheetSafely($db, $linked_trade_id, $current_user);
+        }
+        
+        // Update the sale trade with all linked trades
+        $all_linked_refs = implode(', ', $linked_refs);
+        $sale_notes = "\nLinked to buy trades: $all_linked_refs by user $username on " . date('Y-m-d H:i:s');
+        $update_sale = $db->prepare("
+            UPDATE trades 
+            SET settlement_status = 'linked',
+                linked_trade_id = ?,
+                linked_trade_ref = ?,
+                settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?),
+                settled_by = ?,
+                settled_at = NOW()
+            WHERE id = ?
+        ");
+        $update_sale->execute([
+            $linked_ids[0] ?? null,
+            $all_linked_refs,
+            $sale_notes,
+            $user_id,
+            $trade_id
+        ]);
+        
+        // Update order_sheet for sale trade
+        updateOrderSheetStatus($db, $trade_id, 'linked', 
+            "\nLinked to buy trades: $all_linked_refs by user $username",
+            $linked_ids[0] ?? null,
+            $all_linked_refs
+        );
+        
+        syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
+        
+        $db->commit();
+        $success_message = "Trade successfully linked! Sale trade #$trade_id linked to " . count($linked_trade_ids) . " buy trade(s). Both trades are now marked as linked in order_sheet.";
+        
+    } catch (Exception $e) {
+        $db->rollBack();
+        $error_message = "Error linking trades: " . $e->getMessage();
+        error_log("Link trade error: " . $e->getMessage());
+    }
+    
+    header('Location: settlement.php?message=' . urlencode($success_message ?: $error_message) . '&type=' . ($success_message ? 'success' : 'danger'));
+    exit;
 }
 
-// Handle Mark Unpaid
+// ============================================
+// HANDLE MARK AS UNPAID
+// ============================================
 if (isset($_POST['mark_unpaid']) && isset($_POST['trade_id'])) {
-    // ... (keep existing mark unpaid handling code)
+    $trade_id = (int)$_POST['trade_id'];
+    $user_id = $_SESSION['user_id'];
+    $username = $_SESSION['username'] ?? 'system';
+    
+    try {
+        $trade_stmt = $db->prepare("SELECT * FROM trades WHERE id = ?");
+        $trade_stmt->execute([$trade_id]);
+        $trade = $trade_stmt->fetch();
+        
+        if ($trade) {
+            $notes = "\nPayment undone by user $username on " . date('Y-m-d H:i:s');
+            $update_stmt = $db->prepare("
+                UPDATE trades 
+                SET settlement_status = 'unpaid', 
+                    settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?),
+                    settled_by = NULL,
+                    settled_at = NULL
+                WHERE id = ?
+            ");
+            
+            if ($update_stmt->execute([$notes, $trade_id])) {
+                // Update order_sheet
+                updateOrderSheetStatus($db, $trade_id, 'unpaid', $notes);
+                
+                syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
+                
+                $payment_stmt = $db->prepare("
+                    UPDATE payments 
+                    SET status = 'inactive',
+                        updated_at = NOW()
+                    WHERE source_id = ? AND source_type = 'trade_settlement'
+                ");
+                $payment_stmt->execute([$trade_id]);
+                
+                $success_message = 'Payment undone successfully. Trade marked as unpaid.';
+            } else {
+                $error_message = 'Error marking trade as unpaid.';
+            }
+        } else {
+            $error_message = 'Trade not found.';
+        }
+    } catch (Exception $e) {
+        $error_message = 'Error: ' . $e->getMessage();
+    }
+    
+    header('Location: settlement.php?message=' . urlencode($success_message ?: $error_message) . '&type=' . ($success_message ? 'success' : 'danger'));
+    exit;
 }
 
-// Handle Mark Failed
+// ============================================
+// HANDLE MARK AS FAILED
+// ============================================
 if (isset($_POST['mark_failed']) && isset($_POST['trade_id'])) {
-    // ... (keep existing mark failed handling code)
+    $trade_id = (int)$_POST['trade_id'];
+    $failure_reason = sanitize_input($_POST['failure_reason'] ?? '');
+    $action_needed = sanitize_input($_POST['action_needed'] ?? '');
+    $user_id = $_SESSION['user_id'];
+    $username = $_SESSION['username'] ?? 'system';
+    
+    try {
+        $notes = "\nMarked as failed by user $username on " . date('Y-m-d H:i:s') . ": $failure_reason | Action: $action_needed";
+        
+        $stmt = $db->prepare("
+            UPDATE trades 
+            SET settlement_status = 'failed', 
+                failure_reason = ?, 
+                action_needed = ?,
+                settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?),
+                settled_by = ?
+            WHERE id = ?
+        ");
+        
+        if ($stmt->execute([$failure_reason, $action_needed, $notes, $user_id, $trade_id])) {
+            // Update order_sheet
+            updateOrderSheetStatus($db, $trade_id, 'failed', $notes);
+            syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
+            $success_message = 'Trade marked as failed with reason.';
+        } else {
+            $error_message = 'Error marking trade as failed.';
+        }
+    } catch (Exception $e) {
+        $error_message = 'Error: ' . $e->getMessage();
+    }
+    
+    header('Location: settlement.php?message=' . urlencode($success_message ?: $error_message) . '&type=' . ($success_message ? 'success' : 'danger'));
+    exit;
 }
 
-// Handle Retry Failed
+// ============================================
+// HANDLE RETRY FAILED
+// ============================================
 if (isset($_POST['retry_failed']) && isset($_POST['trade_id'])) {
-    // ... (keep existing retry failed handling code)
+    $trade_id = (int)$_POST['trade_id'];
+    $username = $_SESSION['username'] ?? 'system';
+    
+    try {
+        $notes = "\nRetried from failed status by user $username on " . date('Y-m-d H:i:s');
+        
+        $stmt = $db->prepare("
+            UPDATE trades 
+            SET settlement_status = 'unpaid', 
+                failure_reason = NULL,
+                action_needed = NULL,
+                settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?),
+                settled_by = NULL
+            WHERE id = ?
+        ");
+        
+        if ($stmt->execute([$notes, $trade_id])) {
+            // Update order_sheet
+            updateOrderSheetStatus($db, $trade_id, 'unpaid', $notes);
+            syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
+            $success_message = 'Trade ready for payment retry.';
+        } else {
+            $error_message = 'Error resetting failed trade.';
+        }
+    } catch (Exception $e) {
+        $error_message = 'Error: ' . $e->getMessage();
+    }
+    
+    header('Location: settlement.php?message=' . urlencode($success_message ?: $error_message) . '&type=' . ($success_message ? 'success' : 'danger'));
+    exit;
 }
 
 // ============================================
@@ -637,6 +1217,17 @@ include '../includes/header.php';
     .pagination .page-item.active .page-link {
         background-color: var(--success-color);
         border-color: var(--success-color);
+    }
+    .linked-badge {
+        background: #6f42c1;
+        color: white;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 600;
+    }
+    .linked-badge i {
+        margin-right: 4px;
     }
 </style>
 
@@ -910,19 +1501,20 @@ include '../includes/header.php';
                                         $status_icon = '';
                                         $status_text = '';
                                         $trade_count = (int)($trade['trade_count'] ?? 1);
+                                        $isLinked = ($trade['settlement_status'] === 'linked' && !empty($trade['linked_trade_id']));
                                         
                                         if ($trade['settlement_status'] === 'paid') {
                                             $status_color = 'success';
                                             $status_icon = 'bi-check-circle';
                                             $status_text = 'Paid';
-                                        } elseif ($trade['settlement_status'] === 'failed') {
-                                            $status_color = 'dark';
-                                            $status_icon = 'bi-x-circle';
-                                            $status_text = 'Failed';
                                         } elseif ($trade['settlement_status'] === 'linked') {
                                             $status_color = 'info';
                                             $status_icon = 'bi-link';
                                             $status_text = 'Linked';
+                                        } elseif ($trade['settlement_status'] === 'failed') {
+                                            $status_color = 'dark';
+                                            $status_icon = 'bi-x-circle';
+                                            $status_text = 'Failed';
                                         } elseif ($trade['settlement_status'] === 'unpaid') {
                                             $status_color = 'secondary';
                                             $status_icon = 'bi-arrow-counterclockwise';
@@ -965,6 +1557,12 @@ include '../includes/header.php';
                                                         <button type="button" class="btn btn-link btn-sm p-0" onclick="showGroupedTrades(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-eye"></i> View all
                                                         </button>
+                                                    </div>
+                                                <?php endif; ?>
+                                                <?php if ($isLinked): ?>
+                                                    <div class="mt-1">
+                                                        <span class="linked-badge"><i class="bi bi-link-45deg"></i> LINKED</span>
+                                                        <small class="text-muted d-block">To: <?php echo htmlspecialchars($trade['linked_trade_ref'] ?? '#' . $trade['linked_trade_id']); ?></small>
                                                     </div>
                                                 <?php endif; ?>
                                             </td>
@@ -1041,7 +1639,10 @@ include '../includes/header.php';
                                                         <button type="button" class="btn btn-outline-info btn-sm" onclick="showLinkedDetails(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-eye"></i> View Link
                                                         </button>
-                                                        <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
+                                                        <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Contract Note - Sold">
+                                                            <i class="bi bi-file-earmark-text"></i>
+                                                        </a>
+                                                        <a href="trades.php?action=contract_note&id=<?php echo $trade['linked_trade_id']; ?>" class="btn btn-outline-success btn-sm" title="Contract Note - Bought">
                                                             <i class="bi bi-file-earmark-text"></i>
                                                         </a>
                                                     </div>
@@ -1183,6 +1784,7 @@ include '../includes/header.php';
                             <li>Mark both trades as <strong>linked</strong> in the settlement page</li>
                             <li>Update the <strong>order_sheet</strong> status to "linked"</li>
                             <li>The buy trade(s) will <strong>NOT</strong> require a receipt upload in order_sheet</li>
+                            <li>Two contract notes will be available: Sold & Bought</li>
                         </ul>
                     </div>
                     
@@ -1865,7 +2467,6 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     updateBulkActions();
     
-    // Tooltips
     const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
     tooltipTriggerList.map(function (el) {
         return new bootstrap.Tooltip(el);
