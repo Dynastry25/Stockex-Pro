@@ -273,29 +273,29 @@ $asset_class_filter = $_GET['asset_class'] ?? 'all';
 $search = $_GET['search'] ?? '';
 
 // ============================================
-// FETCH TRADES
+// FETCH TRADES - GROUPED BY CLIENT, SECURITY, DATE
 // ============================================
 function getNumericTrades($db, $filter = 'pending', $asset_class_filter = 'all', $search = '') {
     $sql = "
         SELECT 
-            t.id,
-            t.trade_reference,
+            MIN(t.id) as id,
+            MIN(t.trade_reference) as trade_reference,
             t.asset_class,
             t.security_id,
             t.security_name,
             t.client_name,
             t.client_cds_account,
             t.trade_side,
-            t.quantity,
-            t.price,
-            t.consideration,
+            SUM(t.quantity) as quantity,
+            AVG(t.price) as price,
+            SUM(t.consideration) as consideration,
             t.trade_date,
             t.settlement_date,
-            t.exchange_reference,
-            t.additional_reference,
+            MIN(t.exchange_reference) as exchange_reference,
+            MIN(t.additional_reference) as additional_reference,
             t.uploaded_by,
             t.status,
-            t.created_at,
+            MIN(t.created_at) as created_at,
             ANY_VALUE(tr.payment_receipt) as payment_receipt,
             ANY_VALUE(tr.comment) as receipt_comment,
             ANY_VALUE(tr.is_approved) as is_approved,
@@ -304,7 +304,8 @@ function getNumericTrades($db, $filter = 'pending', $asset_class_filter = 'all',
             ANY_VALUE(tr.approval_comment) as approval_comment,
             ANY_VALUE(tr.uploaded_by) as receipt_uploaded_by,
             ANY_VALUE(tr.created_at) as receipt_created_at,
-            ANY_VALUE(tr.updated_at) as receipt_updated_at
+            ANY_VALUE(tr.updated_at) as receipt_updated_at,
+            COUNT(t.id) as trade_count
         FROM trades t
         LEFT JOIN numeric_trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
         WHERE 1=1
@@ -347,7 +348,19 @@ function getNumericTrades($db, $filter = 'pending', $asset_class_filter = 'all',
         $params[] = $search_param;
     }
     
-    $sql .= " GROUP BY t.id ORDER BY t.trade_date DESC, t.id DESC";
+    // GROUP BY client, security, date to combine multiple trades
+    $sql .= " GROUP BY 
+                t.client_name, 
+                t.client_cds_account,
+                t.security_id,
+                t.security_name,
+                t.asset_class,
+                t.trade_side,
+                DATE(t.trade_date),
+                t.settlement_date,
+                t.uploaded_by,
+                t.status
+              ORDER BY t.trade_date DESC, t.id DESC";
     
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
@@ -371,7 +384,7 @@ function getNumericStats($db) {
     try {
         $stmt = $db->query("
             SELECT 
-                COUNT(*) as total,
+                COUNT(DISTINCT CONCAT(client_name, '|', security_id, '|', DATE(trade_date))) as total,
                 SUM(CASE WHEN tr.is_approved IS NULL OR tr.is_approved = 0 THEN 1 ELSE 0 END) as pending,
                 SUM(CASE WHEN tr.is_approved = 1 THEN 1 ELSE 0 END) as approved,
                 SUM(CASE WHEN tr.is_approved = 2 THEN 1 ELSE 0 END) as rejected
@@ -400,7 +413,7 @@ function getNumericStats($db) {
         $stmt = $db->query("
             SELECT 
                 asset_class,
-                COUNT(*) as count
+                COUNT(DISTINCT CONCAT(client_name, '|', security_id, '|', DATE(trade_date))) as count
             FROM trades t
             LEFT JOIN numeric_trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
             WHERE t.additional_reference REGEXP '^[0-9]+$'
@@ -589,6 +602,15 @@ include '../includes/header.php';
         border: 1px solid #ddd;
         color: #333;
     }
+    
+    .trade-count-badge {
+        background: #e9ecef;
+        color: #495057;
+        font-size: 10px;
+        padding: 1px 6px;
+        border-radius: 10px;
+        margin-left: 4px;
+    }
 </style>
 
 <div class="container-fluid">
@@ -600,7 +622,7 @@ include '../includes/header.php';
                     <h4 class="mb-0">
                         <i class="bi bi-receipt"></i> Numeric Reference Receipt Upload
                     </h4>
-                    <small class="text-muted">Additional Reference = Number only</small>
+                    <small class="text-muted">Additional Reference = Number only (Grouped by Client, Security, Date)</small>
                 </div>
             </div>
         </div>
@@ -695,6 +717,7 @@ include '../includes/header.php';
             <h6 class="mb-0">
                 <i class="bi bi-table"></i> Numeric Reference Trades 
                 <span class="badge bg-secondary ms-2"><?php echo count($trades); ?></span>
+                <small class="text-muted ms-2">(Grouped by Client, Security, Date)</small>
             </h6>
         </div>
         <div class="card-body p-0">
@@ -729,6 +752,7 @@ include '../includes/header.php';
                                 $hasReceipt = !empty($receipts) && !empty($receipts[0]);
                                 $hasComment = !empty($trade['receipt_comment']);
                                 $commentText = $trade['receipt_comment'] ?? '';
+                                $tradeCount = (int)($trade['trade_count'] ?? 1);
                                 
                                 $isApproved = isset($trade['is_approved']) ? (int)$trade['is_approved'] : 0;
                                 $statusText = $isApproved === 1 ? 'Approved' : ($isApproved === 2 ? 'Rejected' : 'Pending');
@@ -746,7 +770,14 @@ include '../includes/header.php';
                                 }
                             ?>
                                 <tr>
-                                    <td><span class="fw-semibold small"><?php echo htmlspecialchars($trade['trade_reference'] ?? ''); ?></span></td>
+                                    <td>
+                                        <span class="fw-semibold small"><?php echo htmlspecialchars($trade['trade_reference'] ?? ''); ?></span>
+                                        <?php if ($tradeCount > 1): ?>
+                                            <span class="trade-count-badge" title="<?php echo $tradeCount; ?> trades grouped together">
+                                                <i class="bi bi-layers"></i> <?php echo $tradeCount; ?>x
+                                            </span>
+                                        <?php endif; ?>
+                                    </td>
                                     <td><?php echo htmlspecialchars($trade['client_name'] ?? ''); ?></td>
                                     <td><?php echo htmlspecialchars($trade['security_id'] ?? ''); ?></td>
                                     <td><span class="badge-asset"><?php echo $assetClass; ?></span></td>
