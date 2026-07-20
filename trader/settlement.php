@@ -1,16 +1,19 @@
 <?php
+// ============================================
+// SETTLEMENT.PHP - COMPLETE UPDATED VERSION
+// ============================================
+
 require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
 require_once '../includes/dealing_sheet_helpers.php';
 require_once '../includes/financial_helpers.php';
 
-// Check user permissions - finance, admin, and operations can access
+// Check user permissions
 $user_role = $_SESSION['role'] ?? '';
 $allowed_roles = ['finance_officer', 'system_admin', 'trader'];
 
 require_login();
 
-// Check if user has any of the allowed roles
 if (!in_array($user_role, $allowed_roles)) {
     show_alert('Access denied. You do not have permission to access the settlement page.', 'danger');
     redirect('index.php');
@@ -33,7 +36,6 @@ function syncSettlementTradeToDealingSheetSafely($db, $tradeId, $user) {
     if (!function_exists('dealingSheetSyncTradeLifecycle')) {
         return;
     }
-
     try {
         dealingSheetSyncTradeLifecycle($db, (int) $tradeId, $user, false);
     } catch (Exception $e) {
@@ -88,7 +90,7 @@ $company_stmt = $db->query("SELECT * FROM companies WHERE status = 'active' ORDE
 $company = $company_stmt->fetch();
 $company_name = $company ? $company['company_name'] : 'Neovam LTD';
 
-// Fetch bank accounts for payment
+// Fetch bank accounts
 try {
     $bank_accounts_stmt = $db->query("SELECT id, bank_name, account_name, account_number, currency, current_balance FROM banks_accounts WHERE status = 'active' ORDER BY bank_name, account_name");
     $bank_accounts = $bank_accounts_stmt->fetchAll();
@@ -106,22 +108,176 @@ try {
     error_log("Error fetching payment methods: " . $e->getMessage());
 }
 
-// Fetch linked trades (for linking sales to buys)
-try {
-    $linked_trades_stmt = $db->query("
-        SELECT t.*, lt.linked_trade_id as linked_to 
-        FROM trades t 
-        LEFT JOIN linked_trades lt ON t.id = lt.trade_id 
+// ============================================
+// GROUPED TRADES FUNCTIONS
+// ============================================
+
+function getGroupedTrades($db, $date_from, $date_to, $hide_buy_orders = true, $trade_side_filter = 'sell_only') {
+    $today = date('Y-m-d');
+    
+    $sql = "
+        SELECT 
+            MIN(t.id) as id,
+            t.client_name,
+            t.client_cds_account,
+            t.security_id,
+            t.security_name,
+            t.asset_class,
+            t.trade_side,
+            DATE(t.trade_date) as trade_date,
+            MIN(t.settlement_date) as settlement_date,
+            SUM(t.quantity) as total_quantity,
+            AVG(t.price) as avg_price,
+            SUM(t.consideration) as total_consideration,
+            COUNT(t.id) as trade_count,
+            GROUP_CONCAT(t.id SEPARATOR ',') as trade_ids,
+            GROUP_CONCAT(t.trade_reference SEPARATOR ',') as trade_references,
+            MIN(t.exchange_reference) as exchange_reference,
+            MIN(t.additional_reference) as additional_reference,
+            t.counterparty_name,
+            t.counterparty_cds_account,
+            ANY_VALUE(t.settlement_status) as settlement_status,
+            ANY_VALUE(t.settled_by) as settled_by,
+            ANY_VALUE(t.settled_at) as settled_at,
+            ANY_VALUE(t.failure_reason) as failure_reason,
+            ANY_VALUE(t.action_needed) as action_needed,
+            ANY_VALUE(t.settlement_notes) as settlement_notes,
+            GROUP_CONCAT(DISTINCT t.trade_reference ORDER BY t.trade_reference SEPARATOR ', ') as ref_list
+        FROM trades t
         WHERE t.status = 'active'
-        ORDER BY t.created_at DESC
-    ");
-    $all_trades = $linked_trades_stmt->fetchAll();
-} catch (PDOException $e) {
-    $all_trades = [];
-    error_log("Error fetching trades: " . $e->getMessage());
+        AND t.settlement_date IS NOT NULL 
+        AND t.settlement_date BETWEEN ? AND ?
+        AND (t.settlement_status IS NULL OR t.settlement_status != 'cancelled')
+    ";
+    
+    $params = [$date_from, $date_to];
+    
+    // Apply filters
+    if ($hide_buy_orders) {
+        $sql .= " AND t.trade_side = 'sell' ";
+    } elseif ($trade_side_filter === 'buy') {
+        $sql .= " AND t.trade_side = 'buy' ";
+    } elseif ($trade_side_filter === 'sell') {
+        $sql .= " AND t.trade_side = 'sell' ";
+    }
+    
+    // Group by client, security, date
+    $sql .= " GROUP BY 
+                t.client_name, 
+                t.client_cds_account,
+                t.security_id,
+                t.security_name,
+                t.asset_class,
+                t.trade_side,
+                DATE(t.trade_date)
+              ORDER BY MIN(t.settlement_date) ASC, MIN(t.trade_date) ASC";
+    
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
-// Function to generate a single unique payment number
+function getGroupedBuyTradesForClient($db, $client_name, $exclude_trade_id = null) {
+    $sql = "
+        SELECT 
+            MIN(t.id) as id,
+            t.client_name,
+            t.client_cds_account,
+            t.security_id,
+            t.security_name,
+            t.asset_class,
+            t.trade_side,
+            DATE(t.trade_date) as trade_date,
+            MIN(t.settlement_date) as settlement_date,
+            SUM(t.quantity) as total_quantity,
+            AVG(t.price) as avg_price,
+            SUM(t.consideration) as total_consideration,
+            COUNT(t.id) as trade_count,
+            GROUP_CONCAT(t.id SEPARATOR ',') as trade_ids,
+            GROUP_CONCAT(t.trade_reference SEPARATOR ',') as trade_references,
+            MIN(t.exchange_reference) as exchange_reference,
+            MIN(t.additional_reference) as additional_reference,
+            t.counterparty_name,
+            t.counterparty_cds_account,
+            ANY_VALUE(t.settlement_status) as settlement_status
+        FROM trades t
+        WHERE t.client_name = ?
+        AND t.trade_side = 'buy'
+        AND t.status = 'active'
+        AND (t.settlement_status IS NULL OR t.settlement_status NOT IN ('settled', 'linked', 'paid'))
+    ";
+    
+    $params = [$client_name];
+    
+    if ($exclude_trade_id) {
+        $sql .= " AND t.id != ?";
+        $params[] = $exclude_trade_id;
+    }
+    
+    $sql .= " GROUP BY 
+                t.client_name, 
+                t.client_cds_account,
+                t.security_id,
+                t.security_name,
+                t.asset_class,
+                DATE(t.trade_date)
+              ORDER BY MIN(t.settlement_date) ASC, MIN(t.trade_date) ASC";
+    
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function getGroupedTradeDetails($db, $group_id) {
+    // Get the individual trade IDs from the group
+    $stmt = $db->prepare("SELECT trade_ids FROM grouped_trades WHERE id = ?");
+    $stmt->execute([$group_id]);
+    $result = $stmt->fetch();
+    
+    if (!$result) {
+        return [];
+    }
+    
+    $trade_ids = explode(',', $result['trade_ids']);
+    $placeholders = implode(',', array_fill(0, count($trade_ids), '?'));
+    
+    $sql = "SELECT * FROM trades WHERE id IN ($placeholders) ORDER BY trade_date ASC";
+    $stmt = $db->prepare($sql);
+    $stmt->execute($trade_ids);
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+// ============================================
+// UPDATE ORDER_SHEET STATUS
+// ============================================
+function updateOrderSheetStatus($db, $trade_id, $status, $notes = '') {
+    try {
+        $check_stmt = $db->prepare("SELECT id FROM order_sheet WHERE trade_id = ?");
+        $check_stmt->execute([$trade_id]);
+        $order_sheet = $check_stmt->fetch();
+        
+        if ($order_sheet) {
+            $update_stmt = $db->prepare("
+                UPDATE order_sheet 
+                SET settlement_status = ?, 
+                    settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?),
+                    settled_at = NOW(),
+                    settled_by = ?
+                WHERE trade_id = ?
+            ");
+            $update_stmt->execute([$status, "\n" . $notes, $_SESSION['username'] ?? 'system', $trade_id]);
+            return true;
+        }
+        return false;
+    } catch (Exception $e) {
+        error_log("Error updating order_sheet: " . $e->getMessage());
+        return false;
+    }
+}
+
+// ============================================
+// GENERATE UNIQUE PAYMENT NUMBER
+// ============================================
 function generateUniquePaymentNo($db) {
     $prefix = 'PMT';
     $year = date('Y');
@@ -129,64 +285,31 @@ function generateUniquePaymentNo($db) {
     $day = date('d');
     
     $base_no = $prefix . $year . $month . $day;
-    
-    // Start with sequence 0001
     $seq = 1;
     
-    // Try to find a unique payment number
     do {
         $payment_no = $base_no . str_pad($seq, 4, '0', STR_PAD_LEFT);
-        
-        // Check if this payment number already exists
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM payments WHERE payment_no = ?");
         $stmt->execute([$payment_no]);
         $result = $stmt->fetch();
         
         if ($result['count'] == 0) {
-            // Found a unique number
             return $payment_no;
         }
-        
         $seq++;
-        
-        // Safety check - prevent infinite loop
         if ($seq > 9999) {
-            // If we run out of numbers for today, add timestamp
             return $prefix . $year . $month . $day . '_' . time();
         }
     } while (true);
 }
 
-// Function to generate multiple unique payment numbers
-function generateUniquePaymentNos($db, $count) {
-    $payment_nos = [];
-    
-    for ($i = 0; $i < $count; $i++) {
-        $payment_nos[] = generateUniquePaymentNo($db);
-    }
-    
-    return $payment_nos;
-}
-
-// Function to update bank balance
 function updateBankBalance($db, $bank_id, $amount, $is_payment_out = true) {
     try {
         if ($is_payment_out) {
-            // Money out - decrease balance
-            $stmt = $db->prepare("
-                UPDATE banks_accounts 
-                SET current_balance = current_balance - ?
-                WHERE id = ?
-            ");
+            $stmt = $db->prepare("UPDATE banks_accounts SET current_balance = current_balance - ? WHERE id = ?");
         } else {
-            // Money in - increase balance
-            $stmt = $db->prepare("
-                UPDATE banks_accounts 
-                SET current_balance = current_balance + ?
-                WHERE id = ?
-            ");
+            $stmt = $db->prepare("UPDATE banks_accounts SET current_balance = current_balance + ? WHERE id = ?");
         }
-        
         return $stmt->execute([$amount, $bank_id]);
     } catch (Exception $e) {
         error_log("Error updating bank balance: " . $e->getMessage());
@@ -194,32 +317,26 @@ function updateBankBalance($db, $bank_id, $amount, $is_payment_out = true) {
     }
 }
 
-// Function to create journal entry for payment
 function createJournalEntry($db, $payment_no, $trade, $bank_account, $amount, $description) {
     try {
-        // Generate unique journal number
         $journal_no = 'JRNL' . date('Ymd') . '_' . uniqid();
         $fiscal_year = date('Y');
         $fiscal_period = date('m');
         $current_user = $_SESSION['username'] ?? 'system';
         $user_id = $_SESSION['user_id'] ?? null;
         
-        // Determine accounts based on trade side
         if ($trade['trade_side'] === 'sell') {
-            // For sell trades: Debit Bank, Credit Sales/Revenue
-            $debit_account = $bank_account['code'] ?? '111'; // Bank account
-            $credit_account = '41'; // Sales/Revenue account (example)
+            $debit_account = $bank_account['code'] ?? '111';
+            $credit_account = '41';
             $debit_account_name = 'Bank Account';
             $credit_account_name = 'Sales Revenue';
         } else {
-            // For buy trades: Debit Investment/Asset, Credit Bank
-            $debit_account = '11'; // Investment account (example)
-            $credit_account = $bank_account['code'] ?? '111'; // Bank account
+            $debit_account = '11';
+            $credit_account = $bank_account['code'] ?? '111';
             $debit_account_name = 'Investment Account';
             $credit_account_name = 'Bank Account';
         }
         
-        // Get account names from chart_of_accounts if available
         try {
             $stmt = $db->prepare("SELECT account_name FROM chart_of_accounts WHERE account_code = ?");
             $stmt->execute([$debit_account]);
@@ -227,18 +344,15 @@ function createJournalEntry($db, $payment_no, $trade, $bank_account, $amount, $d
             if ($debit_account_info) {
                 $debit_account_name = $debit_account_info['account_name'];
             }
-            
             $stmt->execute([$credit_account]);
             $credit_account_info = $stmt->fetch();
             if ($credit_account_info) {
                 $credit_account_name = $credit_account_info['account_name'];
             }
         } catch (Exception $e) {
-            // Use default names if chart_of_accounts lookup fails
             error_log("Error fetching account names: " . $e->getMessage());
         }
         
-        // Insert debit entry
         $debit_stmt = $db->prepare("
             INSERT INTO journal_entries (
                 journal_no, transaction_date, reference_no, reference_type, 
@@ -272,7 +386,6 @@ function createJournalEntry($db, $payment_no, $trade, $bank_account, $amount, $d
             $current_user
         ]);
         
-        // Insert credit entry
         $credit_stmt = $db->prepare("
             INSERT INTO journal_entries (
                 journal_no, transaction_date, reference_no, reference_type, 
@@ -313,25 +426,26 @@ function createJournalEntry($db, $payment_no, $trade, $bank_account, $amount, $d
     }
 }
 
-// Handle bulk payment with bank selection
+// ============================================
+// HANDLE BULK PAYMENT
+// ============================================
 if (isset($_POST['bulk_payment']) && isset($_POST['trade_ids'])) {
     $trade_ids = $_POST['trade_ids'];
     $bank_account_id = isset($_POST['bank_account']) ? (int)$_POST['bank_account'] : 0;
     $payment_mode = (int)$_POST['payment_mode'];
     $narration = sanitize_input($_POST['narration'] ?? '');
     $user_id = $_SESSION['user_id'];
+    $username = $_SESSION['username'] ?? 'system';
     $processed = 0;
     $failed = 0;
     $payment_nos = [];
     $failed_trades = [];
     
-    // Get payment method details
     $payment_method_stmt = $db->prepare("SELECT description FROM payment_methods WHERE id = ?");
     $payment_method_stmt->execute([$payment_mode]);
     $payment_method = $payment_method_stmt->fetch();
     $payment_method_desc = $payment_method['description'] ?? '';
     
-    // Get bank account details if bank transfer is selected
     $bank_account = null;
     if ($bank_account_id > 0) {
         $bank_stmt = $db->prepare("SELECT * FROM banks_accounts WHERE id = ?");
@@ -340,17 +454,17 @@ if (isset($_POST['bulk_payment']) && isset($_POST['trade_ids'])) {
     }
     
     if (!empty($trade_ids) && is_array($trade_ids)) {
-        // Generate unique payment numbers for all trades
-        $payment_nos = generateUniquePaymentNos($db, count($trade_ids));
+        $payment_nos = [];
+        foreach ($trade_ids as $trade_id) {
+            $payment_nos[] = generateUniquePaymentNo($db);
+        }
         
-        // Start transaction for bulk payment
         $db->beginTransaction();
         
         try {
             foreach ($trade_ids as $index => $trade_id) {
                 $trade_id = (int)$trade_id;
                 
-                // Verify trade exists and is active
                 $stmt = $db->prepare("SELECT * FROM trades WHERE id = ?");
                 $stmt->execute([$trade_id]);
                 $trade = $stmt->fetch();
@@ -359,7 +473,7 @@ if (isset($_POST['bulk_payment']) && isset($_POST['trade_ids'])) {
                     $current_time = date('Y-m-d H:i:s');
                     $payment_no = $payment_nos[$index];
                     
-                    $notes = "\nPaid via bulk payment using " . $payment_method_desc . " by user $user_id on $current_time";
+                    $notes = "\nPaid via bulk payment using " . $payment_method_desc . " by user $username on $current_time";
                     if ($bank_account) {
                         $notes .= " - Bank: " . $bank_account['bank_name'] . " (" . $bank_account['account_number'] . ")";
                     }
@@ -367,7 +481,6 @@ if (isset($_POST['bulk_payment']) && isset($_POST['trade_ids'])) {
                         $notes .= "\nNarration: " . $narration;
                     }
                     
-                    // Update trade as paid
                     $update_stmt = $db->prepare("
                         UPDATE trades 
                         SET settlement_status = 'paid', 
@@ -378,28 +491,29 @@ if (isset($_POST['bulk_payment']) && isset($_POST['trade_ids'])) {
                     ");
                     
                     if ($update_stmt->execute([$user_id, $notes, $trade_id])) {
+                        // Update order_sheet
+                        $order_sheet_notes = "\nPaid via bulk payment using " . $payment_method_desc . " by user $username on $current_time";
+                        updateOrderSheetStatus($db, $trade_id, 'settled', $order_sheet_notes);
+                        
                         syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
                         recordBankChargesForTrade($db, $trade_id, $trade['consideration'], $trade['settlement_date'] ?: $trade['trade_date']);
-                        // Create payment record in payment book
-                        $amount = $trade['consideration'];
-                        $description = $narration ?: "Payment for " . $trade['security_id'] . " shares " . ($trade['trade_side'] === 'sell' ? 'sold' : 'purchased') . " - Trade Ref: " . $trade['trade_reference'];
                         
-                        // Get payee information based on trade side
+                        $amount = $trade['consideration'];
+                        $description = $narration ?: "Payment for " . $trade['security_id'] . " shares " . ($trade['trade_side'] === 'sell' ? 'sold' : 'purchased');
+                        
                         if ($trade['trade_side'] === 'sell') {
                             $payee_name = $trade['counterparty_name'];
-                            $payee_type = 'C'; // Customer/Client
+                            $payee_type = 'C';
                         } else {
                             $payee_name = $trade['client_name'];
-                            $payee_type = 'C'; // Customer/Client
+                            $payee_type = 'C';
                         }
                         
-                        // Check if payment already exists for this trade
                         $existing_stmt = $db->prepare("SELECT id FROM payments WHERE source_id = ? AND source_type = 'trade_settlement'");
                         $existing_stmt->execute([$trade_id]);
                         $existing_payment = $existing_stmt->fetch();
                         
                         if (!$existing_payment) {
-                            // Determine ac_credit: use selected bank account or get default
                             $ac_credit_id = $bank_account_id > 0 ? $bank_account_id : 1;
                             if ($bank_account_id <= 0) {
                                 $default_bank_stmt = $db->query("SELECT id FROM banks_accounts WHERE status = 'active' LIMIT 1");
@@ -409,7 +523,6 @@ if (isset($_POST['bulk_payment']) && isset($_POST['trade_ids'])) {
                                 }
                             }
                             
-                            // Insert new payment into payments table
                             $payment_stmt = $db->prepare("
                                 INSERT INTO payments (
                                     payment_no, payment_date, payment_mode, paid_to,
@@ -429,25 +542,16 @@ if (isset($_POST['bulk_payment']) && isset($_POST['trade_ids'])) {
                                 'Tsh',
                                 $amount,
                                 $description,
-                                $_SESSION['username'],
+                                $username,
                                 $bank_account ? $bank_account['bank_name'] : '',
                                 $bank_account ? $bank_account['account_number'] : '',
                                 $trade_id
                             ]);
                             
                             if ($payment_result) {
-                                // Update bank balance if bank account is selected
                                 if ($bank_account_id > 0 && $bank_account) {
                                     $is_payment_out = ($trade['trade_side'] === 'sell');
-                                    $balance_updated = updateBankBalance($db, $bank_account_id, $amount, $is_payment_out);
-                                    
-                                    if (!$balance_updated) {
-                                        throw new Exception("Failed to update bank balance for trade ID: $trade_id");
-                                    }
-                                }
-                                
-                                // Create journal entry if bank account is selected
-                                if ($bank_account_id > 0 && $bank_account) {
+                                    updateBankBalance($db, $bank_account_id, $amount, $is_payment_out);
                                     createJournalEntry($db, $payment_no, $trade, $bank_account, $amount, $description);
                                 }
                                 $processed++;
@@ -455,17 +559,6 @@ if (isset($_POST['bulk_payment']) && isset($_POST['trade_ids'])) {
                                 throw new Exception("Failed to create payment record for trade ID: $trade_id");
                             }
                         } else {
-                            // Update existing payment to active
-                            // Determine ac_credit: use selected bank account or get default
-                            $ac_credit_id = $bank_account_id > 0 ? $bank_account_id : 1;
-                            if ($bank_account_id <= 0) {
-                                $default_bank_stmt = $db->query("SELECT id FROM banks_accounts WHERE status = 'active' LIMIT 1");
-                                $default_bank = $default_bank_stmt->fetch();
-                                if ($default_bank) {
-                                    $ac_credit_id = $default_bank['id'];
-                                }
-                            }
-                            
                             $update_payment_stmt = $db->prepare("
                                 UPDATE payments 
                                 SET status = 'active',
@@ -476,16 +569,6 @@ if (isset($_POST['bulk_payment']) && isset($_POST['trade_ids'])) {
                                 WHERE id = ?
                             ");
                             $update_payment_stmt->execute([$payment_mode, $ac_credit_id, $narration, $existing_payment['id']]);
-                            
-                            // Update bank balance if bank account is selected
-                            if ($bank_account_id > 0 && $bank_account) {
-                                $is_payment_out = ($trade['trade_side'] === 'sell');
-                                $balance_updated = updateBankBalance($db, $bank_account_id, $amount, $is_payment_out);
-                                
-                                if (!$balance_updated) {
-                                    throw new Exception("Failed to update bank balance for existing payment of trade ID: $trade_id");
-                                }
-                            }
                             $processed++;
                         }
                     } else {
@@ -503,8 +586,6 @@ if (isset($_POST['bulk_payment']) && isset($_POST['trade_ids'])) {
                 $success_message = "Successfully processed $processed payments.";
                 if (count($payment_nos) <= 5) {
                     $success_message .= " Payment Numbers: " . implode(', ', $payment_nos);
-                } else {
-                    $success_message .= " First payment: " . $payment_nos[0] . ", last payment: " . $payment_nos[count($payment_nos)-1];
                 }
             }
             if ($failed > 0) {
@@ -519,28 +600,28 @@ if (isset($_POST['bulk_payment']) && isset($_POST['trade_ids'])) {
         $error_message = "No trades selected for payment.";
     }
     
-    // Redirect with messages
     $message = $success_message ?: $error_message;
     $type = $success_message ? 'success' : 'danger';
     header('Location: settlement.php?message=' . urlencode($message) . '&type=' . $type);
     exit;
 }
 
-// Handle single payment with bank selection
+// ============================================
+// HANDLE SINGLE PAYMENT
+// ============================================
 if (isset($_POST['single_payment']) && isset($_POST['trade_id'])) {
     $trade_id = (int)$_POST['trade_id'];
     $bank_account_id = isset($_POST['bank_account']) ? (int)$_POST['bank_account'] : 0;
     $payment_mode = (int)$_POST['payment_mode'];
     $narration = sanitize_input($_POST['narration'] ?? '');
     $user_id = $_SESSION['user_id'];
+    $username = $_SESSION['username'] ?? 'system';
     
-    // Get payment method details
     $payment_method_stmt = $db->prepare("SELECT description FROM payment_methods WHERE id = ?");
     $payment_method_stmt->execute([$payment_mode]);
     $payment_method = $payment_method_stmt->fetch();
     $payment_method_desc = $payment_method['description'] ?? '';
     
-    // Get bank account details if bank transfer is selected
     $bank_account = null;
     if ($bank_account_id > 0) {
         $bank_stmt = $db->prepare("SELECT * FROM banks_accounts WHERE id = ?");
@@ -548,227 +629,256 @@ if (isset($_POST['single_payment']) && isset($_POST['trade_id'])) {
         $bank_account = $bank_stmt->fetch();
     }
     
-    // Verify trade exists and is active
     $stmt = $db->prepare("SELECT * FROM trades WHERE id = ?");
     $stmt->execute([$trade_id]);
     $trade = $stmt->fetch();
     
     if ($trade) {
-        // Check if trade is already paid or linked
         if ($trade['settlement_status'] === 'paid' || $trade['settlement_status'] === 'linked') {
             $error_message = "Trade is already settled (Status: " . $trade['settlement_status'] . ")";
         } else {
-            $current_time = date('Y-m-d H:i:s');
-            $notes = "\nPaid using " . $payment_method_desc . " by user $user_id on $current_time";
-            if ($bank_account) {
-                $notes .= " - Bank: " . $bank_account['bank_name'] . " (" . $bank_account['account_number'] . ")";
-            }
-            if ($narration) {
-                $notes .= "\nNarration: " . $narration;
-            }
-            
-            // Check if payment already exists for this trade
-            $existing_payment_stmt = $db->prepare("SELECT id, payment_no, status FROM payments WHERE source_id = ? AND source_type = 'trade_settlement'");
-            $existing_payment_stmt->execute([$trade_id]);
-            $existing_payment = $existing_payment_stmt->fetch();
-            
-            $payment_no = '';
-            
-            if ($existing_payment) {
-                // Update existing payment to active
-                $update_payment_stmt = $db->prepare("
-                    UPDATE payments 
-                    SET status = 'active',
-                        updated_at = NOW(),
-                        payment_mode = ?,
-                        ac_credit = ?,
-                        narration = ?
-                    WHERE id = ?
-                ");
-                $update_payment_stmt->execute([$payment_mode, $bank_account_id > 0 ? $bank_account_id : null, $narration, $existing_payment['id']]);
-                $payment_no = $existing_payment['payment_no'];
-            } else {
-                // Generate new payment number
-                $payment_no = generateUniquePaymentNo($db);
-            }
-            
-            // Update trade as paid
-            $update_stmt = $db->prepare("
-                UPDATE trades 
-                SET settlement_status = 'paid', 
-                    settled_by = ?, 
-                    settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?),
-                    settled_at = NOW()
-                WHERE id = ?
-            ");
-            
-            if ($update_stmt->execute([$user_id, $notes, $trade_id])) {
-                syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
-                recordBankChargesForTrade($db, $trade_id, $trade['consideration'], $trade['settlement_date'] ?: $trade['trade_date']);
-                if (!$existing_payment) {
-                    // Update payment record in payment book
-                    $amount = $trade['consideration'];
-                    $description = $narration ?: "Payment for " . $trade['security_id'] . " shares " . ($trade['trade_side'] === 'sell' ? 'sold' : 'purchased') . " - Trade Ref: " . $trade['trade_reference'];
-                    
-                    // Get payee information based on trade side
-                    if ($trade['trade_side'] === 'sell') {
-                        $payee_name = $trade['counterparty_name'];
-                        $payee_type = 'C'; // Customer/Client
-                    } else {
-                        $payee_name = $trade['client_name'];
-                        $payee_type = 'C'; // Customer/Client
-                    }
-                    
-                    // Determine ac_credit: use selected bank account or get default
-                    $ac_credit_id = $bank_account_id > 0 ? $bank_account_id : 1;
-                    if ($bank_account_id <= 0) {
-                        $default_bank_stmt = $db->query("SELECT id FROM banks_accounts WHERE status = 'active' LIMIT 1");
-                        $default_bank = $default_bank_stmt->fetch();
-                        if ($default_bank) {
-                            $ac_credit_id = $default_bank['id'];
-                        }
-                    }
-                    
-                    // Insert into payments table
-                    $payment_stmt = $db->prepare("
-                        INSERT INTO payments (
-                            payment_no, payment_date, payment_mode, paid_to,
-                            name, record_in_financial, ac_credit,
-                            currency, amount, narration,
-                            created_by_username, created_at, status,
-                            bank_name, bank_account_number, source_type, source_id
-                        ) VALUES (?, NOW(), ?, ?, ?, 'yes', ?, ?, ?, ?, ?, NOW(), 'active', ?, ?, 'trade_settlement', ?)
-                    ");
-                    
-                    $payment_stmt->execute([
-                        $payment_no,
-                        $payment_mode,
-                        $payee_type,
-                        $payee_name,
-                        $ac_credit_id,
-                        'Tsh',
-                        $amount,
-                        $description,
-                        $_SESSION['username'],
-                        $bank_account ? $bank_account['bank_name'] : '',
-                        $bank_account ? $bank_account['account_number'] : '',
-                        $trade_id
-                    ]);
+            $db->beginTransaction();
+            try {
+                $current_time = date('Y-m-d H:i:s');
+                $notes = "\nPaid using " . $payment_method_desc . " by user $username on $current_time";
+                if ($bank_account) {
+                    $notes .= " - Bank: " . $bank_account['bank_name'] . " (" . $bank_account['account_number'] . ")";
+                }
+                if ($narration) {
+                    $notes .= "\nNarration: " . $narration;
                 }
                 
-                // Update bank balance if bank account is selected
-                if ($bank_account_id > 0 && $bank_account) {
-                    $is_payment_out = ($trade['trade_side'] === 'sell');
-                    $balance_updated = updateBankBalance($db, $bank_account_id, $trade['consideration'], $is_payment_out);
+                $existing_payment_stmt = $db->prepare("SELECT id, payment_no FROM payments WHERE source_id = ? AND source_type = 'trade_settlement'");
+                $existing_payment_stmt->execute([$trade_id]);
+                $existing_payment = $existing_payment_stmt->fetch();
+                
+                $payment_no = '';
+                if ($existing_payment) {
+                    $update_payment_stmt = $db->prepare("
+                        UPDATE payments 
+                        SET status = 'active',
+                            updated_at = NOW(),
+                            payment_mode = ?,
+                            ac_credit = ?,
+                            narration = ?
+                        WHERE id = ?
+                    ");
+                    $update_payment_stmt->execute([$payment_mode, $bank_account_id > 0 ? $bank_account_id : null, $narration, $existing_payment['id']]);
+                    $payment_no = $existing_payment['payment_no'];
+                } else {
+                    $payment_no = generateUniquePaymentNo($db);
+                }
+                
+                $update_stmt = $db->prepare("
+                    UPDATE trades 
+                    SET settlement_status = 'paid', 
+                        settled_by = ?, 
+                        settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?),
+                        settled_at = NOW()
+                    WHERE id = ?
+                ");
+                
+                if ($update_stmt->execute([$user_id, $notes, $trade_id])) {
+                    // Update order_sheet
+                    $order_sheet_notes = "\nPaid using " . $payment_method_desc . " by user $username on $current_time";
+                    updateOrderSheetStatus($db, $trade_id, 'settled', $order_sheet_notes);
                     
-                    if (!$balance_updated) {
-                        $error_message = 'Failed to update bank balance.';
-                    } else {
+                    syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
+                    recordBankChargesForTrade($db, $trade_id, $trade['consideration'], $trade['settlement_date'] ?: $trade['trade_date']);
+                    
+                    if (!$existing_payment) {
+                        $amount = $trade['consideration'];
+                        $description = $narration ?: "Payment for " . $trade['security_id'] . " shares " . ($trade['trade_side'] === 'sell' ? 'sold' : 'purchased');
+                        
+                        if ($trade['trade_side'] === 'sell') {
+                            $payee_name = $trade['counterparty_name'];
+                            $payee_type = 'C';
+                        } else {
+                            $payee_name = $trade['client_name'];
+                            $payee_type = 'C';
+                        }
+                        
+                        $ac_credit_id = $bank_account_id > 0 ? $bank_account_id : 1;
+                        if ($bank_account_id <= 0) {
+                            $default_bank_stmt = $db->query("SELECT id FROM banks_accounts WHERE status = 'active' LIMIT 1");
+                            $default_bank = $default_bank_stmt->fetch();
+                            if ($default_bank) {
+                                $ac_credit_id = $default_bank['id'];
+                            }
+                        }
+                        
+                        $payment_stmt = $db->prepare("
+                            INSERT INTO payments (
+                                payment_no, payment_date, payment_mode, paid_to,
+                                name, record_in_financial, ac_credit,
+                                currency, amount, narration,
+                                created_by_username, created_at, status,
+                                bank_name, bank_account_number, source_type, source_id
+                            ) VALUES (?, NOW(), ?, ?, ?, 'yes', ?, ?, ?, ?, ?, NOW(), 'active', ?, ?, 'trade_settlement', ?)
+                        ");
+                        
+                        $payment_stmt->execute([
+                            $payment_no,
+                            $payment_mode,
+                            $payee_type,
+                            $payee_name,
+                            $ac_credit_id,
+                            'Tsh',
+                            $amount,
+                            $description,
+                            $username,
+                            $bank_account ? $bank_account['bank_name'] : '',
+                            $bank_account ? $bank_account['account_number'] : '',
+                            $trade_id
+                        ]);
+                    }
+                    
+                    if ($bank_account_id > 0 && $bank_account) {
+                        $is_payment_out = ($trade['trade_side'] === 'sell');
+                        updateBankBalance($db, $bank_account_id, $trade['consideration'], $is_payment_out);
                         if (!$existing_payment) {
-                            // Create journal entry only for new payments
                             createJournalEntry($db, $payment_no, $trade, $bank_account, $trade['consideration'], 
                                 $narration ?: "Payment for " . $trade['security_id'] . " shares " . ($trade['trade_side'] === 'sell' ? 'sold' : 'purchased'));
                         }
-                        
-                        $success_message = 'Payment recorded successfully! Payment No: ' . $payment_no;
                     }
-                } else {
+                    
+                    $db->commit();
                     $success_message = 'Payment recorded successfully! Payment No: ' . $payment_no;
+                } else {
+                    throw new Exception("Error updating trade as paid.");
                 }
-            } else {
-                $error_message = 'Error updating trade as paid.';
+            } catch (Exception $e) {
+                $db->rollBack();
+                $error_message = "Error: " . $e->getMessage();
+                error_log("Payment error: " . $e->getMessage());
             }
         }
     } else {
         $error_message = 'Trade not found.';
     }
     
-    // Redirect to avoid form resubmission
     header('Location: settlement.php?message=' . urlencode($success_message ?: $error_message) . '&type=' . ($success_message ? 'success' : 'danger'));
     exit;
 }
 
-// Handle linking trade (sale to buy)
-if (isset($_POST['link_trade']) && isset($_POST['trade_id']) && isset($_POST['linked_trade_id'])) {
+// ============================================
+// HANDLE LINK TRADE
+// ============================================
+if (isset($_POST['link_trade']) && isset($_POST['trade_id']) && isset($_POST['linked_trade_ids'])) {
     $trade_id = (int)$_POST['trade_id'];
-    $linked_trade_id = (int)$_POST['linked_trade_id'];
+    $linked_trade_ids = $_POST['linked_trade_ids']; // Can be multiple trade IDs
     $user_id = $_SESSION['user_id'];
+    $username = $_SESSION['username'] ?? 'system';
     
     try {
-        // Check if both trades exist
+        $db->beginTransaction();
+        
+        // Get the sale trade
         $trade_stmt = $db->prepare("SELECT * FROM trades WHERE id = ?");
         $trade_stmt->execute([$trade_id]);
         $trade = $trade_stmt->fetch();
         
-        $linked_trade_stmt = $db->prepare("SELECT * FROM trades WHERE id = ?");
-        $linked_trade_stmt->execute([$linked_trade_id]);
-        $linked_trade = $linked_trade_stmt->fetch();
-        
-        if ($trade && $linked_trade) {
-            // Check if sale is being linked to a buy trade
-            if ($trade['trade_side'] === 'sell' && $linked_trade['trade_side'] === 'buy') {
-                // Check if trades are for same client
-                if ($trade['client_name'] === $linked_trade['client_name']) {
-                    // Insert link record
-                    $link_stmt = $db->prepare("
-                        INSERT INTO linked_trades (trade_id, linked_trade_id, linked_by, linked_at)
-                        VALUES (?, ?, ?, NOW())
-                        ON DUPLICATE KEY UPDATE linked_trade_id = ?
-                    ");
-                    
-                    if ($link_stmt->execute([$trade_id, $linked_trade_id, $user_id, $linked_trade_id])) {
-                        // Update trade notes
-                        $notes = "\nLinked to buy trade ID: $linked_trade_id (Ref: " . $linked_trade['trade_reference'] . ") by user $user_id on " . date('Y-m-d H:i:s');
-                        $update_stmt = $db->prepare("
-                            UPDATE trades 
-                            SET settlement_status = 'linked',
-                                settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?),
-                                settled_by = ?,
-                                settled_at = NOW()
-                            WHERE id = ?
-                        ");
-                        
-                        if ($update_stmt->execute([$notes, $user_id, $trade_id])) {
-                            syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
-                            recordBankChargesForTrade($db, $trade_id, $trade['consideration'], $trade['settlement_date'] ?: $trade['trade_date']);
-                            $success_message = "Trade successfully linked! Sale linked to buy trade.";
-                        } else {
-                            $error_message = "Error updating trade status.";
-                        }
-                    } else {
-                        $error_message = "Error creating trade link.";
-                    }
-                } else {
-                    $error_message = "Cannot link trades from different clients.";
-                }
-            } else {
-                $error_message = "Can only link sell trades to buy trades.";
-            }
-        } else {
-            $error_message = "One or both trades not found.";
+        if (!$trade) {
+            throw new Exception("Sale trade not found.");
         }
+        
+        $total_linked_amount = 0;
+        $linked_refs = [];
+        
+        foreach ($linked_trade_ids as $linked_trade_id) {
+            $linked_trade_id = (int)$linked_trade_id;
+            $linked_trade_stmt = $db->prepare("SELECT * FROM trades WHERE id = ?");
+            $linked_trade_stmt->execute([$linked_trade_id]);
+            $linked_trade = $linked_trade_stmt->fetch();
+            
+            if (!$linked_trade) {
+                continue;
+            }
+            
+            if ($linked_trade['trade_side'] !== 'buy') {
+                continue;
+            }
+            
+            if ($linked_trade['client_name'] !== $trade['client_name']) {
+                continue;
+            }
+            
+            // Insert link record
+            $link_stmt = $db->prepare("
+                INSERT INTO linked_trades (trade_id, linked_trade_id, linked_by, linked_at)
+                VALUES (?, ?, ?, NOW())
+                ON DUPLICATE KEY UPDATE linked_trade_id = ?, linked_at = NOW()
+            ");
+            $link_stmt->execute([$trade_id, $linked_trade_id, $user_id, $linked_trade_id]);
+            
+            // Update buy trade
+            $buy_notes = "\nLinked to sale trade ID: $trade_id (Ref: " . $trade['trade_reference'] . ") by user $username on " . date('Y-m-d H:i:s');
+            $update_buy = $db->prepare("
+                UPDATE trades 
+                SET settlement_status = 'linked',
+                    settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?),
+                    settled_by = ?,
+                    settled_at = NOW()
+                WHERE id = ?
+            ");
+            $update_buy->execute([$buy_notes, $user_id, $linked_trade_id]);
+            
+            // Update order_sheet for buy trade
+            updateOrderSheetStatus($db, $linked_trade_id, 'linked', 
+                "\nLinked to sale trade ID: $trade_id (Ref: " . $trade['trade_reference'] . ") by user $username");
+            
+            $total_linked_amount += $linked_trade['consideration'];
+            $linked_refs[] = $linked_trade['trade_reference'];
+            
+            syncSettlementTradeToDealingSheetSafely($db, $linked_trade_id, $current_user);
+        }
+        
+        // Update sale trade
+        $sale_notes = "\nLinked to buy trades: " . implode(', ', $linked_refs) . " by user $username on " . date('Y-m-d H:i:s');
+        $update_sale = $db->prepare("
+            UPDATE trades 
+            SET settlement_status = 'linked',
+                settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?),
+                settled_by = ?,
+                settled_at = NOW()
+            WHERE id = ?
+        ");
+        $update_sale->execute([$sale_notes, $user_id, $trade_id]);
+        
+        // Update order_sheet for sale trade
+        updateOrderSheetStatus($db, $trade_id, 'linked', $sale_notes);
+        
+        syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
+        recordBankChargesForTrade($db, $trade_id, $trade['consideration'], $trade['settlement_date'] ?: $trade['trade_date']);
+        
+        $db->commit();
+        $success_message = "Trade successfully linked! Sale trade #$trade_id linked to " . count($linked_trade_ids) . " buy trade(s). Both trades are now marked as linked in order_sheet.";
+        
     } catch (Exception $e) {
+        $db->rollBack();
         $error_message = "Error linking trades: " . $e->getMessage();
+        error_log("Link trade error: " . $e->getMessage());
     }
     
     header('Location: settlement.php?message=' . urlencode($success_message ?: $error_message) . '&type=' . ($success_message ? 'success' : 'danger'));
     exit;
 }
 
-// Handle mark as unpaid (undo payment)
+// ============================================
+// HANDLE MARK AS UNPAID
+// ============================================
 if (isset($_POST['mark_unpaid']) && isset($_POST['trade_id'])) {
     $trade_id = (int)$_POST['trade_id'];
     $user_id = $_SESSION['user_id'];
+    $username = $_SESSION['username'] ?? 'system';
     
     try {
-        // Get trade details
         $trade_stmt = $db->prepare("SELECT * FROM trades WHERE id = ?");
         $trade_stmt->execute([$trade_id]);
         $trade = $trade_stmt->fetch();
         
         if ($trade) {
-            // Update trade as unpaid
-            $notes = "\nPayment undone by user $user_id on " . date('Y-m-d H:i:s');
+            $notes = "\nPayment undone by user $username on " . date('Y-m-d H:i:s');
             $update_stmt = $db->prepare("
                 UPDATE trades 
                 SET settlement_status = 'unpaid', 
@@ -779,8 +889,11 @@ if (isset($_POST['mark_unpaid']) && isset($_POST['trade_id'])) {
             ");
             
             if ($update_stmt->execute([$notes, $trade_id])) {
+                // Update order_sheet
+                updateOrderSheetStatus($db, $trade_id, 'unpaid', $notes);
+                
                 syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
-                // Deactivate payment record if exists
+                
                 $payment_stmt = $db->prepare("
                     UPDATE payments 
                     SET status = 'inactive',
@@ -789,7 +902,6 @@ if (isset($_POST['mark_unpaid']) && isset($_POST['trade_id'])) {
                 ");
                 $payment_stmt->execute([$trade_id]);
                 
-                // Reverse bank balance if payment was through bank
                 $bank_stmt = $db->prepare("
                     SELECT ba.id, ba.current_balance 
                     FROM payments p 
@@ -802,7 +914,6 @@ if (isset($_POST['mark_unpaid']) && isset($_POST['trade_id'])) {
                 
                 if ($payment_bank && $trade) {
                     $is_payment_out = ($trade['trade_side'] === 'sell');
-                    // Reverse: if it was payment out, now add back; if it was payment in, now subtract
                     updateBankBalance($db, $payment_bank['id'], $trade['consideration'], !$is_payment_out);
                 }
                 
@@ -821,15 +932,18 @@ if (isset($_POST['mark_unpaid']) && isset($_POST['trade_id'])) {
     exit;
 }
 
-// Handle mark as failed and allow retry
+// ============================================
+// HANDLE MARK AS FAILED
+// ============================================
 if (isset($_POST['mark_failed']) && isset($_POST['trade_id'])) {
     $trade_id = (int)$_POST['trade_id'];
     $failure_reason = sanitize_input($_POST['failure_reason'] ?? '');
     $action_needed = sanitize_input($_POST['action_needed'] ?? '');
     $user_id = $_SESSION['user_id'];
+    $username = $_SESSION['username'] ?? 'system';
     
     try {
-        $notes = "\nMarked as failed by user $user_id on " . date('Y-m-d H:i:s') . ": $failure_reason | Action: $action_needed";
+        $notes = "\nMarked as failed by user $username on " . date('Y-m-d H:i:s') . ": $failure_reason | Action: $action_needed";
         
         $stmt = $db->prepare("
             UPDATE trades 
@@ -842,6 +956,8 @@ if (isset($_POST['mark_failed']) && isset($_POST['trade_id'])) {
         ");
         
         if ($stmt->execute([$failure_reason, $action_needed, $notes, $user_id, $trade_id])) {
+            // Update order_sheet
+            updateOrderSheetStatus($db, $trade_id, 'failed', $notes);
             syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
             $success_message = 'Trade marked as failed with reason.';
         } else {
@@ -855,12 +971,15 @@ if (isset($_POST['mark_failed']) && isset($_POST['trade_id'])) {
     exit;
 }
 
-// Handle retry failed payment
+// ============================================
+// HANDLE RETRY FAILED
+// ============================================
 if (isset($_POST['retry_failed']) && isset($_POST['trade_id'])) {
     $trade_id = (int)$_POST['trade_id'];
+    $username = $_SESSION['username'] ?? 'system';
     
     try {
-        $notes = "\nRetried from failed status by user " . $_SESSION['user_id'] . " on " . date('Y-m-d H:i:s');
+        $notes = "\nRetried from failed status by user $username on " . date('Y-m-d H:i:s');
         
         $stmt = $db->prepare("
             UPDATE trades 
@@ -873,6 +992,8 @@ if (isset($_POST['retry_failed']) && isset($_POST['trade_id'])) {
         ");
         
         if ($stmt->execute([$notes, $trade_id])) {
+            // Update order_sheet
+            updateOrderSheetStatus($db, $trade_id, 'unpaid', $notes);
             syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
             $success_message = 'Trade ready for payment retry.';
         } else {
@@ -886,263 +1007,123 @@ if (isset($_POST['retry_failed']) && isset($_POST['trade_id'])) {
     exit;
 }
 
-// Handle other bulk actions
-if (isset($_POST['bulk_action']) && isset($_POST['trade_ids'])) {
-    $bulk_action = $_POST['bulk_action'];
-    $trade_ids = $_POST['trade_ids'];
-    $user_id = $_SESSION['user_id'];
-    $processed = 0;
-    $failed = 0;
-    
-    if (!empty($trade_ids) && is_array($trade_ids)) {
-        foreach ($trade_ids as $trade_id) {
-            $trade_id = (int)$trade_id;
-            
-            $stmt = $db->prepare("SELECT * FROM trades WHERE id = ?");
-            $stmt->execute([$trade_id]);
-            $trade = $stmt->fetch();
-            
-            if ($trade) {
-                $current_time = date('Y-m-d H:i:s');
-                
-                switch ($bulk_action) {
-                    case 'mark_unpaid_bulk':
-                        $notes = "\nMarked as unpaid (bulk) by user $user_id on $current_time";
-                        $stmt = $db->prepare("
-                            UPDATE trades 
-                            SET settlement_status = 'unpaid', 
-                                settled_by = NULL, 
-                                settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?)
-                            WHERE id = ?
-                        ");
-                        if ($stmt->execute([$notes, $trade_id])) {
-                            syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
-                            $processed++;
-                        } else {
-                            $failed++;
-                        }
-                        break;
-                        
-                    case 'mark_failed_bulk':
-                        $failure_reason = sanitize_input($_POST['bulk_failure_reason'] ?? '');
-                        $action_needed = sanitize_input($_POST['bulk_action_needed'] ?? '');
-                        
-                        $notes = "\nMarked as failed (bulk) by user $user_id on $current_time: $failure_reason | Action: $action_needed";
-                        
-                        $stmt = $db->prepare("
-                            UPDATE trades 
-                            SET settlement_status = 'failed', 
-                                failure_reason = ?, 
-                                action_needed = ?,
-                                settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?),
-                                settled_by = ?
-                            WHERE id = ?
-                        ");
-                        if ($stmt->execute([$failure_reason, $action_needed, $notes, $user_id, $trade_id])) {
-                            syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
-                            $processed++;
-                        } else {
-                            $failed++;
-                        }
-                        break;
-                }
-            } else {
-                $failed++;
-            }
-        }
-        
-        if ($processed > 0) {
-            $success_message = "Successfully processed $processed trades";
-            if ($failed > 0) {
-                $error_message = "Failed to process $failed trades";
-            }
-        } else {
-            $error_message = "Failed to process any trades";
-        }
-    }
-    
-    $message = $success_message ?: $error_message;
-    $type = $success_message ? 'success' : 'danger';
-    header('Location: settlement.php?message=' . urlencode($message) . '&type=' . $type);
-    exit;
-}
-
-// Get filter values
+// ============================================
+// GET FILTER VALUES
+// ============================================
 $trade_side_filter = isset($_GET['side']) ? $_GET['side'] : 'sell_only';
 $hide_buy_orders = isset($_GET['hide_buy']) ? $_GET['hide_buy'] : '1';
 
-// Get date range for settlement
 $today = date('Y-m-d');
 $two_days_ago = date('Y-m-d', strtotime('-30 days'));
 $next_30_days = date('Y-m-d', strtotime('+30 days'));
 
-// Debug: Show date ranges
-error_log("Settlement Date Range: $two_days_ago to $next_30_days");
-
-// PAGINATION SETUP
-$records_per_page = 50; // Number of records per page
+// Pagination
+$records_per_page = 50;
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 if ($page < 1) $page = 1;
 $offset = ($page - 1) * $records_per_page;
 
-// Get total count for pagination
-$count_query = "
-    SELECT COUNT(*) as total
-    FROM trades t
-    LEFT JOIN users u ON t.settled_by = u.id
-    LEFT JOIN companies c_buyer ON t.client_name = c_buyer.company_name
-    LEFT JOIN companies c_seller ON t.counterparty_name = c_seller.company_name
-    LEFT JOIN linked_trades lt ON t.id = lt.trade_id
-    LEFT JOIN trades lt2 ON lt.linked_trade_id = lt2.id
-    WHERE t.settlement_date IS NOT NULL 
-    AND t.settlement_date BETWEEN ? AND ?
-    AND t.status = 'active'
-    AND (t.settlement_status IS NULL OR t.settlement_status != 'cancelled')
-";
+// Get grouped trades
+$grouped_trades = getGroupedTrades($db, $two_days_ago, $next_30_days, $hide_buy_orders, $trade_side_filter);
 
-// Add trade side filter if needed
-if ($hide_buy_orders === '1') {
-    $count_query .= " AND t.trade_side = 'sell' ";
-} elseif ($trade_side_filter !== 'all') {
-    $count_query .= " AND t.trade_side = ? ";
-}
-
-$count_stmt = $db->prepare($count_query);
-
-if ($hide_buy_orders === '1') {
-    $count_stmt->execute([$two_days_ago, $next_30_days]);
-} elseif ($trade_side_filter !== 'all') {
-    $count_stmt->execute([$two_days_ago, $next_30_days, $trade_side_filter]);
-} else {
-    $count_stmt->execute([$two_days_ago, $next_30_days]);
-}
-
-$total_records = $count_stmt->fetch()['total'];
+// Paginate grouped trades
+$total_records = count($grouped_trades);
 $total_pages = ceil($total_records / $records_per_page);
+$paginated_trades = array_slice($grouped_trades, $offset, $records_per_page);
 
-// Get settlement trades - from 2 days ago to 30 days in the future
-$query = "
-    SELECT t.*, 
-           u.username as settled_by_username,
-           c_buyer.company_name as buyer_company_name,
-           c_seller.company_name as seller_company_name,
-           lt.linked_trade_id,
-           lt2.trade_reference as linked_trade_ref,
-           lt2.client_name as linked_client_name,
-           lt2.security_id as linked_security,
-           lt2.consideration as linked_amount,
-           CASE 
-               WHEN t.settlement_date < ? THEN 'overdue'
-               WHEN t.settlement_date = ? THEN 'today'
-               ELSE 'upcoming'
-           END as settlement_status_category
-    FROM trades t
-    LEFT JOIN users u ON t.settled_by = u.id
-    LEFT JOIN companies c_buyer ON t.client_name = c_buyer.company_name
-    LEFT JOIN companies c_seller ON t.counterparty_name = c_seller.company_name
-    LEFT JOIN linked_trades lt ON t.id = lt.trade_id
-    LEFT JOIN trades lt2 ON lt.linked_trade_id = lt2.id
-    WHERE t.settlement_date IS NOT NULL 
-    AND t.settlement_date BETWEEN ? AND ?
-    AND t.status = 'active'
-    AND (t.settlement_status IS NULL OR t.settlement_status != 'cancelled')
-";
+// Calculate summary statistics
+$stats = [
+    'total_count' => 0,
+    'total_value' => 0,
+    'paid_count' => 0,
+    'paid_value' => 0,
+    'linked_count' => 0,
+    'linked_value' => 0,
+    'failed_count' => 0,
+    'failed_value' => 0,
+    'overdue_count' => 0,
+    'overdue_value' => 0,
+    'today_count' => 0,
+    'today_value' => 0,
+    'upcoming_count' => 0,
+    'upcoming_value' => 0
+];
 
-// Add trade side filter if needed
-if ($hide_buy_orders === '1') {
-    $query .= " AND t.trade_side = 'sell' ";
-} elseif ($trade_side_filter !== 'all') {
-    $query .= " AND t.trade_side = ? ";
+foreach ($grouped_trades as $trade) {
+    $stats['total_count']++;
+    $stats['total_value'] += floatval($trade['total_consideration']);
+    
+    if ($trade['settlement_status'] === 'paid') {
+        $stats['paid_count']++;
+        $stats['paid_value'] += floatval($trade['total_consideration']);
+    } elseif ($trade['settlement_status'] === 'linked') {
+        $stats['linked_count']++;
+        $stats['linked_value'] += floatval($trade['total_consideration']);
+    } elseif ($trade['settlement_status'] === 'failed') {
+        $stats['failed_count']++;
+        $stats['failed_value'] += floatval($trade['total_consideration']);
+    } else {
+        $settlement_date = $trade['settlement_date'] ?? $trade['trade_date'];
+        if ($settlement_date < $today) {
+            $stats['overdue_count']++;
+            $stats['overdue_value'] += floatval($trade['total_consideration']);
+        } elseif ($settlement_date == $today) {
+            $stats['today_count']++;
+            $stats['today_value'] += floatval($trade['total_consideration']);
+        } else {
+            $stats['upcoming_count']++;
+            $stats['upcoming_value'] += floatval($trade['total_consideration']);
+        }
+    }
 }
-
-$query .= " ORDER BY 
-    CASE 
-        WHEN t.settlement_date < ? THEN 1
-        WHEN t.settlement_date = ? THEN 2
-        ELSE 3
-    END,
-    t.settlement_date ASC,
-    t.created_at DESC
-    LIMIT " . (int)$records_per_page . " OFFSET " . (int)$offset; // FIXED: Direct concatenation with casting
-
-// Prepare and execute query
-$stmt = $db->prepare($query);
-
-if ($hide_buy_orders === '1') {
-    $stmt->execute([$today, $today, $two_days_ago, $next_30_days, $today, $today]);
-} elseif ($trade_side_filter !== 'all') {
-    $stmt->execute([$today, $today, $two_days_ago, $next_30_days, $trade_side_filter, $today, $today]);
-} else {
-    $stmt->execute([$today, $today, $two_days_ago, $next_30_days, $today, $today]);
-}
-
-$settlement_trades = $stmt->fetchAll();
-
-// Debug: Log how many trades were fetched
-error_log("Total settlement trades fetched: " . count($settlement_trades) . " (Page: $page, Offset: $offset)");
-
-// Calculate summary statistics (we need to fetch all for stats, but this should be quick)
-$stats_query = "
-    SELECT 
-        COUNT(*) as total_count,
-        SUM(CASE WHEN t.settlement_status = 'paid' THEN 1 ELSE 0 END) as paid_count,
-        SUM(CASE WHEN t.settlement_status = 'failed' THEN 1 ELSE 0 END) as failed_count,
-        SUM(CASE WHEN t.settlement_status = 'linked' THEN 1 ELSE 0 END) as linked_count,
-        SUM(CASE WHEN t.settlement_status = 'paid' THEN t.consideration ELSE 0 END) as paid_value,
-        SUM(CASE WHEN t.settlement_status = 'failed' THEN t.consideration ELSE 0 END) as failed_value,
-        SUM(CASE WHEN t.settlement_status = 'linked' THEN t.consideration ELSE 0 END) as linked_value,
-        SUM(CASE WHEN (t.settlement_status IS NULL OR t.settlement_status NOT IN ('paid', 'failed', 'linked')) AND t.settlement_date < ? THEN 1 ELSE 0 END) as overdue_count,
-        SUM(CASE WHEN (t.settlement_status IS NULL OR t.settlement_status NOT IN ('paid', 'failed', 'linked')) AND t.settlement_date < ? THEN t.consideration ELSE 0 END) as overdue_value,
-        SUM(CASE WHEN (t.settlement_status IS NULL OR t.settlement_status NOT IN ('paid', 'failed', 'linked')) AND t.settlement_date = ? THEN 1 ELSE 0 END) as today_count,
-        SUM(CASE WHEN (t.settlement_status IS NULL OR t.settlement_status NOT IN ('paid', 'failed', 'linked')) AND t.settlement_date = ? THEN t.consideration ELSE 0 END) as today_value,
-        SUM(CASE WHEN (t.settlement_status IS NULL OR t.settlement_status NOT IN ('paid', 'failed', 'linked')) AND t.settlement_date > ? THEN 1 ELSE 0 END) as upcoming_count,
-        SUM(CASE WHEN (t.settlement_status IS NULL OR t.settlement_status NOT IN ('paid', 'failed', 'linked')) AND t.settlement_date > ? THEN t.consideration ELSE 0 END) as upcoming_value,
-        SUM(t.consideration) as total_value
-    FROM trades t
-    WHERE t.settlement_date IS NOT NULL 
-    AND t.settlement_date BETWEEN ? AND ?
-    AND t.status = 'active'
-    AND (t.settlement_status IS NULL OR t.settlement_status != 'cancelled')
-";
-
-// Add trade side filter if needed
-if ($hide_buy_orders === '1') {
-    $stats_query .= " AND t.trade_side = 'sell' ";
-} elseif ($trade_side_filter !== 'all') {
-    $stats_query .= " AND t.trade_side = ? ";
-}
-
-$stats_stmt = $db->prepare($stats_query);
-
-if ($hide_buy_orders === '1') {
-    $stats_stmt->execute([$today, $today, $today, $today, $today, $today, $two_days_ago, $next_30_days]);
-} elseif ($trade_side_filter !== 'all') {
-    $stats_stmt->execute([$today, $today, $today, $today, $today, $today, $two_days_ago, $next_30_days, $trade_side_filter]);
-} else {
-    $stats_stmt->execute([$today, $today, $today, $today, $today, $today, $two_days_ago, $next_30_days]);
-}
-
-$stats = $stats_stmt->fetch();
-
-// Assign stats to variables
-$total_trades = $stats['total_count'] ?? 0;
-$total_value = $stats['total_value'] ?? 0;
-$overdue_count = $stats['overdue_count'] ?? 0;
-$overdue_value = $stats['overdue_value'] ?? 0;
-$today_count = $stats['today_count'] ?? 0;
-$today_value = $stats['today_value'] ?? 0;
-$upcoming_count = $stats['upcoming_count'] ?? 0;
-$upcoming_value = $stats['upcoming_value'] ?? 0;
-$paid_count = $stats['paid_count'] ?? 0;
-$paid_value = $stats['paid_value'] ?? 0;
-$failed_count = $stats['failed_count'] ?? 0;
-$failed_value = $stats['failed_value'] ?? 0;
-$linked_count = $stats['linked_count'] ?? 0;
-$linked_value = $stats['linked_value'] ?? 0;
 
 $page_title = 'Trade Settlement';
 include '../includes/header.php';
 ?>
+
+<style>
+    /* CSS styles... */
+    .floating-bulk-payment {
+        position: fixed;
+        bottom: 30px;
+        right: 30px;
+        z-index: 1000;
+    }
+    .floating-bulk-payment .btn {
+        width: 60px;
+        height: 60px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.5rem;
+    }
+    .floating-bulk-payment .badge {
+        font-size: 0.7rem;
+        padding: 0.25em 0.5em;
+    }
+    .trade-checkbox:checked {
+        background-color: var(--success-color);
+        border-color: var(--success-color);
+    }
+    .pagination .page-item.active .page-link {
+        background-color: var(--success-color);
+        border-color: var(--success-color);
+    }
+    .grouped-trade-row {
+        background-color: #f8f9fa;
+    }
+    .grouped-trade-row .badge-group {
+        background-color: #e9ecef;
+        color: #495057;
+        font-size: 10px;
+        padding: 2px 6px;
+        border-radius: 10px;
+    }
+    .grouped-trade-details {
+        font-size: 12px;
+        color: #6c757d;
+    }
+</style>
 
 <div class="page-header">
     <div class="container-fluid">
@@ -1158,13 +1139,6 @@ include '../includes/header.php';
                     <div>
                         <h1 class="page-title mb-1">Trade Settlement</h1>
                         <p class="page-subtitle">Manage trade settlements and payments - <?php echo htmlspecialchars($company_name); ?></p>
-                        <!-- Debug info -->
-                        <div style="display: none;" id="debugInfo">
-                            <small class="text-muted">
-                                Date Range: <?php echo $two_days_ago; ?> to <?php echo $next_30_days; ?> | 
-                                Total Trades: <?php echo $total_trades; ?>
-                            </small>
-                        </div>
                     </div>
                 </div>
             </div>
@@ -1206,8 +1180,7 @@ include '../includes/header.php';
                             <div class="col-auto">
                                 <select class="form-select form-select-sm" name="side" onchange="this.form.submit()">
                                     <option value="all" <?php echo $trade_side_filter === 'all' ? 'selected' : ''; ?>>All Trades</option>
-                                    <option value="buy" <?php echo $trade_side_filter === 'buy' ? 'selected' : ''; ?>>Buy</option>
-                                    <option value="sell" <?php echo $trade_side_filter === 'sell' ? 'selected' : ''; ?>>Sell</option>
+                                    <option value="sell_only" <?php echo $trade_side_filter === 'sell_only' ? 'selected' : ''; ?>>Sell Only</option>
                                 </select>
                             </div>
                             <div class="col-auto">
@@ -1239,8 +1212,8 @@ include '../includes/header.php';
                     <div class="row no-gutters align-items-center">
                         <div class="col mr-2">
                             <div class="text-xs fw-bold text-primary text-uppercase mb-1">Total Settlement Value</div>
-                            <div class="h5 mb-0 fw-bold text-gray-800">TZS <?php echo number_format($total_value, 2); ?></div>
-                            <div class="mt-2 text-muted small"><?php echo $total_trades; ?> trades</div>
+                            <div class="h5 mb-0 fw-bold text-gray-800">TZS <?php echo number_format($stats['total_value'], 2); ?></div>
+                            <div class="mt-2 text-muted small"><?php echo $stats['total_count']; ?> trade groups</div>
                         </div>
                         <div class="col-auto">
                             <i class="bi bi-currency-exchange fa-2x text-gray-300"></i>
@@ -1255,9 +1228,9 @@ include '../includes/header.php';
                 <div class="card-body">
                     <div class="row no-gutters align-items-center">
                         <div class="col mr-2">
-                            <div class="text-xs fw-bold text-danger text-uppercase mb-1">Overdue Settlements</div>
-                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $overdue_count; ?> trades</div>
-                            <div class="mt-2 text-muted small">TZS <?php echo number_format($overdue_value, 2); ?></div>
+                            <div class="text-xs fw-bold text-danger text-uppercase mb-1">Overdue</div>
+                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $stats['overdue_count']; ?> groups</div>
+                            <div class="mt-2 text-muted small">TZS <?php echo number_format($stats['overdue_value'], 2); ?></div>
                         </div>
                         <div class="col-auto">
                             <i class="bi bi-exclamation-triangle fa-2x text-gray-300"></i>
@@ -1273,8 +1246,8 @@ include '../includes/header.php';
                     <div class="row no-gutters align-items-center">
                         <div class="col mr-2">
                             <div class="text-xs fw-bold text-warning text-uppercase mb-1">Due Today</div>
-                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $today_count; ?> trades</div>
-                            <div class="mt-2 text-muted small">TZS <?php echo number_format($today_value, 2); ?></div>
+                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $stats['today_count']; ?> groups</div>
+                            <div class="mt-2 text-muted small">TZS <?php echo number_format($stats['today_value'], 2); ?></div>
                         </div>
                         <div class="col-auto">
                             <i class="bi bi-calendar-day fa-2x text-gray-300"></i>
@@ -1289,9 +1262,9 @@ include '../includes/header.php';
                 <div class="card-body">
                     <div class="row no-gutters align-items-center">
                         <div class="col mr-2">
-                            <div class="text-xs fw-bold text-success text-uppercase mb-1">Paid Settlements</div>
-                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $paid_count; ?> trades</div>
-                            <div class="mt-2 text-muted small">TZS <?php echo number_format($paid_value, 2); ?></div>
+                            <div class="text-xs fw-bold text-success text-uppercase mb-1">Paid</div>
+                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $stats['paid_count']; ?> groups</div>
+                            <div class="mt-2 text-muted small">TZS <?php echo number_format($stats['paid_value'], 2); ?></div>
                         </div>
                         <div class="col-auto">
                             <i class="bi bi-check-circle fa-2x text-gray-300"></i>
@@ -1306,9 +1279,9 @@ include '../includes/header.php';
                 <div class="card-body">
                     <div class="row no-gutters align-items-center">
                         <div class="col mr-2">
-                            <div class="text-xs fw-bold text-info text-uppercase mb-1">Linked Settlements</div>
-                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $linked_count; ?> trades</div>
-                            <div class="mt-2 text-muted small">TZS <?php echo number_format($linked_value, 2); ?></div>
+                            <div class="text-xs fw-bold text-info text-uppercase mb-1">Linked</div>
+                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $stats['linked_count']; ?> groups</div>
+                            <div class="mt-2 text-muted small">TZS <?php echo number_format($stats['linked_value'], 2); ?></div>
                         </div>
                         <div class="col-auto">
                             <i class="bi bi-link fa-2x text-gray-300"></i>
@@ -1323,9 +1296,9 @@ include '../includes/header.php';
                 <div class="card-body">
                     <div class="row no-gutters align-items-center">
                         <div class="col mr-2">
-                            <div class="text-xs fw-bold text-dark text-uppercase mb-1">Failed Settlements</div>
-                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $failed_count; ?> trades</div>
-                            <div class="mt-2 text-muted small">TZS <?php echo number_format($failed_value, 2); ?></div>
+                            <div class="text-xs fw-bold text-dark text-uppercase mb-1">Failed</div>
+                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $stats['failed_count']; ?> groups</div>
+                            <div class="mt-2 text-muted small">TZS <?php echo number_format($stats['failed_value'], 2); ?></div>
                         </div>
                         <div class="col-auto">
                             <i class="bi bi-x-circle fa-2x text-gray-300"></i>
@@ -1344,44 +1317,44 @@ include '../includes/header.php';
         </button>
     </div>
 
-    <!-- Status Filter Tabs -->
+    <!-- Trades Table - Grouped View -->
     <div class="card mb-4">
         <div class="card-header bg-transparent border-0">
             <ul class="nav nav-tabs nav-tabs-custom" id="settlementTabs" role="tablist">
-                <li class="nav-item" role="presentation">
+                <li class="nav-item">
                     <button class="nav-link active" id="all-tab" data-bs-toggle="tab" data-bs-target="#all" type="button" role="tab">
                         <i class="bi bi-list-check me-2"></i>All Settlements
-                        <span class="badge bg-primary ms-2"><?php echo $total_trades; ?></span>
+                        <span class="badge bg-primary ms-2"><?php echo $stats['total_count']; ?></span>
                     </button>
                 </li>
-                <li class="nav-item" role="presentation">
+                <li class="nav-item">
                     <button class="nav-link" id="overdue-tab" data-bs-toggle="tab" data-bs-target="#overdue" type="button" role="tab">
                         <i class="bi bi-exclamation-triangle me-2"></i>Overdue
-                        <span class="badge bg-danger ms-2"><?php echo $overdue_count; ?></span>
+                        <span class="badge bg-danger ms-2"><?php echo $stats['overdue_count']; ?></span>
                     </button>
                 </li>
-                <li class="nav-item" role="presentation">
+                <li class="nav-item">
                     <button class="nav-link" id="today-tab" data-bs-toggle="tab" data-bs-target="#today" type="button" role="tab">
                         <i class="bi bi-calendar-day me-2"></i>Due Today
-                        <span class="badge bg-warning ms-2"><?php echo $today_count; ?></span>
+                        <span class="badge bg-warning ms-2"><?php echo $stats['today_count']; ?></span>
                     </button>
                 </li>
-                <li class="nav-item" role="presentation">
+                <li class="nav-item">
                     <button class="nav-link" id="paid-tab" data-bs-toggle="tab" data-bs-target="#paid" type="button" role="tab">
                         <i class="bi bi-check-circle me-2"></i>Paid
-                        <span class="badge bg-success ms-2"><?php echo $paid_count; ?></span>
+                        <span class="badge bg-success ms-2"><?php echo $stats['paid_count']; ?></span>
                     </button>
                 </li>
-                <li class="nav-item" role="presentation">
+                <li class="nav-item">
                     <button class="nav-link" id="linked-tab" data-bs-toggle="tab" data-bs-target="#linked" type="button" role="tab">
                         <i class="bi bi-link me-2"></i>Linked
-                        <span class="badge bg-info ms-2"><?php echo $linked_count; ?></span>
+                        <span class="badge bg-info ms-2"><?php echo $stats['linked_count']; ?></span>
                     </button>
                 </li>
-                <li class="nav-item" role="presentation">
+                <li class="nav-item">
                     <button class="nav-link" id="failed-tab" data-bs-toggle="tab" data-bs-target="#failed" type="button" role="tab">
                         <i class="bi bi-x-circle me-2"></i>Failed
-                        <span class="badge bg-dark ms-2"><?php echo $failed_count; ?></span>
+                        <span class="badge bg-dark ms-2"><?php echo $stats['failed_count']; ?></span>
                     </button>
                 </li>
             </ul>
@@ -1391,16 +1364,11 @@ include '../includes/header.php';
             <div class="tab-content" id="settlementTabsContent">
                 <!-- All Settlements Tab -->
                 <div class="tab-pane fade show active" id="all" role="tabpanel">
-                    <?php if (empty($settlement_trades)): ?>
+                    <?php if (empty($paginated_trades)): ?>
                         <div class="text-center py-5">
                             <i class="bi bi-check-circle text-muted" style="font-size: 4rem; opacity: 0.3;"></i>
                             <h5 class="text-muted mt-3">No Settlements Due</h5>
                             <p class="text-muted">All trades are settled or no settlements due within the period.</p>
-                            <div class="mt-3">
-                                <small class="text-info">
-                                    <i class="bi bi-info-circle"></i> Date range: <?php echo $two_days_ago; ?> to <?php echo $next_30_days; ?>
-                                </small>
-                            </div>
                         </div>
                     <?php else: ?>
                         <div class="table-responsive">
@@ -1412,20 +1380,22 @@ include '../includes/header.php';
                                         </th>
                                         <th>Trade Ref</th>
                                         <th>Client</th>
-                                        <th>Counterparty</th>
                                         <th>Security</th>
                                         <th>Side</th>
-                                        <th>Amount</th>
+                                        <th class="text-end">Quantity</th>
+                                        <th class="text-end">Amount</th>
                                         <th>Settlement Date</th>
                                         <th>Status</th>
                                         <th>Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <?php foreach ($settlement_trades as $trade): 
+                                    <?php foreach ($paginated_trades as $trade): 
                                         $status_color = '';
                                         $status_icon = '';
                                         $status_text = '';
+                                        $trade_count = (int)($trade['trade_count'] ?? 1);
+                                        $trade_ids = explode(',', $trade['trade_ids'] ?? '');
                                         
                                         if ($trade['settlement_status'] === 'paid') {
                                             $status_color = 'success';
@@ -1439,18 +1409,25 @@ include '../includes/header.php';
                                             $status_color = 'info';
                                             $status_icon = 'bi-link';
                                             $status_text = 'Linked';
-                                        } elseif ($trade['settlement_status_category'] === 'overdue') {
-                                            $status_color = 'danger';
-                                            $status_icon = 'bi-exclamation-triangle';
-                                            $status_text = 'Overdue';
-                                        } elseif ($trade['settlement_status_category'] === 'today') {
-                                            $status_color = 'warning';
-                                            $status_icon = 'bi-calendar-day';
-                                            $status_text = 'Due Today';
+                                        } elseif ($trade['settlement_status'] === 'unpaid') {
+                                            $status_color = 'secondary';
+                                            $status_icon = 'bi-arrow-counterclockwise';
+                                            $status_text = 'Unpaid';
                                         } else {
-                                            $status_color = 'info';
-                                            $status_icon = 'bi-calendar';
-                                            $status_text = 'Upcoming';
+                                            $settlement_date = $trade['settlement_date'] ?? $trade['trade_date'];
+                                            if ($settlement_date < $today) {
+                                                $status_color = 'danger';
+                                                $status_icon = 'bi-exclamation-triangle';
+                                                $status_text = 'Overdue';
+                                            } elseif ($settlement_date == $today) {
+                                                $status_color = 'warning';
+                                                $status_icon = 'bi-calendar-day';
+                                                $status_text = 'Due Today';
+                                            } else {
+                                                $status_color = 'info';
+                                                $status_icon = 'bi-calendar';
+                                                $status_text = 'Upcoming';
+                                            }
                                         }
                                     ?>
                                         <tr>
@@ -1458,16 +1435,28 @@ include '../includes/header.php';
                                                 <input type="checkbox" class="trade-checkbox" value="<?php echo $trade['id']; ?>" onchange="updateBulkActions()">
                                             </td>
                                             <td>
-                                                <div class="fw-semibold"><?php echo htmlspecialchars($trade['trade_reference']); ?></div>
-                                                <small class="text-muted">Trade ID: <?php echo $trade['id']; ?></small>
+                                                <div class="fw-semibold">
+                                                    <?php 
+                                                    $refs = explode(',', $trade['trade_references'] ?? '');
+                                                    if ($trade_count > 1) {
+                                                        echo htmlspecialchars($refs[0] ?? '') . ' <span class="badge-group">+' . ($trade_count - 1) . ' more</span>';
+                                                    } else {
+                                                        echo htmlspecialchars($trade['trade_reference'] ?? '');
+                                                    }
+                                                    ?>
+                                                </div>
+                                                <?php if ($trade_count > 1): ?>
+                                                    <div class="grouped-trade-details">
+                                                        <i class="bi bi-layers"></i> <?php echo $trade_count; ?> trades grouped
+                                                        <button type="button" class="btn btn-link btn-sm p-0" onclick="showGroupedTrades(<?php echo $trade['id']; ?>)">
+                                                            <i class="bi bi-eye"></i> View all
+                                                        </button>
+                                                    </div>
+                                                <?php endif; ?>
                                             </td>
                                             <td>
                                                 <div class="fw-medium"><?php echo htmlspecialchars($trade['client_name']); ?></div>
                                                 <small class="text-muted"><?php echo htmlspecialchars($trade['client_cds_account']); ?></small>
-                                            </td>
-                                            <td>
-                                                <div class="fw-medium"><?php echo htmlspecialchars($trade['counterparty_name']); ?></div>
-                                                <small class="text-muted"><?php echo htmlspecialchars($trade['counterparty_cds_account']); ?></small>
                                             </td>
                                             <td>
                                                 <div class="fw-medium"><?php echo htmlspecialchars($trade['security_id']); ?></div>
@@ -1483,8 +1472,24 @@ include '../includes/header.php';
                                                     <?php echo ucfirst($trade['trade_side']); ?>
                                                 </span>
                                             </td>
-                                            <td>
-                                                <div class="fw-bold text-success">TZS <?php echo number_format($trade['consideration'], 2); ?></div>
+                                            <td class="text-end">
+                                                <?php 
+                                                $qty = floatval($trade['total_quantity'] ?? 0);
+                                                if ($trade['asset_class'] === 'bond') {
+                                                    echo 'TZS ' . number_format($qty, 2);
+                                                } else {
+                                                    echo number_format($qty, 0);
+                                                }
+                                                ?>
+                                                <?php if ($trade_count > 1): ?>
+                                                    <br><small class="text-muted">avg: <?php echo number_format(floatval($trade['avg_price'] ?? 0), 2); ?></small>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td class="text-end">
+                                                <div class="fw-bold text-success">TZS <?php echo number_format($trade['total_consideration'], 2); ?></div>
+                                                <?php if ($trade_count > 1): ?>
+                                                    <small class="text-muted">(<?php echo number_format(floatval($trade['total_consideration'] ?? 0) / $trade_count, 2); ?> avg)</small>
+                                                <?php endif; ?>
                                             </td>
                                             <td>
                                                 <div class="fw-medium">
@@ -1518,19 +1523,11 @@ include '../includes/header.php';
                                                     <i class="bi <?php echo $status_icon; ?> me-1"></i>
                                                     <?php echo $status_text; ?>
                                                 </span>
-                                                <?php if ($trade['settled_by_username']): ?>
-                                                    <small class="d-block text-muted">By: <?php echo $trade['settled_by_username']; ?></small>
-                                                <?php endif; ?>
-                                                <?php if ($trade['linked_trade_id']): ?>
-                                                    <small class="d-block text-info">
-                                                        <i class="bi bi-link"></i> Linked to Buy #<?php echo $trade['linked_trade_id']; ?>
-                                                    </small>
-                                                <?php endif; ?>
                                             </td>
                                             <td>
                                                 <?php if ($trade['settlement_status'] === 'linked'): ?>
                                                     <div class="btn-group btn-group-sm">
-                                                        <button type="button" class="btn btn-outline-info btn-sm" onclick="showLinkedDetails(<?php echo $trade['id']; ?>, <?php echo $trade['linked_trade_id']; ?>, '<?php echo addslashes($trade['linked_trade_ref']); ?>', '<?php echo addslashes($trade['linked_client_name']); ?>', '<?php echo addslashes($trade['linked_security']); ?>', '<?php echo $trade['linked_amount']; ?>')">
+                                                        <button type="button" class="btn btn-outline-info btn-sm" onclick="showLinkedDetails(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-eye"></i> View Link
                                                         </button>
                                                         <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
@@ -1549,7 +1546,7 @@ include '../includes/header.php';
                                                 <?php elseif ($trade['settlement_status'] === 'failed'): ?>
                                                     <div class="btn-group btn-group-sm">
                                                         <button type="button" class="btn btn-outline-warning btn-sm" data-bs-toggle="modal" data-bs-target="#failureDetailsModal" 
-                                                                onclick="showFailureDetails(<?php echo $trade['id']; ?>, '<?php echo addslashes($trade['failure_reason']); ?>', '<?php echo addslashes($trade['action_needed']); ?>')">
+                                                                onclick="showFailureDetails(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-info-circle"></i> Details
                                                         </button>
                                                         <button type="button" class="btn btn-outline-success btn-sm" onclick="retryFailed(<?php echo $trade['id']; ?>)">
@@ -1641,436 +1638,10 @@ include '../includes/header.php';
                                 <?php endif; ?>
                             </ul>
                             <div class="text-center text-muted small mt-2">
-                                Showing <?php echo min($records_per_page, count($settlement_trades)); ?> of <?php echo $total_records; ?> records
+                                Showing <?php echo min($records_per_page, count($paginated_trades)); ?> of <?php echo $total_records; ?> trade groups
                             </div>
                         </nav>
                         <?php endif; ?>
-                    <?php endif; ?>
-                </div>
-                
-                <!-- Overdue Tab -->
-                <div class="tab-pane fade" id="overdue" role="tabpanel">
-                    <?php 
-                    $overdue_trades = array_filter($settlement_trades, function($trade) {
-                        return $trade['settlement_status_category'] === 'overdue' && 
-                               $trade['settlement_status'] !== 'paid' && 
-                               $trade['settlement_status'] !== 'failed' &&
-                               $trade['settlement_status'] !== 'linked';
-                    });
-                    ?>
-                    <?php if (empty($overdue_trades)): ?>
-                        <div class="text-center py-5">
-                            <i class="bi bi-check-circle text-muted" style="font-size: 4rem; opacity: 0.3;"></i>
-                            <h5 class="text-muted mt-3">No Overdue Settlements</h5>
-                            <p class="text-muted">Great! All settlements are up to date.</p>
-                        </div>
-                    <?php else: ?>
-                        <div class="table-responsive">
-                            <table class="table table-hover">
-                                <thead>
-                                    <tr>
-                                        <th>Trade Ref</th>
-                                        <th>Client</th>
-                                        <th>Counterparty</th>
-                                        <th>Security</th>
-                                        <th>Side</th>
-                                        <th>Amount</th>
-                                        <th>Settlement Date</th>
-                                        <th>Days Overdue</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php foreach ($overdue_trades as $trade): 
-                                        if (!empty($trade['settlement_date']) && $trade['settlement_date'] != '0000-00-00') {
-                                            $days_overdue = (strtotime($today) - strtotime($trade['settlement_date'])) / (60 * 60 * 24);
-                                        } else {
-                                            $days_overdue = 0;
-                                        }
-                                    ?>
-                                        <tr>
-                                            <td><?php echo htmlspecialchars($trade['trade_reference']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['client_name']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['counterparty_name']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['security_id']); ?></td>
-                                            <td>
-                                                <span class="badge bg-<?php echo strtolower($trade['trade_side']) == 'buy' ? 'success' : 'danger'; ?>">
-                                                    <?php echo ucfirst($trade['trade_side']); ?>
-                                                </span>
-                                            </td>
-                                            <td class="fw-bold text-danger">TZS <?php echo number_format($trade['consideration'], 2); ?></td>
-                                            <td>
-                                                <?php 
-                                                if (!empty($trade['settlement_date']) && $trade['settlement_date'] != '0000-00-00') {
-                                                    echo date('Y-m-d', strtotime($trade['settlement_date']));
-                                                } else {
-                                                    echo 'N/A';
-                                                }
-                                                ?>
-                                            </td>
-                                            <td>
-                                                <span class="badge bg-danger"><?php echo $days_overdue; ?> days</span>
-                                            </td>
-                                            <td>
-                                                <?php if ($trade['trade_side'] === 'sell'): ?>
-                                                    <div class="btn-group btn-group-sm">
-                                                        <button type="button" class="btn btn-success" onclick="showPaymentModal(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-cash-coin"></i> Pay Now
-                                                        </button>
-                                                        <button type="button" class="btn btn-info" onclick="showLinkTradeModal(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-link"></i> Link
-                                                        </button>
-                                                        <button type="button" class="btn btn-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-x-lg"></i> Failed
-                                                        </button>
-                                                        <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
-                                                            <i class="bi bi-file-earmark-text"></i>
-                                                        </a>
-                                                    </div>
-                                                <?php else: ?>
-                                                    <div class="btn-group btn-group-sm">
-                                                        <button type="button" class="btn btn-success" onclick="showPaymentModal(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-cash-coin"></i> Pay Now
-                                                        </button>
-                                                        <button type="button" class="btn btn-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-x-lg"></i> Failed
-                                                        </button>
-                                                        <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
-                                                            <i class="bi bi-file-earmark-text"></i>
-                                                        </a>
-                                                    </div>
-                                                <?php endif; ?>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
-                        </div>
-                    <?php endif; ?>
-                </div>
-                
-                <!-- Today Tab -->
-                <div class="tab-pane fade" id="today" role="tabpanel">
-                    <?php 
-                    $today_trades = array_filter($settlement_trades, function($trade) {
-                        return $trade['settlement_status_category'] === 'today' && 
-                               $trade['settlement_status'] !== 'paid' && 
-                               $trade['settlement_status'] !== 'failed' &&
-                               $trade['settlement_status'] !== 'linked';
-                    });
-                    ?>
-                    <?php if (empty($today_trades)): ?>
-                        <div class="text-center py-5">
-                            <i class="bi bi-check-circle text-muted" style="font-size: 4rem; opacity: 0.3;"></i>
-                            <h5 class="text-muted mt-3">No Settlements Due Today</h5>
-                            <p class="text-muted">All today's settlements are processed.</p>
-                        </div>
-                    <?php else: ?>
-                        <div class="table-responsive">
-                            <table class="table table-hover">
-                                <thead>
-                                    <tr>
-                                        <th>Trade Ref</th>
-                                        <th>Client</th>
-                                        <th>Counterparty</th>
-                                        <th>Security</th>
-                                        <th>Side</th>
-                                        <th>Amount</th>
-                                        <th>Settlement Date</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php foreach ($today_trades as $trade): ?>
-                                        <tr>
-                                            <td><?php echo htmlspecialchars($trade['trade_reference']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['client_name']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['counterparty_name']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['security_id']); ?></td>
-                                            <td>
-                                                <span class="badge bg-<?php echo strtolower($trade['trade_side']) == 'buy' ? 'success' : 'danger'; ?>">
-                                                    <?php echo ucfirst($trade['trade_side']); ?>
-                                                </span>
-                                            </td>
-                                            <td class="fw-bold text-warning">TZS <?php echo number_format($trade['consideration'], 2); ?></td>
-                                            <td>
-                                                <?php 
-                                                if (!empty($trade['settlement_date']) && $trade['settlement_date'] != '0000-00-00') {
-                                                    echo date('Y-m-d', strtotime($trade['settlement_date']));
-                                                } else {
-                                                    echo 'N/A';
-                                                }
-                                                ?>
-                                            </td>
-                                            <td>
-                                                <?php if ($trade['trade_side'] === 'sell'): ?>
-                                                    <div class="btn-group btn-group-sm">
-                                                        <button type="button" class="btn btn-success" onclick="showPaymentModal(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-cash-coin"></i> Pay Now
-                                                        </button>
-                                                        <button type="button" class="btn btn-info" onclick="showLinkTradeModal(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-link"></i> Link
-                                                        </button>
-                                                        <button type="button" class="btn btn-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-x-lg"></i> Failed
-                                                        </button>
-                                                        <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
-                                                            <i class="bi bi-file-earmark-text"></i>
-                                                        </a>
-                                                    </div>
-                                                <?php else: ?>
-                                                    <div class="btn-group btn-group-sm">
-                                                        <button type="button" class="btn btn-success" onclick="showPaymentModal(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-cash-coin"></i> Pay Now
-                                                        </button>
-                                                        <button type="button" class="btn btn-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-x-lg"></i> Failed
-                                                        </button>
-                                                        <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
-                                                            <i class="bi bi-file-earmark-text"></i>
-                                                        </a>
-                                                    </div>
-                                                <?php endif; ?>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
-                        </div>
-                    <?php endif; ?>
-                </div>
-                
-                <!-- Paid Tab -->
-                <div class="tab-pane fade" id="paid" role="tabpanel">
-                    <?php 
-                    $paid_trades = array_filter($settlement_trades, function($trade) {
-                        return $trade['settlement_status'] === 'paid';
-                    });
-                    ?>
-                    <?php if (empty($paid_trades)): ?>
-                        <div class="text-center py-5">
-                            <i class="bi bi-check-circle text-muted" style="font-size: 4rem; opacity: 0.3;"></i>
-                            <h5 class="text-muted mt-3">No Paid Settlements</h5>
-                            <p class="text-muted">No settlements have been marked as paid yet.</p>
-                        </div>
-                    <?php else: ?>
-                        <div class="table-responsive">
-                            <table class="table table-hover">
-                                <thead>
-                                    <tr>
-                                        <th>Trade Ref</th>
-                                        <th>Client</th>
-                                        <th>Counterparty</th>
-                                        <th>Security</th>
-                                        <th>Side</th>
-                                        <th>Amount</th>
-                                        <th>Settlement Date</th>
-                                        <th>Paid By</th>
-                                        <th>Paid Date</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php foreach ($paid_trades as $trade): ?>
-                                        <tr>
-                                            <td><?php echo htmlspecialchars($trade['trade_reference']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['client_name']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['counterparty_name']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['security_id']); ?></td>
-                                            <td>
-                                                <span class="badge bg-<?php echo strtolower($trade['trade_side']) == 'buy' ? 'success' : 'danger'; ?>">
-                                                    <?php echo ucfirst($trade['trade_side']); ?>
-                                                </span>
-                                            </td>
-                                            <td class="fw-bold text-success">TZS <?php echo number_format($trade['consideration'], 2); ?></td>
-                                            <td>
-                                                <?php 
-                                                if (!empty($trade['settlement_date']) && $trade['settlement_date'] != '0000-00-00') {
-                                                    echo date('Y-m-d', strtotime($trade['settlement_date']));
-                                                } else {
-                                                    echo 'N/A';
-                                                }
-                                                ?>
-                                            </td>
-                                            <td><?php echo $trade['settled_by_username'] ?? 'N/A'; ?></td>
-                                            <td>
-                                                <?php 
-                                                if (!empty($trade['settled_at'])) {
-                                                    echo date('Y-m-d H:i', strtotime($trade['settled_at']));
-                                                } else {
-                                                    echo 'N/A';
-                                                }
-                                                ?>
-                                            </td>
-                                            <td>
-                                                <div class="btn-group btn-group-sm">
-                                                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="markAsUnpaid(<?php echo $trade['id']; ?>)">
-                                                        <i class="bi bi-arrow-counterclockwise"></i> Undo
-                                                    </button>
-                                                    <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
-                                                        <i class="bi bi-file-earmark-text"></i>
-                                                    </a>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
-                        </div>
-                    <?php endif; ?>
-                </div>
-                
-                <!-- Linked Tab -->
-                <div class="tab-pane fade" id="linked" role="tabpanel">
-                    <?php 
-                    $linked_trades = array_filter($settlement_trades, function($trade) {
-                        return $trade['settlement_status'] === 'linked';
-                    });
-                    ?>
-                    <?php if (empty($linked_trades)): ?>
-                        <div class="text-center py-5">
-                            <i class="bi bi-check-circle text-muted" style="font-size: 4rem; opacity: 0.3;"></i>
-                            <h5 class="text-muted mt-3">No Linked Settlements</h5>
-                            <p class="text-muted">No sell trades have been linked to buy trades.</p>
-                        </div>
-                    <?php else: ?>
-                        <div class="table-responsive">
-                            <table class="table table-hover">
-                                <thead>
-                                    <tr>
-                                        <th>Trade Ref</th>
-                                        <th>Client</th>
-                                        <th>Counterparty</th>
-                                        <th>Security</th>
-                                        <th>Amount</th>
-                                        <th>Settlement Date</th>
-                                        <th>Linked To</th>
-                                        <th>Linked Security</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php foreach ($linked_trades as $trade): ?>
-                                        <tr>
-                                            <td><?php echo htmlspecialchars($trade['trade_reference']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['client_name']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['counterparty_name']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['security_id']); ?></td>
-                                            <td class="fw-bold text-info">TZS <?php echo number_format($trade['consideration'], 2); ?></td>
-                                            <td>
-                                                <?php 
-                                                if (!empty($trade['settlement_date']) && $trade['settlement_date'] != '0000-00-00') {
-                                                    echo date('Y-m-d', strtotime($trade['settlement_date']));
-                                                } else {
-                                                    echo 'N/A';
-                                                }
-                                                ?>
-                                            </td>
-                                            <td>
-                                                <?php if ($trade['linked_trade_ref']): ?>
-                                                    <?php echo htmlspecialchars($trade['linked_trade_ref']); ?>
-                                                <?php else: ?>
-                                                    Buy #<?php echo $trade['linked_trade_id']; ?>
-                                                <?php endif; ?>
-                                            </td>
-                                            <td>
-                                                <?php if ($trade['linked_security']): ?>
-                                                    <?php echo htmlspecialchars($trade['linked_security']); ?>
-                                                <?php else: ?>
-                                                    N/A
-                                                <?php endif; ?>
-                                            </td>
-                                            <td>
-                                                <div class="btn-group btn-group-sm">
-                                                    <button type="button" class="btn btn-outline-info btn-sm" onclick="showLinkedDetails(<?php echo $trade['id']; ?>, <?php echo $trade['linked_trade_id']; ?>, '<?php echo addslashes($trade['linked_trade_ref']); ?>', '<?php echo addslashes($trade['linked_client_name']); ?>', '<?php echo addslashes($trade['linked_security']); ?>', '<?php echo $trade['linked_amount']; ?>')">
-                                                        <i class="bi bi-eye"></i> View Link
-                                                    </button>
-                                                    <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
-                                                        <i class="bi bi-file-earmark-text"></i>
-                                                    </a>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
-                        </div>
-                    <?php endif; ?>
-                </div>
-                
-                <!-- Failed Tab -->
-                <div class="tab-pane fade" id="failed" role="tabpanel">
-                    <?php 
-                    $failed_trades = array_filter($settlement_trades, function($trade) {
-                        return $trade['settlement_status'] === 'failed';
-                    });
-                    ?>
-                    <?php if (empty($failed_trades)): ?>
-                        <div class="text-center py-5">
-                            <i class="bi bi-check-circle text-muted" style="font-size: 4rem; opacity: 0.3;"></i>
-                            <h5 class="text-muted mt-3">No Failed Settlements</h5>
-                            <p class="text-muted">All settlements are processed successfully.</p>
-                        </div>
-                    <?php else: ?>
-                        <div class="table-responsive">
-                            <table class="table table-hover">
-                                <thead>
-                                    <tr>
-                                        <th>Trade Ref</th>
-                                        <th>Client</th>
-                                        <th>Counterparty</th>
-                                        <th>Security</th>
-                                        <th>Side</th>
-                                        <th>Amount</th>
-                                        <th>Settlement Date</th>
-                                        <th>Failure Reason</th>
-                                        <th>Action Needed</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php foreach ($failed_trades as $trade): ?>
-                                        <tr>
-                                            <td><?php echo htmlspecialchars($trade['trade_reference']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['client_name']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['counterparty_name']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['security_id']); ?></td>
-                                            <td>
-                                                <span class="badge bg-<?php echo strtolower($trade['trade_side']) == 'buy' ? 'success' : 'danger'; ?>">
-                                                    <?php echo ucfirst($trade['trade_side']); ?>
-                                                </span>
-                                            </td>
-                                            <td class="fw-bold text-dark">TZS <?php echo number_format($trade['consideration'], 2); ?></td>
-                                            <td>
-                                                <?php 
-                                                if (!empty($trade['settlement_date']) && $trade['settlement_date'] != '0000-00-00') {
-                                                    echo date('Y-m-d', strtotime($trade['settlement_date']));
-                                                } else {
-                                                    echo 'N/A';
-                                                }
-                                                ?>
-                                            </td>
-                                            <td><?php echo htmlspecialchars($trade['failure_reason']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['action_needed']); ?></td>
-                                            <td>
-                                                <div class="btn-group btn-group-sm">
-                                                    <button type="button" class="btn btn-outline-warning btn-sm" data-bs-toggle="modal" data-bs-target="#failureDetailsModal" 
-                                                            onclick="showFailureDetails(<?php echo $trade['id']; ?>, '<?php echo addslashes($trade['failure_reason']); ?>', '<?php echo addslashes($trade['action_needed']); ?>')">
-                                                        <i class="bi bi-info-circle"></i> Details
-                                                    </button>
-                                                    <button type="button" class="btn btn-outline-success btn-sm" onclick="retryFailed(<?php echo $trade['id']; ?>)">
-                                                        <i class="bi bi-arrow-repeat"></i> Retry
-                                                    </button>
-                                                    <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
-                                                        <i class="bi bi-file-earmark-text"></i>
-                                                    </a>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
-                        </div>
                     <?php endif; ?>
                 </div>
             </div>
@@ -2078,7 +1649,87 @@ include '../includes/header.php';
     </div>
 </div>
 
-<!-- Single Payment Modal -->
+<!-- ============================================ -->
+<!-- MODALS -->
+<!-- ============================================ -->
+
+<!-- Link Trade Modal - Updated to show grouped buy trades -->
+<div class="modal fade" id="linkTradeModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-info">
+                <h5 class="modal-title"><i class="bi bi-link me-2"></i>Link Sale to Buy Trade(s)</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="linkTradeForm" method="POST">
+                <input type="hidden" name="trade_id" id="linkTradeId">
+                <input type="hidden" name="link_trade" value="1">
+                
+                <div class="modal-body">
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle me-2"></i>
+                        <strong>Important:</strong> Linking a sale to buy trade(s) will:
+                        <ul class="mb-0 mt-2">
+                            <li>Mark both trades as <strong>linked</strong> in the settlement page</li>
+                            <li>Update the <strong>order_sheet</strong> status to "linked"</li>
+                            <li>The buy trade(s) will <strong>NOT</strong> require a receipt upload in order_sheet</li>
+                            <li>If multiple buy trades of same security/date exist, they are grouped together</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Current Sale Trade:</label>
+                        <div class="p-3 bg-light rounded" id="currentSaleDetails">
+                            <span class="text-muted">Loading sale trade details...</span>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Available Buy Trades for this Client:</label>
+                        <div id="buyTradesContainer">
+                            <div class="text-center py-3">
+                                <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+                                <span class="ms-2">Loading buy trades...</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="alert alert-warning" id="noBuyTradesWarning" style="display: none;">
+                        <i class="bi bi-exclamation-triangle me-2"></i>
+                        No available buy trades found for this client. Buy trades must be active and not already settled/linked.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-info" id="linkSubmitBtn">Link Selected Trades</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Grouped Trades Details Modal -->
+<div class="modal fade" id="groupedTradesModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-primary">
+                <h5 class="modal-title"><i class="bi bi-layers me-2"></i>Grouped Trade Details</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="groupedTradesContent">
+                <div class="text-center py-3">
+                    <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+                    <span class="ms-2">Loading trade details...</span>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Payment Modal -->
 <div class="modal fade" id="paymentModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
@@ -2196,79 +1847,557 @@ include '../includes/header.php';
     </div>
 </div>
 
-<!-- Link Trade Modal -->
-<div class="modal fade" id="linkTradeModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header bg-info">
-                <h5 class="modal-title">Link Sale to Buy Trade</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <form id="linkTradeForm" method="POST">
-                <input type="hidden" name="trade_id" id="linkTradeId">
-                <input type="hidden" name="link_trade" value="1">
-                
-                <div class="modal-body">
-                    <div class="mb-3">
-                        <label for="linked_trade_id" class="form-label">Select Buy Trade to Link <span class="text-danger">*</span></label>
-                        <select class="form-select" id="linked_trade_id" name="linked_trade_id" required>
-                            <option value="">Select Buy Trade</option>
-                            <?php 
-                            $buy_trades = array_filter($all_trades, function($trade) {
-                                return $trade['trade_side'] === 'buy' && $trade['settlement_status'] !== 'linked';
-                            });
-                            foreach ($buy_trades as $trade): ?>
-                                <option value="<?php echo $trade['id']; ?>">
-                                    <?php echo htmlspecialchars($trade['trade_reference'] . ' - ' . $trade['client_name'] . ' - ' . $trade['security_id'] . ' - TZS ' . number_format($trade['consideration'], 2)); ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    
-                    <div class="alert alert-info">
-                        <i class="bi bi-info-circle me-2"></i>
-                        Linking this sale to a buy trade will mark it as settled without payment. The buy trade will not require separate payment receipt.
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-info">Link Trade</button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
+<script>
+// ============================================
+// JAVASCRIPT
+// ============================================
 
-<!-- Linked Details Modal -->
-<div class="modal fade" id="linkedDetailsModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header bg-info">
-                <h5 class="modal-title">Trade Link Details</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="mb-3">
-                    <label class="form-label fw-bold">Sale Trade:</label>
-                    <div class="p-3 bg-light rounded" id="linkedSaleDetails"></div>
-                </div>
+let currentTradeId = null;
+let selectedTradeIds = [];
+
+// Bulk selection functions
+function toggleSelectAll(checkbox) {
+    const checkboxes = document.querySelectorAll('.trade-checkbox');
+    checkboxes.forEach(cb => {
+        cb.checked = checkbox.checked;
+        if (checkbox.checked) {
+            if (!selectedTradeIds.includes(cb.value)) {
+                selectedTradeIds.push(cb.value);
+            }
+        } else {
+            const index = selectedTradeIds.indexOf(cb.value);
+            if (index > -1) {
+                selectedTradeIds.splice(index, 1);
+            }
+        }
+    });
+    updateBulkActions();
+}
+
+function updateBulkActions() {
+    const checkboxes = document.querySelectorAll('.trade-checkbox:checked');
+    selectedTradeIds = Array.from(checkboxes).map(cb => cb.value);
+    const selectedCount = selectedTradeIds.length;
+    const floatingBtn = document.getElementById('floatingBulkPayment');
+    const badge = document.getElementById('selectedCountBadge');
+    
+    badge.textContent = selectedCount;
+    
+    if (selectedCount > 0) {
+        floatingBtn.style.display = 'block';
+    } else {
+        floatingBtn.style.display = 'none';
+    }
+}
+
+function resetFilters() {
+    window.location.href = 'settlement';
+}
+
+// ============================================
+// SHOW LINK TRADE MODAL - UPDATED
+// ============================================
+function showLinkTradeModal(tradeId) {
+    currentTradeId = tradeId;
+    document.getElementById('linkTradeId').value = tradeId;
+    document.getElementById('linkTradeForm').reset();
+    
+    // Show sale trade details
+    const saleDetails = document.getElementById('currentSaleDetails');
+    saleDetails.innerHTML = '<span class="text-muted">Loading sale trade details...</span>';
+    
+    // Fetch sale trade details
+    fetch(`?ajax=get_trade_details&trade_id=${tradeId}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data && data.trade_reference) {
+                saleDetails.innerHTML = `
+                    <strong>Trade Ref:</strong> ${data.trade_reference}<br>
+                    <strong>Client:</strong> ${data.client_name}<br>
+                    <strong>Security:</strong> ${data.security_id}<br>
+                    <strong>Amount:</strong> TZS ${parseFloat(data.total_consideration || data.consideration || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}<br>
+                    <strong>Side:</strong> ${data.trade_side.toUpperCase()}
+                    ${data.trade_count > 1 ? `<br><strong>Grouped Trades:</strong> ${data.trade_count} trades` : ''}
+                `;
+            } else {
+                saleDetails.innerHTML = '<span class="text-muted">Error loading trade details</span>';
+            }
+        })
+        .catch(() => {
+            saleDetails.innerHTML = '<span class="text-muted">Error loading trade details</span>';
+        });
+    
+    // Fetch grouped buy trades for this client
+    fetch(`?ajax=get_grouped_buy_trades&trade_id=${tradeId}`)
+        .then(response => response.json())
+        .then(data => {
+            const container = document.getElementById('buyTradesContainer');
+            const warning = document.getElementById('noBuyTradesWarning');
+            
+            if (data && data.length > 0) {
+                warning.style.display = 'none';
+                let html = `
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover">
+                            <thead>
+                                <tr>
+                                    <th><input type="checkbox" id="selectAllBuy" onchange="toggleSelectAllBuy(this)"></th>
+                                    <th>Reference(s)</th>
+                                    <th>Security</th>
+                                    <th class="text-end">Qty</th>
+                                    <th class="text-end">Amount</th>
+                                    <th>Date</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                `;
                 
-                <div class="mb-3">
-                    <label class="form-label fw-bold">Linked Buy Trade:</label>
-                    <div class="p-3 bg-light rounded" id="linkedBuyDetails"></div>
-                </div>
+                data.forEach((trade, index) => {
+                    const tradeCount = parseInt(trade.trade_count) || 1;
+                    const refs = trade.trade_references ? trade.trade_references.split(',') : [];
+                    const displayRef = refs.length > 0 ? refs[0] : trade.trade_reference || 'N/A';
+                    
+                    html += `
+                        <tr>
+                            <td><input type="checkbox" class="buy-trade-checkbox" name="linked_trade_ids[]" value="${trade.id}" onchange="updateLinkSelection()"></td>
+                            <td>
+                                ${displayRef}
+                                ${tradeCount > 1 ? `<br><small class="text-muted">+${tradeCount - 1} more</small>` : ''}
+                            </td>
+                            <td>${trade.security_id}</td>
+                            <td class="text-end">${parseFloat(trade.total_quantity).toLocaleString()}</td>
+                            <td class="text-end">TZS ${parseFloat(trade.total_consideration).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                            <td>${trade.trade_date}</td>
+                            <td><span class="badge bg-${trade.settlement_status ? 'secondary' : 'warning'}">${trade.settlement_status || 'Pending'}</span></td>
+                        </tr>
+                    `;
+                });
                 
-                <div class="alert alert-info">
-                    <i class="bi bi-info-circle me-2"></i>
-                    These trades are linked. The sale proceeds were used to purchase the linked instrument.
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-            </div>
-        </div>
-    </div>
-</div>
+                html += `
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="mt-2">
+                        <small class="text-muted">Select one or more buy trades to link with this sale. Multiple trades of same security/date are grouped together.</small>
+                    </div>
+                `;
+                
+                container.innerHTML = html;
+            } else {
+                container.innerHTML = '';
+                warning.style.display = 'block';
+            }
+            
+            updateLinkSelection();
+        })
+        .catch(error => {
+            console.error('Error fetching buy trades:', error);
+            document.getElementById('buyTradesContainer').innerHTML = '<div class="alert alert-danger">Error loading buy trades. Please try again.</div>';
+            document.getElementById('noBuyTradesWarning').style.display = 'none';
+        });
+    
+    const linkModal = new bootstrap.Modal(document.getElementById('linkTradeModal'));
+    linkModal.show();
+}
+
+function toggleSelectAllBuy(checkbox) {
+    const checkboxes = document.querySelectorAll('.buy-trade-checkbox');
+    checkboxes.forEach(cb => {
+        cb.checked = checkbox.checked;
+    });
+    updateLinkSelection();
+}
+
+function updateLinkSelection() {
+    const checked = document.querySelectorAll('.buy-trade-checkbox:checked').length;
+    const btn = document.getElementById('linkSubmitBtn');
+    if (checked > 0) {
+        btn.innerHTML = `Link ${checked} Trade${checked > 1 ? 's' : ''}`;
+        btn.disabled = false;
+    } else {
+        btn.innerHTML = 'Select at least one trade';
+        btn.disabled = true;
+    }
+}
+
+// ============================================
+// SHOW GROUPED TRADES DETAILS
+// ============================================
+function showGroupedTrades(tradeId) {
+    const modal = new bootstrap.Modal(document.getElementById('groupedTradesModal'));
+    const content = document.getElementById('groupedTradesContent');
+    content.innerHTML = '<div class="text-center py-3"><div class="spinner-border spinner-border-sm text-primary" role="status"></div><span class="ms-2">Loading trade details...</span></div>';
+    modal.show();
+    
+    fetch(`?ajax=get_grouped_trade_details&trade_id=${tradeId}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data && data.length > 0) {
+                let html = `
+                    <div class="table-responsive">
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Trade Ref</th>
+                                    <th>Security</th>
+                                    <th class="text-end">Qty</th>
+                                    <th class="text-end">Price</th>
+                                    <th class="text-end">Amount</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                `;
+                
+                data.forEach((trade, index) => {
+                    html += `
+                        <tr>
+                            <td>${index + 1}</td>
+                            <td>${trade.trade_reference}</td>
+                            <td>${trade.security_id}</td>
+                            <td class="text-end">${parseFloat(trade.quantity).toLocaleString()}</td>
+                            <td class="text-end">${parseFloat(trade.price).toFixed(2)}</td>
+                            <td class="text-end">TZS ${parseFloat(trade.consideration).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                        </tr>
+                    `;
+                });
+                
+                html += `
+                            </tbody>
+                            <tfoot>
+                                <tr class="fw-bold">
+                                    <td colspan="3" class="text-end">TOTAL:</td>
+                                    <td class="text-end">${data.reduce((sum, t) => sum + parseFloat(t.quantity), 0).toLocaleString()}</td>
+                                    <td></td>
+                                    <td class="text-end">TZS ${data.reduce((sum, t) => sum + parseFloat(t.consideration), 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                `;
+                content.innerHTML = html;
+            } else {
+                content.innerHTML = '<div class="alert alert-warning">No trade details found.</div>';
+            }
+        })
+        .catch(() => {
+            content.innerHTML = '<div class="alert alert-danger">Error loading trade details.</div>';
+        });
+}
+
+// ============================================
+// OTHER FUNCTIONS
+// ============================================
+function showPaymentModal(tradeId) {
+    currentTradeId = tradeId;
+    document.getElementById('paymentTradeId').value = tradeId;
+    document.getElementById('paymentForm').reset();
+    document.getElementById('bankAccountField').style.display = 'none';
+    document.getElementById('bankBalanceInfo').textContent = '';
+    
+    const paymentModal = new bootstrap.Modal(document.getElementById('paymentModal'));
+    paymentModal.show();
+}
+
+function toggleBankSelection() {
+    const paymentMode = document.getElementById('payment_mode').value;
+    const bankField = document.getElementById('bankAccountField');
+    const bankSelect = document.getElementById('bank_account');
+    const balanceInfo = document.getElementById('bankBalanceInfo');
+    
+    const bankMethods = ['1', '2', '3'];
+    
+    if (bankMethods.includes(paymentMode)) {
+        bankField.style.display = 'block';
+        bankSelect.required = true;
+        
+        bankSelect.addEventListener('change', function() {
+            const selectedOption = this.options[this.selectedIndex];
+            if (selectedOption && selectedOption.value) {
+                const balance = selectedOption.getAttribute('data-balance');
+                const currency = selectedOption.getAttribute('data-currency');
+                balanceInfo.textContent = `Current Balance: ${currency} ${parseFloat(balance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+            } else {
+                balanceInfo.textContent = '';
+            }
+        });
+        
+        bankSelect.selectedIndex = 0;
+        bankSelect.dispatchEvent(new Event('change'));
+    } else {
+        bankField.style.display = 'none';
+        bankSelect.required = false;
+        balanceInfo.textContent = '';
+    }
+}
+
+function showBulkPaymentModal() {
+    if (selectedTradeIds.length === 0) {
+        alert('Please select at least one trade to pay.');
+        return;
+    }
+    
+    let validTrades = [];
+    let invalidTrades = [];
+    
+    const checkboxes = document.querySelectorAll('.trade-checkbox:checked');
+    checkboxes.forEach(cb => {
+        const row = cb.closest('tr');
+        const statusBadge = row.querySelector('.badge');
+        if (statusBadge) {
+            const statusText = statusBadge.textContent.trim();
+            if (statusText.includes('Paid') || statusText.includes('Linked') || statusText.includes('Failed')) {
+                const tradeRef = row.querySelector('td:nth-child(2) .fw-semibold').textContent;
+                invalidTrades.push(tradeRef);
+            } else {
+                validTrades.push(cb.value);
+            }
+        }
+    });
+    
+    if (invalidTrades.length > 0) {
+        alert('Some selected trades are already paid, linked, or failed:\n' + invalidTrades.join(', ') + '\n\nOnly unpaid trades will be processed.');
+    }
+    
+    if (validTrades.length === 0) {
+        alert('No valid unpaid trades selected.');
+        return;
+    }
+    
+    const container = document.getElementById('bulkPaymentTradeIds');
+    container.innerHTML = '';
+    
+    validTrades.forEach(tradeId => {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'trade_ids[]';
+        input.value = tradeId;
+        container.appendChild(input);
+    });
+    
+    document.getElementById('bulkPaymentCount').textContent = validTrades.length;
+    document.getElementById('bulkPaymentForm').reset();
+    document.getElementById('bulkBankAccountField').style.display = 'none';
+    document.getElementById('bulkBankBalanceInfo').textContent = '';
+    
+    const bulkPaymentModal = new bootstrap.Modal(document.getElementById('bulkPaymentModal'));
+    bulkPaymentModal.show();
+}
+
+function toggleBulkBankSelection() {
+    const paymentMode = document.getElementById('bulk_payment_mode').value;
+    const bankField = document.getElementById('bulkBankAccountField');
+    const bankSelect = document.getElementById('bulk_bank_account');
+    const balanceInfo = document.getElementById('bulkBankBalanceInfo');
+    
+    const bankMethods = ['1', '2', '3'];
+    
+    if (bankMethods.includes(paymentMode)) {
+        bankField.style.display = 'block';
+        bankSelect.required = true;
+        
+        bankSelect.addEventListener('change', function() {
+            const selectedOption = this.options[this.selectedIndex];
+            if (selectedOption && selectedOption.value) {
+                const balance = selectedOption.getAttribute('data-balance');
+                const currency = selectedOption.getAttribute('data-currency');
+                balanceInfo.textContent = `Current Balance: ${currency} ${parseFloat(balance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+            } else {
+                balanceInfo.textContent = '';
+            }
+        });
+        
+        bankSelect.selectedIndex = 0;
+        bankSelect.dispatchEvent(new Event('change'));
+    } else {
+        bankField.style.display = 'none';
+        bankSelect.required = false;
+        balanceInfo.textContent = '';
+    }
+}
+
+function markAsUnpaid(tradeId) {
+    if (confirm('Are you sure you want to undo this payment? This will mark the trade as unpaid and deactivate the payment record.')) {
+        document.getElementById('unpaidTradeId').value = tradeId;
+        document.getElementById('unpaidForm').submit();
+    }
+}
+
+function markAsFailed(tradeId) {
+    currentTradeId = tradeId;
+    document.getElementById('failureTradeId').value = tradeId;
+    document.getElementById('failureForm').reset();
+    
+    const failureModal = new bootstrap.Modal(document.getElementById('failureModal'));
+    failureModal.show();
+}
+
+function retryFailed(tradeId) {
+    if (confirm('Reset this failed trade for payment retry?')) {
+        document.getElementById('retryTradeId').value = tradeId;
+        document.getElementById('retryFailedForm').submit();
+    }
+}
+
+// ============================================
+// AJAX HANDLERS
+// ============================================
+<?php
+if (isset($_GET['ajax'])) {
+    header('Content-Type: application/json');
+    
+    if ($_GET['ajax'] == 'get_trade_details') {
+        $trade_id = (int)$_GET['trade_id'];
+        try {
+            $stmt = $db->prepare("
+                SELECT t.*, 
+                       COUNT(t2.id) as trade_count,
+                       GROUP_CONCAT(t2.trade_reference SEPARATOR ',') as all_references
+                FROM trades t
+                LEFT JOIN trades t2 ON t2.client_name = t.client_name 
+                    AND t2.security_id = t.security_id 
+                    AND DATE(t2.trade_date) = DATE(t.trade_date)
+                    AND t2.id != t.id
+                    AND t2.status = 'active'
+                WHERE t.id = ?
+                GROUP BY t.id
+            ");
+            $stmt->execute([$trade_id]);
+            $trade = $stmt->fetch();
+            echo json_encode($trade ?: []);
+            exit;
+        } catch (Exception $e) {
+            echo json_encode([]);
+            exit;
+        }
+    }
+    
+    if ($_GET['ajax'] == 'get_grouped_buy_trades') {
+        $trade_id = (int)$_GET['trade_id'];
+        try {
+            // Get the sale trade to find the client
+            $stmt = $db->prepare("SELECT client_name FROM trades WHERE id = ?");
+            $stmt->execute([$trade_id]);
+            $sale_trade = $stmt->fetch();
+            
+            if (!$sale_trade) {
+                echo json_encode([]);
+                exit;
+            }
+            
+            $client_name = $sale_trade['client_name'];
+            
+            // Get grouped buy trades for this client
+            $sql = "
+                SELECT 
+                    MIN(t.id) as id,
+                    t.client_name,
+                    t.client_cds_account,
+                    t.security_id,
+                    t.security_name,
+                    t.asset_class,
+                    t.trade_side,
+                    DATE(t.trade_date) as trade_date,
+                    MIN(t.settlement_date) as settlement_date,
+                    SUM(t.quantity) as total_quantity,
+                    AVG(t.price) as avg_price,
+                    SUM(t.consideration) as total_consideration,
+                    COUNT(t.id) as trade_count,
+                    GROUP_CONCAT(t.id SEPARATOR ',') as trade_ids,
+                    GROUP_CONCAT(t.trade_reference SEPARATOR ',') as trade_references,
+                    MIN(t.exchange_reference) as exchange_reference,
+                    MIN(t.additional_reference) as additional_reference,
+                    ANY_VALUE(t.settlement_status) as settlement_status
+                FROM trades t
+                WHERE t.client_name = ?
+                AND t.trade_side = 'buy'
+                AND t.status = 'active'
+                AND (t.settlement_status IS NULL OR t.settlement_status NOT IN ('settled', 'linked', 'paid'))
+                AND t.id != ?
+                GROUP BY 
+                    t.client_name, 
+                    t.client_cds_account,
+                    t.security_id,
+                    t.security_name,
+                    t.asset_class,
+                    DATE(t.trade_date)
+                ORDER BY MIN(t.settlement_date) ASC, MIN(t.trade_date) ASC
+            ";
+            $stmt = $db->prepare($sql);
+            $stmt->execute([$client_name, $trade_id]);
+            $trades = $stmt->fetchAll();
+            echo json_encode($trades);
+            exit;
+        } catch (Exception $e) {
+            error_log("Error fetching grouped buy trades: " . $e->getMessage());
+            echo json_encode([]);
+            exit;
+        }
+    }
+    
+    if ($_GET['ajax'] == 'get_grouped_trade_details') {
+        $trade_id = (int)$_GET['trade_id'];
+        try {
+            // Get the trade to find the group
+            $stmt = $db->prepare("
+                SELECT client_name, security_id, DATE(trade_date) as trade_date 
+                FROM trades WHERE id = ?
+            ");
+            $stmt->execute([$trade_id]);
+            $trade = $stmt->fetch();
+            
+            if (!$trade) {
+                echo json_encode([]);
+                exit;
+            }
+            
+            // Get all trades in the same group
+            $sql = "
+                SELECT * FROM trades 
+                WHERE client_name = ? 
+                AND security_id = ? 
+                AND DATE(trade_date) = ? 
+                AND status = 'active'
+                ORDER BY trade_date ASC, id ASC
+            ";
+            $stmt = $db->prepare($sql);
+            $stmt->execute([$trade['client_name'], $trade['security_id'], $trade['trade_date']]);
+            $trades = $stmt->fetchAll();
+            echo json_encode($trades);
+            exit;
+        } catch (Exception $e) {
+            error_log("Error fetching grouped trade details: " . $e->getMessage());
+            echo json_encode([]);
+            exit;
+        }
+    }
+    
+    echo json_encode([]);
+    exit;
+}
+?>
+
+// Initialize when page loads
+document.addEventListener('DOMContentLoaded', function() {
+    const checkboxes = document.querySelectorAll('.trade-checkbox');
+    checkboxes.forEach(cb => {
+        cb.addEventListener('change', updateBulkActions);
+    });
+    updateBulkActions();
+});
+</script>
+
+<!-- Hidden forms -->
+<form id="unpaidForm" method="POST" style="display: none;">
+    <input type="hidden" name="trade_id" id="unpaidTradeId">
+    <input type="hidden" name="mark_unpaid" value="1">
+</form>
+
+<form id="retryFailedForm" method="POST" style="display: none;">
+    <input type="hidden" name="trade_id" id="retryTradeId">
+    <input type="hidden" name="retry_failed" value="1">
+</form>
 
 <!-- Failure Modal -->
 <div class="modal fade" id="failureModal" tabindex="-1">
@@ -2276,7 +2405,7 @@ include '../includes/header.php';
         <div class="modal-content">
             <div class="modal-header bg-warning">
                 <h5 class="modal-title">Mark Settlement as Failed</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <form id="failureForm" method="POST">
                 <input type="hidden" name="trade_id" id="failureTradeId">
@@ -2316,7 +2445,7 @@ include '../includes/header.php';
 <div class="modal fade" id="failureDetailsModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header bg-dark">
+            <div class="modal-header bg-dark text-white">
                 <h5 class="modal-title">Failure Details</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
@@ -2337,413 +2466,5 @@ include '../includes/header.php';
         </div>
     </div>
 </div>
-
-<!-- Forms for other actions -->
-<form id="unpaidForm" method="POST" style="display: none;">
-    <input type="hidden" name="trade_id" id="unpaidTradeId">
-    <input type="hidden" name="mark_unpaid" value="1">
-</form>
-
-<form id="retryFailedForm" method="POST" style="display: none;">
-    <input type="hidden" name="trade_id" id="retryTradeId">
-    <input type="hidden" name="retry_failed" value="1">
-</form>
-
-<style>
-.floating-bulk-payment {
-    position: fixed;
-    bottom: 30px;
-    right: 30px;
-    z-index: 1000;
-}
-
-.floating-bulk-payment .btn {
-    width: 60px;
-    height: 60px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.5rem;
-}
-
-.floating-bulk-payment .badge {
-    font-size: 0.7rem;
-    padding: 0.25em 0.5em;
-}
-
-.trade-checkbox:checked {
-    background-color: var(--success-color);
-    border-color: var(--success-color);
-}
-
-.pagination .page-item.active .page-link {
-    background-color: var(--success-color);
-    border-color: var(--success-color);
-}
-</style>
-
-<script>
-// Trade ID for current actions
-let currentTradeId = null;
-let selectedTradeIds = [];
-
-// Bulk selection functions
-function toggleSelectAll(checkbox) {
-    const checkboxes = document.querySelectorAll('.trade-checkbox');
-    checkboxes.forEach(cb => {
-        cb.checked = checkbox.checked;
-        if (checkbox.checked) {
-            if (!selectedTradeIds.includes(cb.value)) {
-                selectedTradeIds.push(cb.value);
-            }
-        } else {
-            const index = selectedTradeIds.indexOf(cb.value);
-            if (index > -1) {
-                selectedTradeIds.splice(index, 1);
-            }
-        }
-    });
-    updateBulkActions();
-}
-
-function updateBulkActions() {
-    const checkboxes = document.querySelectorAll('.trade-checkbox:checked');
-    selectedTradeIds = Array.from(checkboxes).map(cb => cb.value);
-    const selectedCount = selectedTradeIds.length;
-    const floatingBtn = document.getElementById('floatingBulkPayment');
-    const badge = document.getElementById('selectedCountBadge');
-    
-    badge.textContent = selectedCount;
-    
-    if (selectedCount > 0) {
-        floatingBtn.style.display = 'block';
-    } else {
-        floatingBtn.style.display = 'none';
-    }
-}
-
-function clearSelection() {
-    const checkboxes = document.querySelectorAll('.trade-checkbox');
-    checkboxes.forEach(cb => cb.checked = false);
-    document.getElementById('selectAll').checked = false;
-    selectedTradeIds = [];
-    updateBulkActions();
-}
-
-function resetFilters() {
-    window.location.href = 'settlement';
-}
-
-// Single payment functions
-function showPaymentModal(tradeId) {
-    currentTradeId = tradeId;
-    document.getElementById('paymentTradeId').value = tradeId;
-    document.getElementById('paymentForm').reset();
-    document.getElementById('bankAccountField').style.display = 'none';
-    document.getElementById('bankBalanceInfo').textContent = '';
-    
-    const paymentModal = new bootstrap.Modal(document.getElementById('paymentModal'));
-    paymentModal.show();
-}
-
-function toggleBankSelection() {
-    const paymentMode = document.getElementById('payment_mode').value;
-    const bankField = document.getElementById('bankAccountField');
-    const bankSelect = document.getElementById('bank_account');
-    const balanceInfo = document.getElementById('bankBalanceInfo');
-    
-    // Show bank selection only for methods that require bank transfer
-    // Bank transfer methods typically have IDs like 1, 2, 3, etc.
-    // You need to update these based on your payment_methods table
-    const bankMethods = ['1', '2', '3']; // Example IDs for bank transfer methods
-    
-    if (bankMethods.includes(paymentMode)) {
-        bankField.style.display = 'block';
-        bankSelect.required = true;
-        
-        bankSelect.addEventListener('change', function() {
-            const selectedOption = this.options[this.selectedIndex];
-            if (selectedOption && selectedOption.value) {
-                const balance = selectedOption.getAttribute('data-balance');
-                const currency = selectedOption.getAttribute('data-currency');
-                balanceInfo.textContent = `Current Balance: ${currency} ${parseFloat(balance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-            } else {
-                balanceInfo.textContent = '';
-            }
-        });
-        
-        // Reset and trigger change
-        bankSelect.selectedIndex = 0;
-        bankSelect.dispatchEvent(new Event('change'));
-    } else {
-        bankField.style.display = 'none';
-        bankSelect.required = false;
-        balanceInfo.textContent = '';
-    }
-}
-
-// Bulk payment functions
-function showBulkPaymentModal() {
-    if (selectedTradeIds.length === 0) {
-        alert('Please select at least one trade to pay.');
-        return;
-    }
-    
-    // Validate that selected trades are not already paid/linked
-    let validTrades = [];
-    let invalidTrades = [];
-    
-    const checkboxes = document.querySelectorAll('.trade-checkbox:checked');
-    checkboxes.forEach(cb => {
-        const row = cb.closest('tr');
-        const statusBadge = row.querySelector('.badge');
-        if (statusBadge) {
-            const statusText = statusBadge.textContent.trim();
-            if (statusText.includes('Paid') || statusText.includes('Linked') || statusText.includes('Failed')) {
-                const tradeRef = row.querySelector('td:nth-child(2) .fw-semibold').textContent;
-                invalidTrades.push(tradeRef);
-            } else {
-                validTrades.push(cb.value);
-            }
-        }
-    });
-    
-    if (invalidTrades.length > 0) {
-        alert('Some selected trades are already paid, linked, or failed:\n' + invalidTrades.join(', ') + '\n\nOnly unpaid trades will be processed.');
-    }
-    
-    if (validTrades.length === 0) {
-        alert('No valid unpaid trades selected.');
-        return;
-    }
-    
-    // Create hidden inputs for trade IDs
-    const container = document.getElementById('bulkPaymentTradeIds');
-    container.innerHTML = '';
-    
-    validTrades.forEach(tradeId => {
-        const input = document.createElement('input');
-        input.type = 'hidden';
-        input.name = 'trade_ids[]';
-        input.value = tradeId;
-        container.appendChild(input);
-    });
-    
-    // Update count
-    document.getElementById('bulkPaymentCount').textContent = validTrades.length;
-    
-    // Reset form and show modal
-    document.getElementById('bulkPaymentForm').reset();
-    document.getElementById('bulkBankAccountField').style.display = 'none';
-    document.getElementById('bulkBankBalanceInfo').textContent = '';
-    
-    const bulkPaymentModal = new bootstrap.Modal(document.getElementById('bulkPaymentModal'));
-    bulkPaymentModal.show();
-}
-
-function toggleBulkBankSelection() {
-    const paymentMode = document.getElementById('bulk_payment_mode').value;
-    const bankField = document.getElementById('bulkBankAccountField');
-    const bankSelect = document.getElementById('bulk_bank_account');
-    const balanceInfo = document.getElementById('bulkBankBalanceInfo');
-    
-    // Show bank selection only for methods that require bank transfer
-    const bankMethods = ['1', '2', '3']; // Example IDs for bank transfer methods
-    
-    if (bankMethods.includes(paymentMode)) {
-        bankField.style.display = 'block';
-        bankSelect.required = true;
-        
-        bankSelect.addEventListener('change', function() {
-            const selectedOption = this.options[this.selectedIndex];
-            if (selectedOption && selectedOption.value) {
-                const balance = selectedOption.getAttribute('data-balance');
-                const currency = selectedOption.getAttribute('data-currency');
-                balanceInfo.textContent = `Current Balance: ${currency} ${parseFloat(balance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-            } else {
-                balanceInfo.textContent = '';
-            }
-        });
-        
-        // Reset and trigger change
-        bankSelect.selectedIndex = 0;
-        bankSelect.dispatchEvent(new Event('change'));
-    } else {
-        bankField.style.display = 'none';
-        bankSelect.required = false;
-        balanceInfo.textContent = '';
-    }
-}
-
-// Link trade functions
-function showLinkTradeModal(tradeId) {
-    currentTradeId = tradeId;
-    document.getElementById('linkTradeId').value = tradeId;
-    document.getElementById('linkTradeForm').reset();
-    
-    const linkModal = new bootstrap.Modal(document.getElementById('linkTradeModal'));
-    linkModal.show();
-}
-
-function showLinkedDetails(tradeId, linkedTradeId, linkedRef, linkedClient, linkedSecurity, linkedAmount) {
-    document.getElementById('linkedSaleDetails').innerHTML = `
-        <strong>Trade ID:</strong> ${tradeId}<br>
-        <strong>Status:</strong> Linked<br>
-        <strong>Linked To:</strong> Buy Trade #${linkedTradeId}
-    `;
-    
-    document.getElementById('linkedBuyDetails').innerHTML = `
-        <strong>Trade Reference:</strong> ${linkedRef || 'N/A'}<br>
-        <strong>Client:</strong> ${linkedClient || 'N/A'}<br>
-        <strong>Security:</strong> ${linkedSecurity || 'N/A'}<br>
-        <strong>Amount:</strong> TZS ${parseFloat(linkedAmount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) || 'N/A'}<br>
-        <strong>Trade ID:</strong> ${linkedTradeId}
-    `;
-    
-    const linkedModal = new bootstrap.Modal(document.getElementById('linkedDetailsModal'));
-    linkedModal.show();
-}
-
-// Single action functions
-function markAsUnpaid(tradeId) {
-    if (confirm('Are you sure you want to undo this payment? This will mark the trade as unpaid and deactivate the payment record.')) {
-        document.getElementById('unpaidTradeId').value = tradeId;
-        document.getElementById('unpaidForm').submit();
-    }
-}
-
-function markAsFailed(tradeId) {
-    currentTradeId = tradeId;
-    document.getElementById('failureTradeId').value = tradeId;
-    document.getElementById('failureForm').reset();
-    
-    const failureModal = new bootstrap.Modal(document.getElementById('failureModal'));
-    failureModal.show();
-}
-
-function retryFailed(tradeId) {
-    if (confirm('Reset this failed trade for payment retry?')) {
-        document.getElementById('retryTradeId').value = tradeId;
-        document.getElementById('retryFailedForm').submit();
-    }
-}
-
-function showFailureDetails(tradeId, reason, action) {
-    document.getElementById('detailsFailureReason').textContent = reason || 'No reason provided';
-    document.getElementById('detailsActionNeeded').textContent = action || 'No action specified';
-    
-    const detailsModal = new bootstrap.Modal(document.getElementById('failureDetailsModal'));
-    detailsModal.show();
-}
-
-// Initialize when page loads
-document.addEventListener('DOMContentLoaded', function() {
-    // Initialize tooltips
-    const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-    tooltipTriggerList.map(function (tooltipTriggerEl) {
-        return new bootstrap.Tooltip(tooltipTriggerEl);
-    });
-    
-    // Initialize checkboxes
-    const checkboxes = document.querySelectorAll('.trade-checkbox');
-    checkboxes.forEach(cb => {
-        cb.addEventListener('change', updateBulkActions);
-    });
-    
-    // Update bulk actions on page load
-    updateBulkActions();
-    
-    // Show debug info on Ctrl+Shift+D
-    document.addEventListener('keydown', function(e) {
-        if (e.ctrlKey && e.shiftKey && e.key === 'D') {
-            e.preventDefault();
-            const debugInfo = document.getElementById('debugInfo');
-            if (debugInfo) {
-                debugInfo.style.display = debugInfo.style.display === 'none' ? 'block' : 'none';
-            }
-        }
-    });
-});
-</script>
-
-<!-- Export Modal -->
-<div class="modal fade" id="exportModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header bg-primary text-white">
-                <h5 class="modal-title"><i class="bi bi-download me-2"></i>Export Settlement Report</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <form method="POST" action="export_settlement_contracts">
-                <div class="modal-body">
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">Export Type <span class="text-danger">*</span></label>
-                        <div class="d-flex gap-3">
-                            <div class="form-check">
-                                <input class="form-check-input" type="radio" name="export_type" id="exportTypeContract" value="contract_notes" checked>
-                                <label class="form-check-label" for="exportTypeContract">
-                                    <i class="bi bi-file-earmark-text text-primary me-1"></i> Contract Notes
-                                </label>
-                            </div>
-                            <div class="form-check">
-                                <input class="form-check-input" type="radio" name="export_type" id="exportTypeClient" value="client_list">
-                                <label class="form-check-label" for="exportTypeClient">
-                                    <i class="bi bi-people text-info me-1"></i> Client List
-                                </label>
-                            </div>
-                        </div>
-                        <small class="text-muted">
-                            <span id="exportTypeHelp">Combined contract notes for each client who traded on the selected date.</span>
-                        </small>
-                    </div>
-
-                    <div class="mb-3">
-                        <label for="export_date" class="form-label fw-bold">Settlement Date <span class="text-danger">*</span></label>
-                        <input type="date" class="form-control" id="export_date" name="export_date" value="<?php echo date('Y-m-d'); ?>" required>
-                        <small class="text-muted">Select the settlement date to export.</small>
-                    </div>
-
-                    <div class="mb-3">
-                        <label for="cds_filter" class="form-label fw-bold">CDS Account (Optional)</label>
-                        <input type="text" class="form-control" id="cds_filter" name="cds_filter" placeholder="Leave blank for all clients">
-                        <small class="text-muted">Filter by a specific CDS account number. Leave empty to include all clients.</small>
-                    </div>
-
-                    <div class="alert alert-info mb-0">
-                        <i class="bi bi-info-circle me-2"></i>
-                        <strong>Contract Notes:</strong> Generates a single PDF with contract notes grouped by client. Clients with multiple trades on the same security get a summary contract note with trade breakdown.
-                        <hr class="my-2">
-                        <strong>Client List:</strong> Generates a PDF report listing all clients and trades due for settlement on the selected date.
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">
-                        <i class="bi bi-download me-1"></i> Export PDF
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
-
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    const contractRadio = document.getElementById('exportTypeContract');
-    const clientRadio = document.getElementById('exportTypeClient');
-    const helpText = document.getElementById('exportTypeHelp');
-
-    function updateExportHelp() {
-        if (contractRadio.checked) {
-            helpText.textContent = 'Combined contract notes for each client who traded on the selected date.';
-        } else {
-            helpText.textContent = 'PDF list of all clients and their trades due for settlement on the selected date.';
-        }
-    }
-
-    contractRadio.addEventListener('change', updateExportHelp);
-    clientRadio.addEventListener('change', updateExportHelp);
-});
-</script>
 
 <?php include '../includes/footer.php'; ?>
