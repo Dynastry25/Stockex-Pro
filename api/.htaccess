@@ -1,0 +1,56 @@
+# API .htaccess Configuration
+
+# Enable RewriteEngine
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /api/
+    
+    # Allow test.html to be accessed directly
+    RewriteRule ^test\.html$ test.html [L]
+    
+    # Redirect to v1 by default
+    RewriteRule ^$ v1/index.php [L]
+    
+    # Allow access to docs folder
+    RewriteRule ^docs/(.*)$ docs/$1 [L]
+</IfModule>
+
+# Set default charset
+AddDefaultCharset UTF-8
+
+# Disable directory browsing
+Options -Indexes
+
+# Enable CORS
+# NOTE: CORS headers are now handled exclusively by PHP (api/config.php)
+# We remove any server-level CORS headers here to prevent duplication
+<IfModule mod_headers.c>
+    # CRITICAL: Unset any CORS headers that might be set by server/parent config
+    # This prevents duplicate "Access-Control-Allow-Origin" headers
+    Header unset Access-Control-Allow-Origin
+    Header unset Access-Control-Allow-Methods
+    Header unset Access-Control-Allow-Headers
+    
+    # DO NOT set CORS headers here - let PHP handle it via api/config.php
+    # This ensures single point of CORS configuration and prevents duplicates
+</IfModule>
+
+# Compression
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE application/json
+    AddOutputFilterByType DEFLATE text/html
+    AddOutputFilterByType DEFLATE text/plain
+</IfModule>
+
+# Cache control for API responses
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType application/json "access plus 5 minutes"
+</IfModule>
+
+# Security headers
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "DENY"
+    Header set X-XSS-Protection "1; mode=block"
+</IfModule>

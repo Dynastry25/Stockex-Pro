@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Exchange API Tester</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: #2d3748;
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            opacity: 0.8;
+            font-size: 1.1em;
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        .section {
+            margin-bottom: 30px;
+        }
+        
+        .section h2 {
+            color: #2d3748;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #667eea;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #2d3748;
+        }
+        
+        input, select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e2e8f0;
+            border-radius: 5px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        
+        input:focus, select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+        }
+        
+        .btn-secondary {
+            background: #48bb78;
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background: #38a169;
+        }
+        
+        .btn-info {
+            background: #4299e1;
+            color: white;
+        }
+        
+        .btn-info:hover {
+            background: #3182ce;
+        }
+        
+        .response-box {
+            background: #2d3748;
+            color: #a0aec0;
+            padding: 20px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            max-height: 500px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .examples {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        
+        .example-card {
+            background: #f7fafc;
+            padding: 15px;
+            border-radius: 5px;
+            border-left: 4px solid #667eea;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .example-card:hover {
+            background: #edf2f7;
+            transform: translateX(5px);
+        }
+        
+        .example-card h4 {
+            color: #2d3748;
+            margin-bottom: 5px;
+        }
+        
+        .example-card p {
+            color: #718096;
+            font-size: 12px;
+        }
+        
+        .stats {
+            display: flex;
+            gap: 20px;
+            margin-top: 15px;
+            padding: 15px;
+            background: #f7fafc;
+            border-radius: 5px;
+        }
+        
+        .stat-item {
+            flex: 1;
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            color: #718096;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 Stock Exchange Database API</h1>
+            <p>Interactive API Testing Tool</p>
+        </div>
+        
+        <div class="content">
+            <!-- Quick Actions -->
+            <div class="section">
+                <h2>⚡ Quick Actions</h2>
+                <div class="button-group">
+                    <button class="btn-secondary" onclick="loadTables()">📋 Load All Tables</button>
+                    <button class="btn-info" onclick="testEndpoint('/api/v1/tables.php')">🔍 Get Table Categories</button>
+                </div>
+            </div>
+            
+            <!-- Custom Query -->
+            <div class="section">
+                <h2>🔧 Custom Query Builder</h2>
+                <div class="form-group">
+                    <label for="table">Table Name:</label>
+                    <select id="table" onchange="updateExamples()">
+                        <option value="">-- Select a table --</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="recordId">Record ID (optional):</label>
+                    <input type="number" id="recordId" placeholder="Leave empty to get all records">
+                </div>
+                
+                <div class="form-group">
+                    <label for="search">Search (optional):</label>
+                    <input type="text" id="search" placeholder="Search across all columns">
+                </div>
+                
+                <div class="form-group">
+                    <label for="limit">Limit:</label>
+                    <input type="number" id="limit" value="20" min="1" max="500">
+                </div>
+                
+                <div class="form-group">
+                    <label for="sortBy">Sort By:</label>
+                    <input type="text" id="sortBy" value="id" placeholder="Column name">
+                </div>
+                
+                <div class="form-group">
+                    <label for="sortOrder">Sort Order:</label>
+                    <select id="sortOrder">
+                        <option value="ASC">Ascending</option>
+                        <option value="DESC">Descending</option>
+                    </select>
+                </div>
+                
+                <div class="button-group">
+                    <button class="btn-primary" onclick="executeCustomQuery()">🚀 Execute Query</button>
+                    <button class="btn-secondary" onclick="getSchema()">📊 Get Table Schema</button>
+                </div>
+            </div>
+            
+            <!-- Example Queries -->
+            <div class="section">
+                <h2>💡 Example Queries</h2>
+                <div class="examples" id="examples">
+                    <div class="example-card" onclick="testEndpoint('/api/v1/index.php?table=clients&limit=10')">
+                        <h4>Get Clients</h4>
+                        <p>First 10 client records</p>
+                    </div>
+                    <div class="example-card" onclick="testEndpoint('/api/v1/index.php?table=trades&limit=20&sort_by=trade_date&sort_order=DESC')">
+                        <h4>Recent Trades</h4>
+                        <p>Last 20 trades sorted by date</p>
+                    </div>
+                    <div class="example-card" onclick="testEndpoint('/api/v1/index.php?table=employees&limit=15')">
+                        <h4>Get Employees</h4>
+                        <p>Employee records</p>
+                    </div>
+                    <div class="example-card" onclick="testEndpoint('/api/v1/schema.php?table=trades')">
+                        <h4>Trades Schema</h4>
+                        <p>Get trades table structure</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Response Section -->
+            <div class="section">
+                <h2>📥 API Response</h2>
+                <div id="stats" class="stats" style="display: none;">
+                    <div class="stat-item">
+                        <div class="stat-value" id="statusCode">-</div>
+                        <div class="stat-label">Status Code</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="recordCount">-</div>
+                        <div class="stat-label">Records</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="responseTime">-</div>
+                        <div class="stat-label">Response Time</div>
+                    </div>
+                </div>
+                <div id="response" class="response-box">
+                    👋 Welcome! Select a query above to see API responses here.
+                    
+Examples:
+1. Click "Load All Tables" to see available tables
+2. Use the query builder to create custom queries
+3. Click any example query card for quick tests
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let startTime;
+        
+        async function testEndpoint(endpoint) {
+            const responseDiv = document.getElementById('response');
+            const statsDiv = document.getElementById('stats');
+            
+            responseDiv.textContent = '⏳ Loading...';
+            startTime = Date.now();
+            
+            try {
+                const response = await fetch(endpoint);
+                const data = await response.json();
+                const responseTime = Date.now() - startTime;
+                
+                // Update stats
+                document.getElementById('statusCode').textContent = data.status_code || response.status;
+                document.getElementById('responseTime').textContent = responseTime + 'ms';
+                
+                if (data.data && data.data.records) {
+                    document.getElementById('recordCount').textContent = data.data.records.length;
+                } else if (data.data && data.data.all_tables) {
+                    document.getElementById('recordCount').textContent = data.data.all_tables.length;
+                } else {
+                    document.getElementById('recordCount').textContent = '-';
+                }
+                
+                statsDiv.style.display = 'flex';
+                
+                // Display formatted response
+                responseDiv.textContent = JSON.stringify(data, null, 2);
+                
+            } catch (error) {
+                responseDiv.textContent = '❌ Error: ' + error.message;
+                statsDiv.style.display = 'none';
+            }
+        }
+        
+        async function loadTables() {
+            const response = await fetch('/api/v1/tables.php');
+            const data = await response.json();
+            
+            if (data.success && data.data.all_tables) {
+                const tableSelect = document.getElementById('table');
+                tableSelect.innerHTML = '<option value="">-- Select a table --</option>';
+                
+                // Add options grouped by category
+                const categories = data.data.categories;
+                for (const [category, tables] of Object.entries(categories)) {
+                    const optgroup = document.createElement('optgroup');
+                    optgroup.label = category.charAt(0).toUpperCase() + category.slice(1);
+                    
+                    tables.forEach(table => {
+                        const option = document.createElement('option');
+                        option.value = table;
+                        option.textContent = table;
+                        optgroup.appendChild(option);
+                    });
+                    
+                    tableSelect.appendChild(optgroup);
+                }
+                
+                testEndpoint('/api/v1/tables.php');
+            }
+        }
+        
+        function executeCustomQuery() {
+            const table = document.getElementById('table').value;
+            if (!table) {
+                alert('Please select a table first!');
+                return;
+            }
+            
+            const recordId = document.getElementById('recordId').value;
+            const search = document.getElementById('search').value;
+            const limit = document.getElementById('limit').value;
+            const sortBy = document.getElementById('sortBy').value;
+            const sortOrder = document.getElementById('sortOrder').value;
+            
+            let url = `/api/v1/index.php?table=${table}`;
+            
+            if (recordId) {
+                url += `&id=${recordId}`;
+            } else {
+                if (search) url += `&search=${encodeURIComponent(search)}`;
+                if (limit) url += `&limit=${limit}`;
+                if (sortBy) url += `&sort_by=${sortBy}`;
+                if (sortOrder) url += `&sort_order=${sortOrder}`;
+            }
+            
+            testEndpoint(url);
+        }
+        
+        function getSchema() {
+            const table = document.getElementById('table').value;
+            if (!table) {
+                alert('Please select a table first!');
+                return;
+            }
+            
+            testEndpoint(`/api/v1/schema.php?table=${table}`);
+        }
+        
+        function updateExamples() {
+            const table = document.getElementById('table').value;
+            if (!table) return;
+            
+            const examplesDiv = document.getElementById('examples');
+            examplesDiv.innerHTML = `
+                <div class="example-card" onclick="testEndpoint('/api/v1/index.php?table=${table}&limit=10')">
+                    <h4>Get Records</h4>
+                    <p>First 10 records from ${table}</p>
+                </div>
+                <div class="example-card" onclick="testEndpoint('/api/v1/schema.php?table=${table}')">
+                    <h4>Get Schema</h4>
+                    <p>Structure of ${table}</p>
+                </div>
+                <div class="example-card" onclick="testEndpoint('/api/v1/index.php?table=${table}&limit=20&sort_order=DESC')">
+                    <h4>Recent Records</h4>
+                    <p>Last 20 records descending</p>
+                </div>
+                <div class="example-card" onclick="testEndpoint('/api/v1/index.php?table=${table}&id=1')">
+                    <h4>Single Record</h4>
+                    <p>Get record with ID = 1</p>
+                </div>
+            `;
+        }
+        
+        // Load tables on page load
+        window.addEventListener('load', loadTables);
+    </script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+name: Deploy Stockex to OCI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  deploy:
+    name: Deploy to Oracle Ubuntu Server
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Prepare SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > ~/.ssh/oci_stockex_key
+          chmod 600 ~/.ssh/oci_stockex_key
+          ssh-keyscan -H "${{ secrets.OCI_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy Stockex
+        run: |
+          ssh -i ~/.ssh/oci_stockex_key \
+            "${{ secrets.OCI_USER }}@${{ secrets.OCI_HOST }}" \
+            'BRANCH=master /opt/vfs/scripts/deploy_stockex.sh'
