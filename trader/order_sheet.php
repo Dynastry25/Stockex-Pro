@@ -39,6 +39,31 @@ $current_user = get_logged_in_user() ?: get_session_user();
 $user_name = $current_user['username'] ?? 'System';
 $user_id = $current_user['id'] ?? null;
 
+function receiptFileUrl($ref) {
+    if (strpos($ref, 'db_') === 0) {
+        $id = (int)substr($ref, 3);
+        $parts = explode('.', $ref);
+        $ext = count($parts) > 1 ? end($parts) : '';
+        return 'serve_receipt.php?id=' . $id . ($ext ? '&ext=' . $ext : '');
+    }
+    return '../uploads/numeric_receipts/' . $ref;
+}
+
+function receiptFileExists($ref) {
+    if (strpos($ref, 'db_') === 0) return true;
+    return file_exists(__DIR__ . '/../uploads/numeric_receipts/' . $ref);
+}
+
+function receiptIsImage($ref) {
+    if (strpos($ref, 'db_') === 0) {
+        $parts = explode('.', $ref);
+        $ext = count($parts) > 1 ? strtolower(end($parts)) : '';
+        return in_array($ext, ['jpg', 'jpeg', 'png', 'gif']);
+    }
+    $ext = strtolower(pathinfo($ref, PATHINFO_EXTENSION));
+    return in_array($ext, ['jpg', 'jpeg', 'png', 'gif']);
+}
+
 // ============================================
 // CHECK AND CREATE TABLE IF NOT EXISTS
 // ============================================
@@ -228,15 +253,14 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
                 continue;
             }
             
-            $type_prefix = ($receipt_type === 'commission') ? 'commission' : 'payment';
-            $filename = $type_prefix . '_' . $trade_id . '_' . date('Ymd_His') . '_' . ($i + 1) . '.' . $file_ext;
-            $filepath = $upload_dir . $filename;
+            $file_data = file_get_contents($files['tmp_name'][$i]);
+            $mime_type = $files['type'][$i] ?: 'application/octet-stream';
+            $orig_name = $files['name'][$i];
             
-            if (move_uploaded_file($files['tmp_name'][$i], $filepath)) {
-                $uploaded_files[] = $filename;
-            } else {
-                $errors[] = "Failed to upload file '{$files['name'][$i]}'";
-            }
+            $stmt = $db->prepare("INSERT INTO receipt_files (trade_id, receipt_type, file_data, file_name, file_size, mime_type, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?)");
+            $stmt->execute([$trade_id, $receipt_type, $file_data, $orig_name, $files['size'][$i], $mime_type, $user_name]);
+            $file_id = $db->lastInsertId();
+            $uploaded_files[] = 'db_' . $file_id . '.' . $file_ext;
         }
         
         $full_comment = $existing_comment;
@@ -357,9 +381,16 @@ if (isset($_GET['delete_receipt']) && isset($_GET['trade_id']) && isset($_GET['f
         }
         
         if ($field_to_update) {
-            $filepath = __DIR__ . '/../uploads/numeric_receipts/' . $file_to_delete;
-            if (file_exists($filepath)) {
-                unlink($filepath);
+            if (strpos($file_to_delete, 'db_') === 0) {
+                $parts = explode('.', $file_to_delete);
+                $file_id = (int) substr($parts[0], 3);
+                $stmt = $db->prepare("DELETE FROM receipt_files WHERE id = ? AND trade_id = ?");
+                $stmt->execute([$file_id, $trade_id]);
+            } else {
+                $filepath = __DIR__ . '/../uploads/numeric_receipts/' . $file_to_delete;
+                if (file_exists($filepath)) {
+                    unlink($filepath);
+                }
             }
             
             $receipts_str = !empty($receipts_array) ? implode(',', $receipts_array) : null;
@@ -1037,12 +1068,12 @@ include '../includes/header.php';
                                                         if (empty($receiptFile)) continue;
                                                         if ($displayCount >= 3) break;
                                                         $displayCount++;
-                                                        $filepath = '../uploads/numeric_receipts/' . $receiptFile;
-                                                        $ext = strtolower(pathinfo($receiptFile, PATHINFO_EXTENSION));
-                                                        $isImage = in_array($ext, ['jpg', 'jpeg', 'png', 'gif']);
+                                                        $filepath = receiptFileUrl($receiptFile);
+                                                        $isImage = receiptIsImage($receiptFile);
+                                                        $fileExists = receiptFileExists($receiptFile);
                                                     ?>
                                                         <div class="thumbnail" onclick="viewReceipt('<?php echo $filepath; ?>')" title="Click to view">
-                                                            <?php if ($isImage && file_exists($filepath)): ?>
+                                                            <?php if ($isImage && $fileExists): ?>
                                                                 <img src="<?php echo $filepath; ?>" alt="Receipt">
                                                             <?php else: ?>
                                                                 <div class="file-icon">
@@ -1075,12 +1106,12 @@ include '../includes/header.php';
                                                         if (empty($receiptFile)) continue;
                                                         if ($displayCount >= 3) break;
                                                         $displayCount++;
-                                                        $filepath = '../uploads/numeric_receipts/' . $receiptFile;
-                                                        $ext = strtolower(pathinfo($receiptFile, PATHINFO_EXTENSION));
-                                                        $isImage = in_array($ext, ['jpg', 'jpeg', 'png', 'gif']);
+                                                        $filepath = receiptFileUrl($receiptFile);
+                                                        $isImage = receiptIsImage($receiptFile);
+                                                        $fileExists = receiptFileExists($receiptFile);
                                                     ?>
                                                         <div class="thumbnail" onclick="viewReceipt('<?php echo $filepath; ?>')" title="Click to view">
-                                                            <?php if ($isImage && file_exists($filepath)): ?>
+                                                            <?php if ($isImage && $fileExists): ?>
                                                                 <img src="<?php echo $filepath; ?>" alt="Commission Receipt">
                                                             <?php else: ?>
                                                                 <div class="file-icon">
@@ -1293,7 +1324,8 @@ function viewReceipt(filepath) {
     const content = document.getElementById('receiptViewerContent');
     const info = document.getElementById('receiptViewerInfo');
     const download = document.getElementById('receiptViewerDownload');
-    const ext = filepath.split('.').pop().toLowerCase();
+    const params = new URLSearchParams(filepath.split('?')[1] || '');
+    const ext = params.get('ext') || filepath.split('.').pop().toLowerCase();
     const isImage = ['jpg','jpeg','png','gif'].includes(ext);
     
     download.href = filepath;
@@ -1345,9 +1377,12 @@ function openUploadModal(tradeId, receiptType, existingReceipts) {
             files.forEach(function(f) {
                 f = f.trim();
                 if (!f) return;
-                const fp = '../uploads/numeric_receipts/' + f;
-                const ext = f.split('.').pop().toLowerCase();
-                const isImg = ['jpg','jpeg','png','gif'].includes(ext);
+                const isDb = f.startsWith('db_');
+                const fparts = f.split('.');
+                const fid = parseInt(fparts[0].substring(3));
+                const fext = fparts.length > 1 ? fparts.pop() : '';
+                const fp = isDb ? 'serve_receipt.php?id=' + fid + (fext ? '&ext=' + fext : '') : '../uploads/numeric_receipts/' + f;
+                const isImg = ['jpg','jpeg','png','gif'].includes(fext || '');
                 html += '<div class="thumbnail" onclick="viewReceipt(\'' + fp + '\')" title="' + f + '">';
                 if (isImg) {
                     html += '<img src="' + fp + '" alt="Receipt" style="width:60px;height:60px;object-fit:cover;">';
@@ -1444,9 +1479,12 @@ function viewTrade(tradeId) {
                 files.forEach(function(f) {
                     f = f.trim();
                     if (!f) return;
-                    const fp = '../uploads/numeric_receipts/' + f;
-                    const ext = f.split('.').pop().toLowerCase();
-                    const isImg = ['jpg','jpeg','png','gif'].includes(ext);
+                    const isDb = f.startsWith('db_');
+                    const fparts = f.split('.');
+                    const fid = parseInt(fparts[0].substring(3));
+                    const fext = fparts.length > 1 ? fparts.pop() : '';
+                    const fp = isDb ? 'serve_receipt.php?id=' + fid + (fext ? '&ext=' + fext : '') : '../uploads/numeric_receipts/' + f;
+                    const isImg = ['jpg','jpeg','png','gif'].includes(fext || '');
                     html += '<div class="thumbnail" onclick="viewReceipt(\'' + fp + '\')" title="' + f + '">';
                     if (isImg) {
                         html += '<img src="' + fp + '" alt="Receipt" style="width:50px;height:50px;object-fit:cover;">';
