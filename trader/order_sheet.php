@@ -394,7 +394,7 @@ function getNumericTrades($db, $filter = 'pending', $asset_class_filter = 'all',
                 t.asset_class,
                 t.trade_side,
                 DATE(t.trade_date)
-              ORDER BY DATE(t.trade_date) DESC, t.id DESC";
+ORDER BY trade_date DESC";
     
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
