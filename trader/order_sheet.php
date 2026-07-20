@@ -85,6 +85,20 @@ try {
         $db->exec("ALTER TABLE trades ADD COLUMN approval_status ENUM('pending','approved','rejected') DEFAULT 'pending' AFTER status");
         error_log("Added approval_status column to trades table");
     }
+    
+    // Check if linked_trade_id exists in trades table
+    $checkColumn = $db->query("SHOW COLUMNS FROM trades LIKE 'linked_trade_id'");
+    if ($checkColumn->rowCount() == 0) {
+        $db->exec("ALTER TABLE trades ADD COLUMN linked_trade_id INT DEFAULT NULL AFTER settlement_status");
+        error_log("Added linked_trade_id column to trades table");
+    }
+    
+    $checkColumn = $db->query("SHOW COLUMNS FROM trades LIKE 'linked_trade_ref'");
+    if ($checkColumn->rowCount() == 0) {
+        $db->exec("ALTER TABLE trades ADD COLUMN linked_trade_ref VARCHAR(50) DEFAULT NULL AFTER linked_trade_id");
+        error_log("Added linked_trade_ref column to trades table");
+    }
+    
 } catch (Exception $e) {
     error_log("Table setup error: " . $e->getMessage());
 }
@@ -97,14 +111,14 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'view_trade' && isset($_GET['id'])
     try {
         $tid = (int)$_GET['id'];
         $stmt = $db->prepare("
-            SELECT t.id, t.trade_reference, t.client_name, t.security_id, t.security_name,
-                   t.trade_date, t.trade_side, t.quantity, t.consideration,
-                   COALESCE(t.approval_status, 'pending') as approval_status,
+            SELECT t.*, 
                    tr.is_approved, tr.approved_by, tr.approved_at,
                    tr.payment_receipt, tr.commission_receipt, tr.comment as receipt_comment,
-                   t.exchange_reference, t.additional_reference, t.asset_class, t.price
+                   lt.linked_trade_id, lt2.trade_reference as linked_trade_ref
             FROM trades t
             LEFT JOIN numeric_trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
+            LEFT JOIN linked_trades lt ON t.id = lt.trade_id
+            LEFT JOIN trades lt2 ON lt.linked_trade_id = lt2.id
             WHERE t.id = ?
         ");
         $stmt->execute([$tid]);
@@ -157,7 +171,7 @@ if (isset($_POST['approve_trade']) && isset($_POST['trade_id'])) {
 }
 
 // ============================================
-// HANDLE UPLOAD - FIXED
+// HANDLE UPLOAD
 // ============================================
 
 // Handle Receipt Upload
@@ -176,13 +190,6 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
         mkdir($upload_dir, 0777, true);
     }
     
-    // Log for debugging
-    error_log("=== UPLOAD DEBUG ===");
-    error_log("Trade ID: " . $trade_id);
-    error_log("Receipt Type: " . $receipt_type);
-    error_log("FILES: " . print_r($_FILES, true));
-    error_log("POST: " . print_r($_POST, true));
-    
     // Get existing receipts and comment
     $stmt = $db->prepare("SELECT payment_receipt, commission_receipt, comment FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
     $stmt->execute([$trade_id]);
@@ -200,7 +207,6 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
         $field_name = 'payment_receipt';
     }
     
-    // Check if files were uploaded
     if (isset($_FILES['payment_receipts']) && !empty($_FILES['payment_receipts']['name'][0])) {
         $files = $_FILES['payment_receipts'];
         $total_files = count($files['name']);
@@ -208,20 +214,17 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
         for ($i = 0; $i < $total_files; $i++) {
             if ($files['error'][$i] !== UPLOAD_ERR_OK) {
                 $errors[] = "File '{$files['name'][$i]}' upload error: " . $files['error'][$i];
-                error_log("Upload error for {$files['name'][$i]}: " . $files['error'][$i]);
                 continue;
             }
             
             $file_ext = strtolower(pathinfo($files['name'][$i], PATHINFO_EXTENSION));
             if (!in_array($file_ext, $allowed_exts)) {
                 $errors[] = "File '{$files['name'][$i]}' - Invalid type. Allowed: JPG, PNG, GIF, PDF";
-                error_log("Invalid type for {$files['name'][$i]}: " . $file_ext);
                 continue;
             }
             
             if ($files['size'][$i] > $max_size) {
                 $errors[] = "File '{$files['name'][$i]}' exceeds 5MB limit";
-                error_log("File too large {$files['name'][$i]}: " . $files['size'][$i]);
                 continue;
             }
             
@@ -231,14 +234,11 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
             
             if (move_uploaded_file($files['tmp_name'][$i], $filepath)) {
                 $uploaded_files[] = $filename;
-                error_log("Successfully uploaded: " . $filename);
             } else {
                 $errors[] = "Failed to upload file '{$files['name'][$i]}'";
-                error_log("Failed to move file: " . $files['tmp_name'][$i] . " to " . $filepath);
             }
         }
         
-        // Combine comment
         $full_comment = $existing_comment;
         if (!empty($comment)) {
             $timestamp = date('Y-m-d H:i:s');
@@ -256,11 +256,9 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
             if ($stmt->fetch()) {
                 $stmt = $db->prepare("UPDATE numeric_trade_receipts SET $field_name = ?, comment = ?, updated_at = NOW(), uploaded_by = ? WHERE trade_id = ? AND trade_type = 'trade'");
                 $result = $stmt->execute([$receipts_str, $full_comment, $user_name, $trade_id]);
-                error_log("UPDATE result: " . ($result ? 'success' : 'failed'));
             } else {
                 $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, $field_name, comment, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, ?, NOW(), NOW())");
                 $result = $stmt->execute([$trade_id, $receipts_str, $full_comment, $user_name]);
-                error_log("INSERT result: " . ($result ? 'success' : 'failed'));
             }
             
             if ($result) {
@@ -270,13 +268,11 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
                 $_SESSION['alert'] = [implode(' and ', $message) . ' successfully!', 'success'];
             } else {
                 $_SESSION['alert'] = ['Failed to update database', 'danger'];
-                error_log("Database update failed for trade_id: " . $trade_id);
             }
         } else {
             $_SESSION['alert'] = ['No files were uploaded successfully. Errors: ' . implode('; ', $errors), 'danger'];
         }
     } else {
-        // If no files but comment only
         if (!empty($comment)) {
             $stmt = $db->prepare("SELECT comment FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
             $stmt->execute([$trade_id]);
@@ -305,7 +301,6 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
             }
         } else {
             $_SESSION['alert'] = ['No files selected for upload', 'danger'];
-            error_log("No files in FILES array or empty name");
         }
     }
     header('Location: order_sheet.php?' . http_build_query(array_filter([
@@ -335,7 +330,6 @@ if (isset($_GET['delete_receipt']) && isset($_GET['trade_id']) && isset($_GET['f
         exit;
     }
     
-    // Determine which field the file belongs to
     $stmt = $db->prepare("SELECT payment_receipt, commission_receipt FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
     $stmt->execute([$trade_id]);
     $record = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -344,7 +338,6 @@ if (isset($_GET['delete_receipt']) && isset($_GET['trade_id']) && isset($_GET['f
         $field_to_update = null;
         $receipts_array = [];
         
-        // Check payment_receipt
         if (!empty($record['payment_receipt'])) {
             $receipts = explode(',', $record['payment_receipt']);
             if (($key = array_search($file_to_delete, $receipts)) !== false) {
@@ -354,7 +347,6 @@ if (isset($_GET['delete_receipt']) && isset($_GET['trade_id']) && isset($_GET['f
             }
         }
         
-        // Check commission_receipt
         if (!$field_to_update && !empty($record['commission_receipt'])) {
             $receipts = explode(',', $record['commission_receipt']);
             if (($key = array_search($file_to_delete, $receipts)) !== false) {
@@ -433,6 +425,9 @@ function getNumericTrades($db, $filter = 'pending', $asset_class_filter = 'all',
             MIN(t.uploaded_by) as uploaded_by,
             MIN(t.status) as status,
             MIN(t.created_at) as created_at,
+            MAX(t.settlement_status) as settlement_status,
+            MAX(t.linked_trade_id) as linked_trade_id,
+            MAX(t.linked_trade_ref) as linked_trade_ref,
             MAX(tr.payment_receipt) as payment_receipt,
             MAX(tr.commission_receipt) as commission_receipt,
             MAX(tr.comment) as receipt_comment,
@@ -664,12 +659,6 @@ include '../includes/header.php';
         color: white;
     }
     
-    /* Receipt Viewer Modal */
-    #receiptViewerContent img {
-        border-radius: 4px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-    }
-    
     .receipt-thumbnails .more-badge {
         background: #6c757d;
         color: white;
@@ -698,6 +687,28 @@ include '../includes/header.php';
     .receipt-type-label.commission {
         background: #fff3cd;
         color: #856404;
+    }
+    
+    /* Linked Badge */
+    .badge-linked {
+        background: #6f42c1;
+        color: white;
+        padding: 3px 10px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: 600;
+    }
+    .badge-linked i {
+        margin-right: 4px;
+    }
+    
+    /* Contract Note Buttons */
+    .btn-contract {
+        font-size: 11px;
+        padding: 3px 8px;
+    }
+    .btn-contract i {
+        margin-right: 3px;
     }
     
     .comment-display {
@@ -938,8 +949,7 @@ include '../includes/header.php';
                                 <th class="text-end">Value</th>
                                 <th>Date</th>
                                 <th>Add Ref</th>
-                                <th>Receipts</th>
-                                <th>Status</th>
+                                <th>Status / Receipts</th>
                                 <th class="text-end">Actions</th>
                             </tr>
                         </thead>
@@ -953,6 +963,7 @@ include '../includes/header.php';
                                 $hasComment = !empty($trade['receipt_comment']);
                                 $commentText = $trade['receipt_comment'] ?? '';
                                 $tradeCount = (int)($trade['trade_count'] ?? 1);
+                                $isLinked = ($trade['settlement_status'] === 'linked' && !empty($trade['linked_trade_id']));
                                 
                                 $isApproved = isset($trade['is_approved']) ? (int)$trade['is_approved'] : 0;
                                 $statusText = $isApproved === 1 ? 'Approved' : ($isApproved === 2 ? 'Rejected' : 'Pending');
@@ -991,99 +1002,133 @@ include '../includes/header.php';
                                     <td><?php echo date('d/m/Y', strtotime($trade['trade_date'] ?? '')); ?></td>
                                     <td><code class="small"><?php echo htmlspecialchars($trade['additional_reference'] ?? ''); ?></code></td>
                                     <td>
-                                        <!-- Payment Receipts -->
-                                        <?php if ($hasPaymentReceipt): ?>
-                                            <div class="receipt-thumbnails">
-                                                <?php 
-                                                $displayCount = 0;
-                                                foreach ($payment_receipts as $receiptFile):
-                                                    $receiptFile = trim($receiptFile);
-                                                    if (empty($receiptFile)) continue;
-                                                    if ($displayCount >= 3) break;
-                                                    $displayCount++;
-                                                    $filepath = '../uploads/numeric_receipts/' . $receiptFile;
-                                                    $ext = strtolower(pathinfo($receiptFile, PATHINFO_EXTENSION));
-                                                    $isImage = in_array($ext, ['jpg', 'jpeg', 'png', 'gif']);
-                                                ?>
-                                                    <div class="thumbnail" onclick="viewReceipt('<?php echo $filepath; ?>')" title="Click to view">
-                                                        <?php if ($isImage && file_exists($filepath)): ?>
-                                                            <img src="<?php echo $filepath; ?>" alt="Receipt">
-                                                        <?php else: ?>
-                                                            <div class="file-icon">
-                                                                <i class="bi bi-file-pdf"></i>
-                                                            </div>
-                                                        <?php endif; ?>
-                                                        <div class="view-overlay"><i class="bi bi-eye"></i></div>
-                                                        <?php if ($isApproved !== 1): ?>
-                                                            <a href="order_sheet.php?delete_receipt=1&trade_id=<?php echo $trade['id']; ?>&file=<?php echo urlencode($receiptFile); ?>&filter=<?php echo urlencode($filter); ?>&asset_class=<?php echo urlencode($asset_class_filter); ?>&search=<?php echo urlencode($search); ?>" 
-                                                               class="delete-btn" onclick="event.stopPropagation(); return confirm('Delete this file?')">
-                                                                <i class="bi bi-x"></i>
-                                                            </a>
-                                                        <?php endif; ?>
-                                                    </div>
-                                                <?php endforeach; ?>
-                                                <?php if (count($payment_receipts) > 3): ?>
-                                                    <div class="more-badge">+<?php echo count($payment_receipts) - 3; ?></div>
-                                                <?php endif; ?>
+                                        <?php if ($isLinked): ?>
+                                            <!-- LINKED STATUS -->
+                                            <div class="mb-1">
+                                                <span class="badge-linked">
+                                                    <i class="bi bi-link-45deg"></i> LINKED
+                                                </span>
                                             </div>
-                                            <small class="receipt-type-label payment">Payment</small>
-                                        <?php endif; ?>
-                                        
-                                        <!-- Commission Receipts (for Bonds) -->
-                                        <?php if ($isBond && $hasCommissionReceipt): ?>
-                                            <div class="receipt-thumbnails mt-1">
-                                                <?php 
-                                                $displayCount = 0;
-                                                foreach ($commission_receipts as $receiptFile):
-                                                    $receiptFile = trim($receiptFile);
-                                                    if (empty($receiptFile)) continue;
-                                                    if ($displayCount >= 3) break;
-                                                    $displayCount++;
-                                                    $filepath = '../uploads/numeric_receipts/' . $receiptFile;
-                                                    $ext = strtolower(pathinfo($receiptFile, PATHINFO_EXTENSION));
-                                                    $isImage = in_array($ext, ['jpg', 'jpeg', 'png', 'gif']);
-                                                ?>
-                                                    <div class="thumbnail" onclick="viewReceipt('<?php echo $filepath; ?>')" title="Click to view">
-                                                        <?php if ($isImage && file_exists($filepath)): ?>
-                                                            <img src="<?php echo $filepath; ?>" alt="Commission Receipt">
-                                                        <?php else: ?>
-                                                            <div class="file-icon">
-                                                                <i class="bi bi-file-pdf"></i>
-                                                            </div>
-                                                        <?php endif; ?>
-                                                        <div class="view-overlay"><i class="bi bi-eye"></i></div>
-                                                        <?php if ($isApproved !== 1): ?>
-                                                            <a href="order_sheet.php?delete_receipt=1&trade_id=<?php echo $trade['id']; ?>&file=<?php echo urlencode($receiptFile); ?>&filter=<?php echo urlencode($filter); ?>&asset_class=<?php echo urlencode($asset_class_filter); ?>&search=<?php echo urlencode($search); ?>" 
-                                                               class="delete-btn" onclick="event.stopPropagation(); return confirm('Delete this file?')">
-                                                                <i class="bi bi-x"></i>
-                                                            </a>
-                                                        <?php endif; ?>
-                                                    </div>
-                                                <?php endforeach; ?>
-                                                <?php if (count($commission_receipts) > 3): ?>
-                                                    <div class="more-badge">+<?php echo count($commission_receipts) - 3; ?></div>
-                                                <?php endif; ?>
+                                            <div class="small text-muted mb-1">
+                                                <i class="bi bi-arrow-right"></i> 
+                                                Linked to: <strong><?php echo htmlspecialchars($trade['linked_trade_ref'] ?? 'Trade #' . $trade['linked_trade_id']); ?></strong>
                                             </div>
-                                            <small class="receipt-type-label commission">Commission</small>
-                                        <?php endif; ?>
-                                        
-                                        <!-- Comment Display -->
-                                        <?php if ($hasComment): ?>
-                                            <div class="comment-display mt-1">
-                                                <div class="comment-text"><?php echo nl2br(htmlspecialchars($commentText)); ?></div>
-                                            </div>
-                                            <div class="mt-1">
-                                                <a href="order_sheet.php?delete_comment=1&trade_id=<?php echo $trade['id']; ?>&filter=<?php echo urlencode($filter); ?>&asset_class=<?php echo urlencode($asset_class_filter); ?>&search=<?php echo urlencode($search); ?>" 
-                                                   class="text-danger small" onclick="return confirm('Delete this comment?')">
-                                                    <i class="bi bi-trash"></i> Delete Comment
+                                            <!-- Contract Note Buttons -->
+                                            <div class="btn-group btn-group-sm mt-1" role="group">
+                                                <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" 
+                                                   class="btn btn-outline-primary btn-contract" target="_blank" 
+                                                   title="Contract Note for Sold Shares">
+                                                    <i class="bi bi-file-earmark-text"></i> Sold
+                                                </a>
+                                                <a href="trades.php?action=contract_note&id=<?php echo $trade['linked_trade_id']; ?>" 
+                                                   class="btn btn-outline-success btn-contract" target="_blank" 
+                                                   title="Contract Note for Bought Shares">
+                                                    <i class="bi bi-file-earmark-text"></i> Bought
                                                 </a>
                                             </div>
+                                        <?php else: ?>
+                                            <!-- Payment Receipts -->
+                                            <?php if ($hasPaymentReceipt): ?>
+                                                <div class="receipt-thumbnails">
+                                                    <?php 
+                                                    $displayCount = 0;
+                                                    foreach ($payment_receipts as $receiptFile):
+                                                        $receiptFile = trim($receiptFile);
+                                                        if (empty($receiptFile)) continue;
+                                                        if ($displayCount >= 3) break;
+                                                        $displayCount++;
+                                                        $filepath = '../uploads/numeric_receipts/' . $receiptFile;
+                                                        $ext = strtolower(pathinfo($receiptFile, PATHINFO_EXTENSION));
+                                                        $isImage = in_array($ext, ['jpg', 'jpeg', 'png', 'gif']);
+                                                    ?>
+                                                        <div class="thumbnail" onclick="viewReceipt('<?php echo $filepath; ?>')" title="Click to view">
+                                                            <?php if ($isImage && file_exists($filepath)): ?>
+                                                                <img src="<?php echo $filepath; ?>" alt="Receipt">
+                                                            <?php else: ?>
+                                                                <div class="file-icon">
+                                                                    <i class="bi bi-file-pdf"></i>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <div class="view-overlay"><i class="bi bi-eye"></i></div>
+                                                            <?php if ($isApproved !== 1): ?>
+                                                                <a href="order_sheet.php?delete_receipt=1&trade_id=<?php echo $trade['id']; ?>&file=<?php echo urlencode($receiptFile); ?>&filter=<?php echo urlencode($filter); ?>&asset_class=<?php echo urlencode($asset_class_filter); ?>&search=<?php echo urlencode($search); ?>" 
+                                                                   class="delete-btn" onclick="event.stopPropagation(); return confirm('Delete this file?')">
+                                                                    <i class="bi bi-x"></i>
+                                                                </a>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                    <?php endforeach; ?>
+                                                    <?php if (count($payment_receipts) > 3): ?>
+                                                        <div class="more-badge">+<?php echo count($payment_receipts) - 3; ?></div>
+                                                    <?php endif; ?>
+                                                </div>
+                                                <small class="receipt-type-label payment">Payment</small>
+                                            <?php endif; ?>
+                                            
+                                            <!-- Commission Receipts (for Bonds) -->
+                                            <?php if ($isBond && $hasCommissionReceipt): ?>
+                                                <div class="receipt-thumbnails mt-1">
+                                                    <?php 
+                                                    $displayCount = 0;
+                                                    foreach ($commission_receipts as $receiptFile):
+                                                        $receiptFile = trim($receiptFile);
+                                                        if (empty($receiptFile)) continue;
+                                                        if ($displayCount >= 3) break;
+                                                        $displayCount++;
+                                                        $filepath = '../uploads/numeric_receipts/' . $receiptFile;
+                                                        $ext = strtolower(pathinfo($receiptFile, PATHINFO_EXTENSION));
+                                                        $isImage = in_array($ext, ['jpg', 'jpeg', 'png', 'gif']);
+                                                    ?>
+                                                        <div class="thumbnail" onclick="viewReceipt('<?php echo $filepath; ?>')" title="Click to view">
+                                                            <?php if ($isImage && file_exists($filepath)): ?>
+                                                                <img src="<?php echo $filepath; ?>" alt="Commission Receipt">
+                                                            <?php else: ?>
+                                                                <div class="file-icon">
+                                                                    <i class="bi bi-file-pdf"></i>
+                                                                </div>
+                                                            <?php endif; ?>
+                                                            <div class="view-overlay"><i class="bi bi-eye"></i></div>
+                                                            <?php if ($isApproved !== 1): ?>
+                                                                <a href="order_sheet.php?delete_receipt=1&trade_id=<?php echo $trade['id']; ?>&file=<?php echo urlencode($receiptFile); ?>&filter=<?php echo urlencode($filter); ?>&asset_class=<?php echo urlencode($asset_class_filter); ?>&search=<?php echo urlencode($search); ?>" 
+                                                                   class="delete-btn" onclick="event.stopPropagation(); return confirm('Delete this file?')">
+                                                                    <i class="bi bi-x"></i>
+                                                                </a>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                    <?php endforeach; ?>
+                                                    <?php if (count($commission_receipts) > 3): ?>
+                                                        <div class="more-badge">+<?php echo count($commission_receipts) - 3; ?></div>
+                                                    <?php endif; ?>
+                                                </div>
+                                                <small class="receipt-type-label commission">Commission</small>
+                                            <?php endif; ?>
+                                            
+                                            <!-- Comment Display -->
+                                            <?php if ($hasComment): ?>
+                                                <div class="comment-display mt-1">
+                                                    <div class="comment-text"><?php echo nl2br(htmlspecialchars($commentText)); ?></div>
+                                                </div>
+                                                <div class="mt-1">
+                                                    <a href="order_sheet.php?delete_comment=1&trade_id=<?php echo $trade['id']; ?>&filter=<?php echo urlencode($filter); ?>&asset_class=<?php echo urlencode($asset_class_filter); ?>&search=<?php echo urlencode($search); ?>" 
+                                                       class="text-danger small" onclick="return confirm('Delete this comment?')">
+                                                        <i class="bi bi-trash"></i> Delete Comment
+                                                    </a>
+                                                </div>
+                                            <?php endif; ?>
                                         <?php endif; ?>
                                     </td>
-                                    <td><span class="badge-status <?php echo $statusClass; ?>"><?php echo $statusText; ?></span></td>
+                                    <td>
+                                        <?php if ($isLinked): ?>
+                                            <span class="badge bg-info">
+                                                <i class="bi bi-link-45deg"></i> Linked
+                                            </span>
+                                        <?php else: ?>
+                                            <span class="badge-status <?php echo $statusClass; ?>"><?php echo $statusText; ?></span>
+                                        <?php endif; ?>
+                                    </td>
                                     <td class="text-end">
                                         <div class="btn-group btn-group-sm" role="group">
-                                            <?php if ($isApproved !== 1 && $user_role !== 'finance_officer'): ?>
+                                            <?php if (!$isLinked && $isApproved !== 1 && $user_role !== 'finance_officer'): ?>
                                                 <button class="btn btn-outline-secondary" onclick="openUploadModal(<?php echo $trade['id']; ?>, 'payment', <?php echo htmlspecialchars(json_encode($trade['payment_receipt'] ?? '')); ?>)" title="Upload Payment Receipt">
                                                     <i class="bi bi-cash"></i>
                                                 </button>
@@ -1093,7 +1138,7 @@ include '../includes/header.php';
                                                     </button>
                                                 <?php endif; ?>
                                             <?php endif; ?>
-                                            <?php if ($user_role === 'finance_officer' && $isApproved !== 1): ?>
+                                            <?php if ($user_role === 'finance_officer' && $isApproved !== 1 && !$isLinked): ?>
                                                 <form method="POST" style="display:inline" onsubmit="return confirm('Approve this trade?')">
                                                     <input type="hidden" name="trade_id" value="<?php echo $trade['id']; ?>">
                                                     <input type="hidden" name="approve_trade" value="1">
@@ -1111,6 +1156,18 @@ include '../includes/header.php';
                                                     </button>
                                                 </form>
                                             <?php endif; ?>
+                                            <?php if ($isLinked): ?>
+                                                <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" 
+                                                   class="btn btn-outline-primary btn-contract" target="_blank" 
+                                                   title="Contract Note for Sold Shares">
+                                                    <i class="bi bi-file-earmark-text"></i>
+                                                </a>
+                                                <a href="trades.php?action=contract_note&id=<?php echo $trade['linked_trade_id']; ?>" 
+                                                   class="btn btn-outline-success btn-contract" target="_blank" 
+                                                   title="Contract Note for Bought Shares">
+                                                    <i class="bi bi-file-earmark-text"></i>
+                                                </a>
+                                            <?php endif; ?>
                                             <button class="btn btn-outline-secondary" onclick="viewTrade(<?php echo $trade['id']; ?>)" title="View Details">
                                                 <i class="bi bi-eye"></i>
                                             </button>
@@ -1127,7 +1184,7 @@ include '../includes/header.php';
 </div>
 
 <!-- ============================================ -->
-<!-- UPLOAD MODAL - WITH RECEIPT TYPE SELECTION -->
+<!-- UPLOAD MODAL -->
 <!-- ============================================ -->
 <div class="modal fade" id="uploadModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-md">
@@ -1152,9 +1209,7 @@ include '../includes/header.php';
                     </div>
                     
                     <div class="text-center mb-3">
-                        <div class="receipt-preview-container" id="receiptPreviews">
-                            <!-- Previews will be inserted here -->
-                        </div>
+                        <div class="receipt-preview-container" id="receiptPreviews"></div>
                     </div>
                     
                     <div class="mb-3">
@@ -1207,7 +1262,33 @@ include '../includes/header.php';
     </div>
 </div>
 
+<!-- View Trade Modal -->
+<div class="modal fade" id="viewTradeModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="bi bi-info-circle"></i> Trade Details
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="tradeDetails">
+                <div class="text-center py-3">
+                    <div class="spinner-border text-secondary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="text-muted mt-2">Loading trade details...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
+// ============================================
+// FUNCTIONS
+// ============================================
+
 function viewReceipt(filepath) {
     const content = document.getElementById('receiptViewerContent');
     const info = document.getElementById('receiptViewerInfo');
@@ -1235,34 +1316,6 @@ function viewReceipt(filepath) {
     
     new bootstrap.Modal(document.getElementById('receiptViewerModal')).show();
 }
-</script>
-
-<!-- View Trade Modal -->
-<div class="modal fade" id="viewTradeModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="bi bi-info-circle"></i> Trade Details
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body" id="tradeDetails">
-                <div class="text-center py-3">
-                    <div class="spinner-border text-secondary" role="status">
-                        <span class="visually-hidden">Loading...</span>
-                    </div>
-                    <p class="text-muted mt-2">Loading trade details...</p>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<script>
-// ============================================
-// RECEIPT UPLOAD - WITH RECEIPT TYPE
-// ============================================
 
 function openUploadModal(tradeId, receiptType, existingReceipts) {
     document.getElementById('receipt_trade_id').value = tradeId;
@@ -1272,7 +1325,6 @@ function openUploadModal(tradeId, receiptType, existingReceipts) {
     document.getElementById('fileList').innerHTML = '';
     document.getElementById('receipt_comment').value = '';
     
-    // Update modal title and labels
     const typeLabel = document.getElementById('receiptTypeLabel');
     const typeDesc = document.getElementById('receiptTypeDesc');
     
@@ -1284,7 +1336,6 @@ function openUploadModal(tradeId, receiptType, existingReceipts) {
         typeDesc.textContent = '- Upload payment confirmation';
     }
     
-    // Show existing receipts in the modal
     const previewContainer = document.getElementById('receiptPreviews');
     previewContainer.innerHTML = '';
     if (existingReceipts) {
@@ -1314,7 +1365,7 @@ function openUploadModal(tradeId, receiptType, existingReceipts) {
     modal.show();
 }
 
-// File preview - shows images and file list
+// File preview
 document.getElementById('receipt_files')?.addEventListener('change', function(e) {
     const files = this.files;
     const fileList = document.getElementById('fileList');
@@ -1383,8 +1434,8 @@ function viewTrade(tradeId) {
             const ref = t.trade_reference || ('TRD-' + String(tradeId).padStart(6, '0'));
             const sec = (t.security_id || '-') + (t.security_name ? ' (' + t.security_name + ')' : '');
             const addRef = t.additional_reference || '-';
+            const isLinked = t.settlement_status === 'linked' && t.linked_trade_id;
             
-            // Generate receipt thumbnails
             function receiptThumbs(filesStr, label) {
                 if (!filesStr) return '';
                 const files = filesStr.split(',').filter(function(f){ return f.trim(); });
@@ -1406,6 +1457,31 @@ function viewTrade(tradeId) {
                 });
                 html += '</div></div>';
                 return html;
+            }
+            
+            let linkedHtml = '';
+            if (isLinked) {
+                linkedHtml = `
+                    <div class="mt-2">
+                        <span class="badge-linked">
+                            <i class="bi bi-link-45deg"></i> LINKED
+                        </span>
+                        <div class="mt-1">
+                            <small class="text-muted">Linked to Trade:</small>
+                            <strong>${t.linked_trade_ref || '#' + t.linked_trade_id}</strong>
+                        </div>
+                        <div class="btn-group btn-group-sm mt-2" role="group">
+                            <a href="trades.php?action=contract_note&id=${tradeId}" 
+                               class="btn btn-outline-primary" target="_blank">
+                                <i class="bi bi-file-earmark-text"></i> Sold Contract Note
+                            </a>
+                            <a href="trades.php?action=contract_note&id=${t.linked_trade_id}" 
+                               class="btn btn-outline-success" target="_blank">
+                                <i class="bi bi-file-earmark-text"></i> Bought Contract Note
+                            </a>
+                        </div>
+                    </div>
+                `;
             }
             
             const paymentReceiptsHtml = receiptThumbs(t.payment_receipt, 'Payment Receipts:');
@@ -1449,6 +1525,7 @@ function viewTrade(tradeId) {
                             <small class="text-muted">Status</small>
                             <div><span class="badge-status ${statusClass}">${statusText}</span></div>
                         </div>
+                        ${linkedHtml}
                     </div>
                     <div class="col-12">
                         <hr>
