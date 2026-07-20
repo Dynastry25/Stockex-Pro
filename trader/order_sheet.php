@@ -224,7 +224,7 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
             error_log("No files in FILES array or empty name");
         }
     }
-    header('Location: numeric_receipt_upload.php?' . http_build_query(array_filter([
+    header('Location: order_sheet.php?' . http_build_query(array_filter([
         'filter' => $_GET['filter'] ?? 'pending',
         'asset_class' => $_GET['asset_class'] ?? 'all',
         'search' => $_GET['search'] ?? ''
@@ -243,7 +243,7 @@ if (isset($_GET['delete_receipt']) && isset($_GET['trade_id']) && isset($_GET['f
     
     if ($record && $record['is_approved'] == 1) {
         $_SESSION['alert'] = ['Cannot delete approved receipts. Please contact finance officer.', 'warning'];
-        header('Location: numeric_receipt_upload.php?' . http_build_query(array_filter([
+        header('Location: order_sheet.php?' . http_build_query(array_filter([
             'filter' => $_GET['filter'] ?? 'pending',
             'asset_class' => $_GET['asset_class'] ?? 'all',
             'search' => $_GET['search'] ?? ''
@@ -293,7 +293,7 @@ if (isset($_GET['delete_receipt']) && isset($_GET['trade_id']) && isset($_GET['f
             }
         }
     }
-    header('Location: numeric_receipt_upload.php?' . http_build_query(array_filter([
+    header('Location: order_sheet.php?' . http_build_query(array_filter([
         'filter' => $_GET['filter'] ?? 'pending',
         'asset_class' => $_GET['asset_class'] ?? 'all',
         'search' => $_GET['search'] ?? ''
@@ -310,7 +310,7 @@ if (isset($_GET['delete_comment']) && isset($_GET['trade_id'])) {
         $_SESSION['alert'] = ['Comment deleted successfully.', 'success'];
     }
     
-    header('Location: numeric_receipt_upload.php?' . http_build_query(array_filter([
+    header('Location: order_sheet.php?' . http_build_query(array_filter([
         'filter' => $_GET['filter'] ?? 'pending',
         'asset_class' => $_GET['asset_class'] ?? 'all',
         'search' => $_GET['search'] ?? ''
@@ -906,7 +906,7 @@ include '../includes/header.php';
                                                             </div>
                                                         <?php endif; ?>
                                                         <?php if ($isApproved !== 1): ?>
-                                                            <a href="numeric_receipt_upload.php?delete_receipt=1&trade_id=<?php echo $trade['id']; ?>&file=<?php echo urlencode($receiptFile); ?>&filter=<?php echo urlencode($filter); ?>&asset_class=<?php echo urlencode($asset_class_filter); ?>&search=<?php echo urlencode($search); ?>" 
+                                                            <a href="order_sheet.php?delete_receipt=1&trade_id=<?php echo $trade['id']; ?>&file=<?php echo urlencode($receiptFile); ?>&filter=<?php echo urlencode($filter); ?>&asset_class=<?php echo urlencode($asset_class_filter); ?>&search=<?php echo urlencode($search); ?>" 
                                                                class="delete-btn" onclick="event.stopPropagation(); return confirm('Delete this file?')">
                                                                 <i class="bi bi-x"></i>
                                                             </a>
@@ -943,7 +943,7 @@ include '../includes/header.php';
                                                             </div>
                                                         <?php endif; ?>
                                                         <?php if ($isApproved !== 1): ?>
-                                                            <a href="numeric_receipt_upload.php?delete_receipt=1&trade_id=<?php echo $trade['id']; ?>&file=<?php echo urlencode($receiptFile); ?>&filter=<?php echo urlencode($filter); ?>&asset_class=<?php echo urlencode($asset_class_filter); ?>&search=<?php echo urlencode($search); ?>" 
+                                                            <a href="order_sheet.php?delete_receipt=1&trade_id=<?php echo $trade['id']; ?>&file=<?php echo urlencode($receiptFile); ?>&filter=<?php echo urlencode($filter); ?>&asset_class=<?php echo urlencode($asset_class_filter); ?>&search=<?php echo urlencode($search); ?>" 
                                                                class="delete-btn" onclick="event.stopPropagation(); return confirm('Delete this file?')">
                                                                 <i class="bi bi-x"></i>
                                                             </a>
@@ -963,7 +963,7 @@ include '../includes/header.php';
                                                 <div class="comment-text"><?php echo nl2br(htmlspecialchars($commentText)); ?></div>
                                             </div>
                                             <div class="mt-1">
-                                                <a href="numeric_receipt_upload.php?delete_comment=1&trade_id=<?php echo $trade['id']; ?>&filter=<?php echo urlencode($filter); ?>&asset_class=<?php echo urlencode($asset_class_filter); ?>&search=<?php echo urlencode($search); ?>" 
+                                                <a href="order_sheet.php?delete_comment=1&trade_id=<?php echo $trade['id']; ?>&filter=<?php echo urlencode($filter); ?>&asset_class=<?php echo urlencode($asset_class_filter); ?>&search=<?php echo urlencode($search); ?>" 
                                                    class="text-danger small" onclick="return confirm('Delete this comment?')">
                                                     <i class="bi bi-trash"></i> Delete Comment
                                                 </a>
@@ -1008,7 +1008,7 @@ include '../includes/header.php';
                 <h5 class="modal-title"><i class="bi bi-upload me-2"></i>Upload Receipt & Add Comment</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form method="POST" enctype="multipart/form-data" action="numeric_receipt_upload.php" id="receiptUploadForm">
+            <form method="POST" enctype="multipart/form-data" action="order_sheet.php" id="receiptUploadForm">
                 <div class="modal-body">
                     <input type="hidden" name="trade_id" id="receipt_trade_id" value="">
                     <input type="hidden" name="upload_receipt" value="1">
