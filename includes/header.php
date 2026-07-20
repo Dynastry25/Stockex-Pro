@@ -277,7 +277,7 @@
                     <li class="nav-item">
                         <a class="nav-link" href="<?php echo BASE_URL; ?>trader/settlement">
                             <i class="bi bi-currency-exchange"></i>
-                            <span>Settlement Trades</span>
+                            <span>Settle Trades</span>
                         </a>
                     </li>
                     <li class="nav-item">

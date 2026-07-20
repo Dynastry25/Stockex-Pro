@@ -1,6 +1,11 @@
 <?php
 // forgot_password.php
 require_once '../config/config.php';
+require_once '../vendor/autoload.php';
+
+use PHPMailer\PHPMailer\PHPMailer;
+use PHPMailer\PHPMailer\SMTP;
+use PHPMailer\PHPMailer\Exception;
 
 // Security headers
 header("X-Frame-Options: DENY");
@@ -92,12 +97,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $reset_link = $protocol . $_SERVER['HTTP_HOST'] . dirname($_SERVER['SCRIPT_NAME']) . "/forgot_password.php?token=" . $token . "&email=" . urlencode($email);
 
                 // --- EMAIL SENDING USING PHPMailer ---
-                require_once '../vendor/autoload.php'; // Adjust path to your autoloader
-
-                use PHPMailer\PHPMailer\PHPMailer;
-                use PHPMailer\PHPMailer\SMTP;
-                use PHPMailer\PHPMailer\Exception;
-
                 $mail = new PHPMailer(true);
 
                 try {
