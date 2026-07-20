@@ -265,6 +265,8 @@ function updateOrderSheetStatus($db, $trade_id, $status, $notes = '') {
 // ============================================
 // GET GROUPED TRADES
 // ============================================
+// GET GROUPED TRADES - FIXED FOR only_full_group_by
+// ============================================
 function getGroupedTrades($db, $date_from, $date_to, $hide_buy_orders = true, $trade_side_filter = 'sell_only') {
     $today = date('Y-m-d');
     
@@ -287,8 +289,8 @@ function getGroupedTrades($db, $date_from, $date_to, $hide_buy_orders = true, $t
             GROUP_CONCAT(t.trade_reference SEPARATOR ',') as trade_references,
             MIN(t.exchange_reference) as exchange_reference,
             MIN(t.additional_reference) as additional_reference,
-            t.counterparty_name,
-            t.counterparty_cds_account,
+            ANY_VALUE(t.counterparty_name) as counterparty_name,
+            ANY_VALUE(t.counterparty_cds_account) as counterparty_cds_account,
             ANY_VALUE(t.settlement_status) as settlement_status,
             ANY_VALUE(t.settled_by) as settled_by,
             ANY_VALUE(t.settled_at) as settled_at,
@@ -312,6 +314,7 @@ function getGroupedTrades($db, $date_from, $date_to, $hide_buy_orders = true, $t
         $sql .= " AND t.trade_side = 'sell' ";
     }
     
+    // GROUP BY all non-aggregated columns
     $sql .= " GROUP BY 
                 t.client_name, 
                 t.client_cds_account,
