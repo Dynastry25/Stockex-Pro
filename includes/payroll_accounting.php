@@ -1,162 +1,262 @@
 <?php
+// /includes/payroll_accounting.php - SIMPLIFIED VERSION FOR DEBUGGING
+
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
 
 if (!defined('PAYROLL_CONTROL_CODE')) {
-    // Only require if not already loaded by parent
     require_once __DIR__ . '/../config/config.php';
-    require_once __DIR__ . '/../config/account_mapping.php';
 }
 
+/**
+ * SIMPLIFIED: Post payroll entries to General Ledger
+ */
 function postPayrollToGL($payroll_data) {
-    $db = getDBConnection();
-    $db->beginTransaction();
-
+    // Log that function was called
+    error_log("=== postPayrollToGL called ===");
+    error_log("Data: " . print_r($payroll_data, true));
+    
     try {
-        $reference_no     = $payroll_data['reference_no'];
-        $employee_name    = $payroll_data['employee_name'];
-        $employee_id      = $payroll_data['employee_id'];
-        $gross_salary     = $payroll_data['gross_salary'];
-        $deductions       = $payroll_data['deductions'];
-        $statutory_deductions = $payroll_data['statutory_deductions'];
-        $statutory_employer   = $payroll_data['statutory_employer'];
-        $net_salary       = $payroll_data['net_salary'];
-        $period_start     = $payroll_data['period_start'];
-        $period_end       = $payroll_data['period_end'];
-
-        $year   = date('Y', strtotime($period_start));
-        $period = (int)date('m', strtotime($period_start));
-
-        $description = "Payroll $reference_no - $employee_name ($period_start to $period_end)";
-
-        $created_by = 'system';
-        if (isset($_SESSION['username'])) {
-            $created_by = $_SESSION['username'];
+        $db = getDBConnection();
+        error_log("Database connection obtained");
+        
+        // Start transaction
+        $db->beginTransaction();
+        error_log("Transaction started");
+        
+        // Extract data
+        $reference_no = $payroll_data['reference_no'] ?? 'UNKNOWN';
+        $employee_name = $payroll_data['employee_name'] ?? 'Unknown';
+        $employee_id = $payroll_data['employee_id'] ?? null;
+        $gross_salary = (float)($payroll_data['gross_salary'] ?? 0);
+        $net_salary = (float)($payroll_data['net_salary'] ?? 0);
+        $statutory_deductions = $payroll_data['statutory_deductions'] ?? [];
+        $statutory_employer = $payroll_data['statutory_employer'] ?? [];
+        $period_start = $payroll_data['period_start'] ?? date('Y-m-01');
+        $posted_by = $payroll_data['posted_by'] ?? 'system';
+        
+        error_log("Processing: $reference_no - $employee_name - Gross: $gross_salary");
+        
+        // Get account IDs
+        $stmt = $db->prepare("SELECT id, account_code FROM chart_of_accounts WHERE account_code IN ('511', '212') AND is_active = 1");
+        $stmt->execute();
+        $accounts = [];
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $accounts[$row['account_code']] = $row['id'];
         }
-
-        // Pre-fetch account info for all codes used
-        $codes_needed = [SALARIES_EXPENSE_CODE, PAYROLL_CONTROL_CODE];
-        foreach (getHrPayableAccountMap() as $c) $codes_needed[] = $c;
-        foreach (getHrExpenseAccountMap() as $c) $codes_needed[] = $c;
-
-        $acct_cache = [];
-        $placeholders = implode(',', array_fill(0, count($codes_needed), '?'));
-        $stmt = $db->prepare("SELECT id, account_code, account_name FROM chart_of_accounts WHERE account_code IN ($placeholders) AND is_active = 1");
-        $stmt->execute($codes_needed);
-        foreach ($stmt as $row) {
-            $acct_cache[$row['account_code']] = $row;
+        
+        error_log("Found accounts: " . print_r($accounts, true));
+        
+        // Check if we have the required accounts
+        if (!isset($accounts['511'])) {
+            throw new Exception("Account 511 (Salaries & Wages) not found");
         }
-
-        $mk_gl = function($info, $da, $cr, $desc, $ref, $eid, $en, $et, $yr, $per, $by, $bt) {
-            return [
-                'transaction_date' => date('Y-m-d'),
-                'account_id'       => (int)$info['id'],
-                'account_code'     => $info['account_code'],
-                'account_name'     => $info['account_name'],
-                'debit_amount'     => round((float)$da, 2),
-                'credit_amount'    => round((float)$cr, 2),
-                'description'      => $desc,
-                'reference_no'     => $ref,
-                'reference_type'   => 'payroll',
-                'entity_id'        => $eid,
-                'entity_name'      => $en,
-                'entity_type'      => $et,
-                'fiscal_year'      => $yr,
-                'fiscal_period'    => $per,
-                'created_by'       => $by,
-                'balance_type'     => $bt,
-            ];
-        };
-
-        $acct = function(&$cache, $code) {
-            if (!isset($cache[$code])) throw new Exception("Account '$code' not found in chart_of_accounts");
-            return $cache[$code];
-        };
-
-        $gl_entries = [];
-
-        // 1) Debit Salaries Expense (511) with gross salary
-        $gl_entries[] = $mk_gl($acct($acct_cache, SALARIES_EXPENSE_CODE), $gross_salary, 0,
-            "$description - Gross Salary", $reference_no, $employee_id, $employee_name, 'E',
-            $year, $period, $created_by, 'debit');
-
-        // 2) Credit Payroll Control (216) with net salary
-        $gl_entries[] = $mk_gl($acct($acct_cache, PAYROLL_CONTROL_CODE), 0, $net_salary,
-            "$description - Net Salary Payable", $reference_no, $employee_id, $employee_name, 'E',
-            $year, $period, $created_by, 'credit');
-
-        // 3) Collect all unique keys from both employee and employer arrays
-        $all_keys = array_unique(array_merge(
-            array_keys($statutory_deductions),
-            array_keys($statutory_employer)
-        ));
-
-        foreach ($all_keys as $key) {
-            $employee_amt = isset($statutory_deductions[$key]) ? (float)$statutory_deductions[$key] : 0;
-            $employer_amt = isset($statutory_employer[$key]) ? (float)$statutory_employer[$key] : 0;
-            if ($employee_amt <= 0 && $employer_amt <= 0) continue;
-
-            $payable_code = getHrPayableAccountCode($key);
-            if (!$payable_code) continue;
-
-            $total_payable = $employee_amt + $employer_amt;
-            $label = ucwords(str_replace('_', ' ', $key));
-
-            $gl_entries[] = $mk_gl($acct($acct_cache, $payable_code), 0, $total_payable,
-                "$description - $label Payable", $reference_no, null, $label, 'O',
-                $year, $period, $created_by, 'credit');
-
-            $expense_code = getHrExpenseAccountCode($key);
-            if ($expense_code && isset($acct_cache[$expense_code]) && $employer_amt > 0) {
-                $gl_entries[] = $mk_gl($acct($acct_cache, $expense_code), $employer_amt, 0,
-                    "$description - Employer $label", $reference_no, null, $label, 'O',
-                    $year, $period, $created_by, 'debit');
+        if (!isset($accounts['212'])) {
+            throw new Exception("Account 212 (Accrued Expenses) not found");
+        }
+        
+        $entries_count = 0;
+        
+        // 1. DR - Salaries & Wages (511)
+        if ($gross_salary > 0) {
+            $stmt = $db->prepare("
+                INSERT INTO general_ledger (
+                    transaction_date, account_id, account_code, account_name,
+                    debit_amount, credit_amount, description, reference_no,
+                    reference_type, created_by, created_at
+                ) VALUES (NOW(), ?, '511', 'Salaries & Wages', ?, 0, ?, ?, 'payroll', ?, NOW())
+            ");
+            $stmt->execute([
+                $accounts['511'],
+                $gross_salary,
+                "Payroll $reference_no - $employee_name - Gross Salary",
+                $reference_no,
+                $posted_by
+            ]);
+            $entries_count++;
+            error_log("Created DR entry for Salaries & Wages: $gross_salary");
+        }
+        
+        // 2. CR - Accrued Expenses (212) for Net Salary
+        if ($net_salary > 0) {
+            $stmt = $db->prepare("
+                INSERT INTO general_ledger (
+                    transaction_date, account_id, account_code, account_name,
+                    debit_amount, credit_amount, description, reference_no,
+                    reference_type, created_by, created_at
+                ) VALUES (NOW(), ?, '212', 'Accrued Expenses', 0, ?, ?, ?, 'payroll', ?, NOW())
+            ");
+            $stmt->execute([
+                $accounts['212'],
+                $net_salary,
+                "Payroll $reference_no - $employee_name - Net Salary Payable",
+                $reference_no,
+                $posted_by
+            ]);
+            $entries_count++;
+            error_log("Created CR entry for Accrued Expenses: $net_salary");
+        }
+        
+        // 3. Handle Statutory Deductions (Employee)
+        foreach ($statutory_deductions as $key => $amount) {
+            $amount = (float)$amount;
+            if ($amount <= 0) continue;
+            
+            // Map to account code
+            $account_code = getPayableAccountCode($key);
+            if (!$account_code) {
+                error_log("No account mapping for: $key");
+                continue;
             }
-        }
-
-        // 4) Non-statutory deductions
-        if (!empty($deductions) && is_array($deductions)) {
-            foreach ($deductions as $dk => $dv) {
-                if ($dv <= 0) continue;
-                $key = strtolower(trim($dk));
-                if (isset($statutory_deductions[$key])) continue;
-                $gl_entries[] = $mk_gl($acct($acct_cache, SALARIES_EXPENSE_CODE), $dv, 0,
-                    "$description - $dk deduction", $reference_no, $employee_id, $employee_name, 'E',
-                    $year, $period, $created_by, 'debit');
+            
+            // Get account ID
+            $stmt = $db->prepare("SELECT id, account_name FROM chart_of_accounts WHERE account_code = ? AND is_active = 1");
+            $stmt->execute([$account_code]);
+            $account = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$account) {
+                error_log("Account not found: $account_code");
+                continue;
             }
+            
+            $stmt = $db->prepare("
+                INSERT INTO general_ledger (
+                    transaction_date, account_id, account_code, account_name,
+                    debit_amount, credit_amount, description, reference_no,
+                    reference_type, created_by, created_at
+                ) VALUES (NOW(), ?, ?, ?, 0, ?, ?, ?, 'payroll', ?, NOW())
+            ");
+            $stmt->execute([
+                $account['id'],
+                $account_code,
+                $account['account_name'],
+                $amount,
+                "Payroll $reference_no - $employee_name - " . ucfirst($key) . " Withholding",
+                $reference_no,
+                $posted_by
+            ]);
+            $entries_count++;
+            error_log("Created CR entry for $key: $amount");
         }
-
-        // Validate: total debits == total credits
-        $total_debit  = array_sum(array_column($gl_entries, 'debit_amount'));
-        $total_credit = array_sum(array_column($gl_entries, 'credit_amount'));
-        if (abs($total_debit - $total_credit) > 0.01) {
-            throw new Exception("GL posting unbalanced: debit=$total_debit, credit=$total_credit");
+        
+        // 4. Handle Employer Contributions
+        foreach ($statutory_employer as $key => $amount) {
+            $amount = (float)$amount;
+            if ($amount <= 0) continue;
+            
+            $expense_code = getExpenseAccountCode($key);
+            $payable_code = getPayableAccountCode($key);
+            
+            if (!$expense_code || !$payable_code) {
+                error_log("No account mapping for employer: $key");
+                continue;
+            }
+            
+            // Get expense account
+            $stmt = $db->prepare("SELECT id, account_name FROM chart_of_accounts WHERE account_code = ? AND is_active = 1");
+            $stmt->execute([$expense_code]);
+            $expense_account = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            // Get payable account
+            $stmt = $db->prepare("SELECT id, account_name FROM chart_of_accounts WHERE account_code = ? AND is_active = 1");
+            $stmt->execute([$payable_code]);
+            $payable_account = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$expense_account || !$payable_account) {
+                error_log("Accounts not found for employer: $key");
+                continue;
+            }
+            
+            // DR - Expense
+            $stmt = $db->prepare("
+                INSERT INTO general_ledger (
+                    transaction_date, account_id, account_code, account_name,
+                    debit_amount, credit_amount, description, reference_no,
+                    reference_type, created_by, created_at
+                ) VALUES (NOW(), ?, ?, ?, ?, 0, ?, ?, 'payroll', ?, NOW())
+            ");
+            $stmt->execute([
+                $expense_account['id'],
+                $expense_code,
+                $expense_account['account_name'],
+                $amount,
+                "Payroll $reference_no - $employee_name - Employer " . ucfirst($key),
+                $reference_no,
+                $posted_by
+            ]);
+            
+            // CR - Payable
+            $stmt = $db->prepare("
+                INSERT INTO general_ledger (
+                    transaction_date, account_id, account_code, account_name,
+                    debit_amount, credit_amount, description, reference_no,
+                    reference_type, created_by, created_at
+                ) VALUES (NOW(), ?, ?, ?, 0, ?, ?, ?, 'payroll', ?, NOW())
+            ");
+            $stmt->execute([
+                $payable_account['id'],
+                $payable_code,
+                $payable_account['account_name'],
+                $amount,
+                "Payroll $reference_no - $employee_name - Employer " . ucfirst($key) . " Payable",
+                $reference_no,
+                $posted_by
+            ]);
+            
+            $entries_count += 2;
+            error_log("Created employer entries for $key: $amount");
         }
-
-        // Insert all entries
-        $insert_fields = [
-            'transaction_date', 'account_id', 'account_code', 'account_name',
-            'debit_amount', 'credit_amount', 'description', 'reference_no',
-            'reference_type', 'entity_id', 'entity_name', 'entity_type',
-            'fiscal_year', 'fiscal_period', 'created_by', 'balance_type',
-        ];
-        $ph  = '(' . implode(',', array_fill(0, count($insert_fields), '?')) . ')';
-        $sql = "INSERT INTO general_ledger (" . implode(',', $insert_fields) . ") VALUES $ph";
-
-        $stmt = $db->prepare($sql);
-        foreach ($gl_entries as $entry) {
-            $stmt->execute(array_values($entry));
-        }
-
+        
         $db->commit();
+        error_log("Transaction committed. Total entries: $entries_count");
+        
         return [
             'success' => true,
-            'entries' => count($gl_entries),
-            'debit'   => $total_debit,
-            'credit'  => $total_credit,
+            'entries' => $entries_count,
+            'message' => "Created $entries_count GL entries"
         ];
-
+        
     } catch (Exception $e) {
-        $db->rollBack();
-        error_log('Payroll GL posting error: ' . $e->getMessage());
-        return ['success' => false, 'error' => $e->getMessage()];
+        if (isset($db) && $db->inTransaction()) {
+            $db->rollBack();
+        }
+        error_log("ERROR in postPayrollToGL: " . $e->getMessage());
+        error_log("Stack trace: " . $e->getTraceAsString());
+        return [
+            'success' => false,
+            'error' => $e->getMessage()
+        ];
     }
+}
+
+/**
+ * Get payable account code for a deduction key
+ */
+function getPayableAccountCode($key) {
+    $map = [
+        'nssf' => '2121',
+        'sdl' => '2122',
+        'wcf' => '2123',
+        'osha' => '2124',
+        'health_insurance' => '2125',
+        'paye' => '2126',
+        'paye_tax' => '2126',
+        'nhif' => '2125',
+    ];
+    return $map[strtolower($key)] ?? null;
+}
+
+/**
+ * Get expense account code for a deduction key
+ */
+function getExpenseAccountCode($key) {
+    $map = [
+        'nssf' => '5121',
+        'sdl' => '5122',
+        'wcf' => '5123',
+        'osha' => '5124',
+        'health_insurance' => '5125',
+        'nhif' => '5125',
+    ];
+    return $map[strtolower($key)] ?? null;
 }

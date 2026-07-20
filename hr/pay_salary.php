@@ -23,9 +23,14 @@ $current_country = 'TZ'; // Default to Tanzania
 
 // ==================== HELPER FUNCTIONS ====================
 
+/**
+ * Calculate PAYE Tax based on taxable income (Gross - NSSF)
+ * Using progressive tax brackets
+ */
 function calculate_paye_tax($taxable_income) {
     global $db;
     
+    // Default Tanzania PAYE brackets (2024)
     $default_brackets = [
         ['min' => 0, 'max' => 270000, 'rate' => 0],
         ['min' => 270001, 'max' => 520000, 'rate' => 8],
@@ -55,7 +60,7 @@ function calculate_paye_tax($taxable_income) {
         if ($bracket['max'] == 0) {
             $bracket_amount = $remaining_income;
         } else {
-            $bracket_range = $bracket['max'] - $bracket['min'] + 1;
+            $bracket_range = $bracket['max'] - $bracket['min'];
             $bracket_amount = min($remaining_income, $bracket_range);
         }
         
@@ -64,6 +69,148 @@ function calculate_paye_tax($taxable_income) {
     }
     
     return $tax;
+}
+
+/**
+ * Get employee NHIF rate from profile
+ */
+function getEmployeeNHIFRate($db, $user_id) {
+    try {
+        $stmt = $db->prepare("
+            SELECT nhif_rate FROM employee_profiles 
+            WHERE user_id = ? 
+            LIMIT 1
+        ");
+        $stmt->execute([$user_id]);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($result && isset($result['nhif_rate'])) {
+            return (float)$result['nhif_rate'];
+        }
+        
+        // Default NHIF rate from system settings
+        $stmt = $db->query("SELECT setting_value FROM system_settings WHERE setting_key = 'default_nhif_rate'");
+        $default = $stmt->fetch();
+        return $default ? (float)$default['setting_value'] : 3.0;
+        
+    } catch (Exception $e) {
+        return 3.0; // Default NHIF rate
+    }
+}
+
+/**
+ * Get employee loan deductions
+ */
+function getEmployeeLoanDeductions($db, $user_id, $pay_period_month) {
+    $total_loans = 0;
+    $loan_details = [];
+    
+    try {
+        // Get active loans with monthly deductions
+        $stmt = $db->prepare("
+            SELECT l.*, 
+                   COALESCE(
+                       (SELECT SUM(amount_paid) FROM loan_payments 
+                        WHERE loan_id = l.id AND pay_period_month = ?),
+                       0
+                   ) as paid_this_month
+            FROM loans l
+            WHERE l.user_id = ? 
+            AND l.status = 'active'
+            AND l.monthly_deduction > 0
+        ");
+        $stmt->execute([$pay_period_month, $user_id]);
+        $loans = $stmt->fetchAll();
+        
+        foreach ($loans as $loan) {
+            $remaining = $loan['monthly_deduction'] - $loan['paid_this_month'];
+            if ($remaining > 0) {
+                $total_loans += $remaining;
+                $loan_details[] = [
+                    'loan_id' => $loan['id'],
+                    'loan_type' => $loan['loan_type'],
+                    'amount' => $remaining,
+                    'balance' => $loan['balance']
+                ];
+            }
+        }
+    } catch (Exception $e) {
+        error_log("Error getting loan deductions: " . $e->getMessage());
+    }
+    
+    return [
+        'total' => $total_loans,
+        'details' => $loan_details
+    ];
+}
+
+/**
+ * Get employee allowance/overtime/bonus for the month
+ */
+function getEmployeeIncentives($db, $user_id, $pay_period_month) {
+    $incentives = [
+        'allowances' => 0,
+        'overtime' => 0,
+        'bonuses' => 0,
+        'details' => []
+    ];
+    
+    try {
+        $stmt = $db->prepare("
+            SELECT incentive_type, amount, description
+            FROM payroll_incentives 
+            WHERE user_id = ? AND pay_period_month = ? AND status = 'approved'
+        ");
+        $stmt->execute([$user_id, $pay_period_month]);
+        $results = $stmt->fetchAll();
+        
+        foreach ($results as $row) {
+            $type = strtolower(trim($row['incentive_type']));
+            $amount = (float)$row['amount'];
+            
+            if ($type === 'allowance' || $type === 'allowances') {
+                $incentives['allowances'] += $amount;
+            } elseif ($type === 'overtime') {
+                $incentives['overtime'] += $amount;
+            } elseif ($type === 'bonus' || $type === 'bonuses') {
+                $incentives['bonuses'] += $amount;
+            }
+            
+            $incentives['details'][] = [
+                'type' => $type,
+                'amount' => $amount,
+                'description' => $row['description']
+            ];
+        }
+    } catch (Exception $e) {
+        error_log("Error getting incentives: " . $e->getMessage());
+    }
+    
+    return $incentives;
+}
+
+/**
+ * Get house allowance from employee profile or default
+ */
+function getHouseAllowance($db, $user_id) {
+    try {
+        $stmt = $db->prepare("
+            SELECT house_allowance FROM employee_profiles 
+            WHERE user_id = ? 
+            LIMIT 1
+        ");
+        $stmt->execute([$user_id]);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($result && isset($result['house_allowance'])) {
+            return (float)$result['house_allowance'];
+        }
+    } catch (Exception $e) {
+        // Table might not exist
+    }
+    
+    // Default: 10% of basic salary
+    return 0;
 }
 
 function generate_salary_payment_request_no() {
@@ -90,7 +237,6 @@ function generate_salary_payment_request_no() {
         
         return $prefix . $year . $month . $new_no;
     } catch (Exception $e) {
-        // Fallback if query fails
         return $prefix . $year . $month . '0001';
     }
 }
@@ -100,7 +246,7 @@ function get_system_rates() {
     
     $rates = [];
     try {
-        $stmt = $db->query("SELECT setting_key, setting_value FROM system_settings WHERE setting_key LIKE '%_rate' OR setting_key = 'enable_nhif'");
+        $stmt = $db->query("SELECT setting_key, setting_value FROM system_settings WHERE setting_key LIKE '%_rate' OR setting_key IN ('enable_nhif', 'default_nhif_rate', 'paye_basis')");
         $rates_data = $stmt->fetchAll();
         foreach ($rates_data as $r) {
             $rates[$r['setting_key']] = $r['setting_value'];
@@ -116,7 +262,8 @@ function get_system_rates() {
         'wcf_rate' => 0.5,
         'osha_rate' => 0.5,
         'enable_nhif' => 0,
-        'nhif_rate' => 3,
+        'default_nhif_rate' => 3,
+        'paye_basis' => 'gross_less_nssf', // or 'basic_salary'
         'overtime_rate_per_hour' => 5000
     ];
     
@@ -132,59 +279,35 @@ function get_system_rates() {
 if (isset($_GET['export']) && $_GET['export'] === 'excel' && isset($_SESSION['salary_calculation'])) {
     $salary_calculation = $_SESSION['salary_calculation'];
     
-    // Set headers for Excel file download
     header('Content-Type: application/vnd.ms-excel');
     header('Content-Disposition: attachment; filename="salary_calculation_' . date('Y-m-d') . '.xls"');
     
-    // Create Excel content
-    echo "<html>";
-    echo "<head>";
-    echo "<meta charset=\"UTF-8\">";
-    echo "<style>";
-    echo "td { border: 1px solid #000; padding: 5px; }";
-    echo "th { border: 1px solid #000; padding: 5px; background-color: #f2f2f2; }";
-    echo ".total { font-weight: bold; background-color: #e6f3ff; }";
-    echo ".subtotal { font-weight: bold; background-color: #f0f0f0; }";
-    echo "</style>";
-    echo "</head>";
-    echo "<body>";
+    echo "<html><head><meta charset=\"UTF-8\">";
+    echo "<style>td,th{border:1px solid #000;padding:5px;}th{background:#f2f2f2;}.total{font-weight:bold;background:#e6f3ff;}.subtotal{font-weight:bold;background:#f0f0f0;}</style>";
+    echo "</head><body>";
     
     echo "<h2>Salary Calculation - " . date('F Y', strtotime($salary_calculation['pay_period_month'] . '-01')) . "</h2>";
     echo "<p>Generated on: " . date('Y-m-d H:i:s') . "</p>";
     
-    // Summary Section
+    // Summary
     echo "<h3>Summary</h3>";
     echo "<table border='1'>";
-    echo "<tr>";
-    echo "<th>Total Employees</th>";
-    echo "<th>Total Basic Salary</th>";
-    echo "<th>Total Gross Salary</th>";
-    echo "<th>Total Deductions</th>";
-    echo "<th>Total Net Salary</th>";
-    echo "<th>Total Employer Cost</th>";
-    echo "</tr>";
+    echo "<tr><th>Total Employees</th><th>Total Gross Salary</th><th>Total NSSF</th><th>Total PAYE</th><th>Total Other Deductions</th><th>Total Deductions</th><th>Total Net Salary</th><th>Total Employer Cost</th></tr>";
     echo "<tr class='total'>";
     echo "<td>" . ($salary_calculation['summary']['total_employees'] ?? 0) . "</td>";
-    echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_basic_salary'] ?? 0, false) . "</td>";
     echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_gross_salary'] ?? 0, false) . "</td>";
+    echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_nssf_employee'] ?? 0, false) . "</td>";
+    echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_paye_tax'] ?? 0, false) . "</td>";
+    echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_other_deductions'] ?? 0, false) . "</td>";
     echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_deductions'] ?? 0, false) . "</td>";
     echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_net_salary'] ?? 0, false) . "</td>";
     echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_employer_cost'] ?? 0, false) . "</td>";
-    echo "</tr>";
-    echo "</table>";
+    echo "</tr></table><br>";
     
-    echo "<br>";
-    
-    // Employer Contributions Breakdown
-    echo "<h3>Employer Contributions Breakdown</h3>";
+    // Employer Contributions
+    echo "<h3>Employer Contributions</h3>";
     echo "<table border='1'>";
-    echo "<tr>";
-    echo "<th>NSSF Employer</th>";
-    echo "<th>SDL</th>";
-    echo "<th>WCF</th>";
-    echo "<th>OSHA</th>";
-    echo "<th>Total Employer Contributions</th>";
-    echo "</tr>";
+    echo "<tr><th>NSSF Employer</th><th>SDL</th><th>WCF</th><th>OSHA</th><th>Total Employer Contributions</th></tr>";
     echo "<tr class='subtotal'>";
     echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_nssf_employer'] ?? 0, false) . "</td>";
     echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_sdl'] ?? 0, false) . "</td>";
@@ -197,34 +320,18 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel' && isset($_SESSION['sa
         ($salary_calculation['summary']['total_osha'] ?? 0), 
         false
     ) . "</td>";
-    echo "</tr>";
-    echo "</table>";
-    
-    echo "<br>";
+    echo "</tr></table><br>";
     
     // Employee Details
     echo "<h3>Employee Details</h3>";
     echo "<table border='1'>";
     echo "<tr>";
-    echo "<th>No</th>";
-    echo "<th>Employee Name</th>";
-    echo "<th>Job Title</th>";
-    echo "<th>Basic Salary</th>";
-    echo "<th>Allowances</th>";
-    echo "<th>Overtime</th>";
-    echo "<th>Bonuses</th>";
-    echo "<th>Gross Salary</th>";
-    echo "<th>NSSF Employee</th>";
-    echo "<th>PAYE Tax</th>";
-    echo "<th>NHIF</th>";
-    echo "<th>Other Deductions</th>";
-    echo "<th>Total Deductions</th>";
-    echo "<th>Net Salary</th>";
-    echo "<th>NSSF Employer</th>";
-    echo "<th>SDL</th>";
-    echo "<th>WCF</th>";
-    echo "<th>OSHA</th>";
-    echo "<th>Total Employer Cost</th>";
+    echo "<th>No</th><th>Employee</th><th>Job Title</th><th>Basic</th><th>House Allowance</th>";
+    echo "<th>Allowances</th><th>Overtime</th><th>Bonuses</th><th>Gross</th>";
+    echo "<th>NSSF Emp</th><th>PAYE</th><th>NHIF</th><th>Loans</th><th>Other Ded</th>";
+    echo "<th>Total Ded</th><th>Net Pay</th>";
+    echo "<th>NSSF Emp'r</th><th>SDL</th><th>WCF</th><th>OSHA</th>";
+    echo "<th>Employer Cost</th>";
     echo "</tr>";
     
     if (isset($salary_calculation['employees']) && !empty($salary_calculation['employees'])) {
@@ -235,6 +342,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel' && isset($_SESSION['sa
             echo "<td>" . htmlspecialchars($emp['employee_name'] ?? 'Unknown') . "</td>";
             echo "<td>" . htmlspecialchars($emp['job_title'] ?? '') . "</td>";
             echo "<td>" . format_payroll_currency($emp['basic_salary'] ?? 0, false) . "</td>";
+            echo "<td>" . format_payroll_currency($emp['house_allowance'] ?? 0, false) . "</td>";
             echo "<td>" . format_payroll_currency($emp['allowances'] ?? 0, false) . "</td>";
             echo "<td>" . format_payroll_currency($emp['overtime'] ?? 0, false) . "</td>";
             echo "<td>" . format_payroll_currency($emp['bonuses'] ?? 0, false) . "</td>";
@@ -242,6 +350,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel' && isset($_SESSION['sa
             echo "<td>" . format_payroll_currency($emp['nssf_employee'] ?? 0, false) . "</td>";
             echo "<td>" . format_payroll_currency($emp['paye_tax'] ?? 0, false) . "</td>";
             echo "<td>" . format_payroll_currency($emp['nhif'] ?? 0, false) . "</td>";
+            echo "<td>" . format_payroll_currency($emp['loans'] ?? 0, false) . "</td>";
             echo "<td>" . format_payroll_currency($emp['other_deductions'] ?? 0, false) . "</td>";
             echo "<td>" . format_payroll_currency($emp['total_deductions'] ?? 0, false) . "</td>";
             echo "<td>" . format_payroll_currency($emp['net_salary'] ?? 0, false) . "</td>";
@@ -253,10 +362,10 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel' && isset($_SESSION['sa
             echo "</tr>";
         }
         
-        // Totals row
+        // Totals
         echo "<tr class='total'>";
-        echo "<td colspan='3'><strong>TOTALS</strong></td>";
-        echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_basic_salary'] ?? 0, false) . "</td>";
+        echo "<td colspan='4'><strong>TOTALS</strong></td>";
+        echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_house_allowance'] ?? 0, false) . "</td>";
         echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_allowances'] ?? 0, false) . "</td>";
         echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_overtime'] ?? 0, false) . "</td>";
         echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_bonuses'] ?? 0, false) . "</td>";
@@ -264,6 +373,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel' && isset($_SESSION['sa
         echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_nssf_employee'] ?? 0, false) . "</td>";
         echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_paye_tax'] ?? 0, false) . "</td>";
         echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_nhif'] ?? 0, false) . "</td>";
+        echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_loans'] ?? 0, false) . "</td>";
         echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_other_deductions'] ?? 0, false) . "</td>";
         echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_deductions'] ?? 0, false) . "</td>";
         echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_net_salary'] ?? 0, false) . "</td>";
@@ -273,15 +383,8 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel' && isset($_SESSION['sa
         echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_osha'] ?? 0, false) . "</td>";
         echo "<td>" . format_payroll_currency($salary_calculation['summary']['total_employer_cost'] ?? 0, false) . "</td>";
         echo "</tr>";
-    } else {
-        echo "<tr><td colspan='19'>No employee data available</td></tr>";
     }
-    
-    echo "</table>";
-    
-    echo "</body>";
-    echo "</html>";
-    
+    echo "</table></body></html>";
     exit();
 }
 
@@ -289,126 +392,18 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel' && isset($_SESSION['sa
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     try {
-        // === 1. ADD/EDIT SALARY ITEM ===
-        if (isset($_POST['save_salary_item'])) {
-            $item_id = isset($_POST['item_id']) ? (int)$_POST['item_id'] : 0;
-            $category_id = (int)$_POST['category_id'];
-            $item_name = sanitize_input($_POST['item_name']);
-            $item_code = sanitize_input($_POST['item_code']);
-            $calculation_basis = sanitize_input($_POST['calculation_basis']);
-            $calculation_type = sanitize_input($_POST['calculation_type']);
-            $calculation_value = !empty($_POST['calculation_value']) ? (float)$_POST['calculation_value'] : NULL;
-            $applies_to = sanitize_input($_POST['applies_to']);
-            $affects_net_salary = isset($_POST['affects_net_salary']) ? 1 : 0;
-            $is_summary_item = isset($_POST['is_summary_item']) ? 1 : 0;
-            $display_order = (int)$_POST['display_order'];
-            
-            if ($item_id > 0) {
-                // Update existing item
-                $stmt = $db->prepare("
-                    UPDATE salary_items 
-                    SET category_id = ?, item_name = ?, item_code = ?, 
-                        calculation_basis = ?, calculation_type = ?, calculation_value = ?,
-                        applies_to = ?, affects_net_salary = ?, is_summary_item = ?,
-                        display_order = ?, updated_at = NOW()
-                    WHERE id = ?
-                ");
-                $stmt->execute([
-                    $category_id, $item_name, $item_code, $calculation_basis, 
-                    $calculation_type, $calculation_value, $applies_to, 
-                    $affects_net_salary, $is_summary_item, $display_order, $item_id
-                ]);
-                $success_message = 'Salary item updated successfully.';
-            } else {
-                // Insert new item
-                $stmt = $db->prepare("
-                    INSERT INTO salary_items (
-                        category_id, item_name, item_code, calculation_basis, 
-                        calculation_type, calculation_value, applies_to, 
-                        affects_net_salary, is_summary_item, display_order
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ");
-                $stmt->execute([
-                    $category_id, $item_name, $item_code, $calculation_basis, 
-                    $calculation_type, $calculation_value, $applies_to, 
-                    $affects_net_salary, $is_summary_item, $display_order
-                ]);
-                $success_message = 'Salary item added successfully.';
-            }
-            
-            redirect('hr/pay_salary.php?section=manage');
-        }
-        
-        // === 2. DELETE SALARY ITEM ===
-        elseif (isset($_POST['delete_salary_item'])) {
-            $item_id = (int)$_POST['item_id'];
-            
-            $stmt = $db->prepare("UPDATE salary_items SET is_active = 0 WHERE id = ?");
-            $stmt->execute([$item_id]);
-            $success_message = 'Salary item deleted successfully.';
-            redirect('hr/pay_salary.php?section=manage');
-        }
-        
-        // === 3. ADD/EDIT STATUTORY RATE ===
-        elseif (isset($_POST['save_statutory_rate'])) {
-            $item_code = sanitize_input($_POST['item_code']);
-            $country_code = sanitize_input($_POST['country_code']);
-            $deduction_name = sanitize_input($_POST['deduction_name']);
-            $rate = (float)$_POST['rate'];
-            $min_amount = !empty($_POST['min_amount']) ? (float)$_POST['min_amount'] : NULL;
-            $max_amount = !empty($_POST['max_amount']) ? (float)$_POST['max_amount'] : NULL;
-            $applies_to = sanitize_input($_POST['applies_to']);
-            $is_percentage = isset($_POST['is_percentage']) ? 1 : 0;
-            $is_mandatory = isset($_POST['is_mandatory']) ? 1 : 0;
-            $effective_date = $_POST['effective_date'];
-            $expiry_date = !empty($_POST['expiry_date']) ? $_POST['expiry_date'] : NULL;
-            
-            // Check if rate already exists for this effective date
-            $check_stmt = $db->prepare("
-                SELECT id FROM statutory_deductions 
-                WHERE item_code = ? AND country_code = ? AND effective_date = ?
-            ");
-            $check_stmt->execute([$item_code, $country_code, $effective_date]);
-            $existing = $check_stmt->fetch();
-            
-            if ($existing) {
-                // Update existing
-                $stmt = $db->prepare("
-                    UPDATE statutory_deductions 
-                    SET deduction_name = ?, rate = ?, min_amount = ?, max_amount = ?,
-                        applies_to = ?, is_percentage = ?, is_mandatory = ?,
-                        expiry_date = ?, updated_at = NOW()
-                    WHERE id = ?
-                ");
-                $stmt->execute([
-                    $deduction_name, $rate, $min_amount, $max_amount, $applies_to,
-                    $is_percentage, $is_mandatory, $expiry_date, $existing['id']
-                ]);
-            } else {
-                // Insert new
-                $stmt = $db->prepare("
-                    INSERT INTO statutory_deductions (
-                        item_code, country_code, deduction_name, rate, min_amount, max_amount,
-                        applies_to, is_percentage, is_mandatory, effective_date, expiry_date
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ");
-                $stmt->execute([
-                    $item_code, $country_code, $deduction_name, $rate, $min_amount, $max_amount,
-                    $applies_to, $is_percentage, $is_mandatory, $effective_date, $expiry_date
-                ]);
-            }
-            
-            $success_message = 'Statutory rate saved successfully.';
-            redirect('hr/pay_salary.php?section=statutory');
-        }
-        
-        // === 4. CALCULATE SALARIES ===
-        elseif (isset($_POST['calculate_salaries'])) {
+        // === 1. CALCULATE SALARIES ===
+        if (isset($_POST['calculate_salaries'])) {
             $pay_period_month = $_POST['pay_period_month'];
             
-            // Get all active employees
+            // Get all active employees (excluding system_admin and ceo)
             $stmt = $db->query("
-                SELECT u.* FROM users u 
+                SELECT u.*, 
+                       ep.house_allowance,
+                       ep.nhif_rate,
+                       ep.other_deductions as fixed_deductions
+                FROM users u
+                LEFT JOIN employee_profiles ep ON u.id = ep.user_id
                 WHERE u.status = 'active' 
                 AND u.role NOT IN ('system_admin', 'ceo')
                 ORDER BY u.full_name
@@ -427,6 +422,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 'summary' => [
                     'total_employees' => 0,
                     'total_basic_salary' => 0,
+                    'total_house_allowance' => 0,
                     'total_allowances' => 0,
                     'total_overtime' => 0,
                     'total_bonuses' => 0,
@@ -434,6 +430,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     'total_nssf_employee' => 0,
                     'total_paye_tax' => 0,
                     'total_nhif' => 0,
+                    'total_loans' => 0,
                     'total_other_deductions' => 0,
                     'total_deductions' => 0,
                     'total_net_salary' => 0,
@@ -448,49 +445,45 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             // Calculate for each employee
             foreach ($employees as $emp) {
                 $basic_salary = (float)$emp['salary'];
+                $house_allowance = (float)($emp['house_allowance'] ?? getHouseAllowance($db, $emp['id']));
                 
                 // Get incentives for this month
-                $incentive_stmt = $db->prepare("
-                    SELECT incentive_type, SUM(amount) as total_amount
-                    FROM payroll_incentives 
-                    WHERE user_id = ? AND pay_period_month = ? AND status = 'approved'
-                    GROUP BY incentive_type
-                ");
-                $incentive_stmt->execute([$emp['id'], $pay_period_month]);
-                $incentives = $incentive_stmt->fetchAll();
+                $incentives = getEmployeeIncentives($db, $emp['id'], $pay_period_month);
                 
-                // Organize incentives
-                $allowances = 0;
-                $overtime = 0;
-                $bonuses = 0;
+                // Get loan deductions
+                $loan_data = getEmployeeLoanDeductions($db, $emp['id'], $pay_period_month);
                 
-                foreach ($incentives as $inc) {
-                    $type = strtolower($inc['incentive_type']);
-                    $amount = (float)$inc['total_amount'];
-                    
-                    if ($type === 'allowance') {
-                        $allowances = $amount;
-                    } elseif ($type === 'overtime') {
-                        $overtime = $amount;
-                    } elseif ($type === 'bonus') {
-                        $bonuses = $amount;
-                    }
-                }
+                // Calculate GROSS SALARY = Basic + House Allowance + Allowances + Overtime + Bonuses
+                $gross_salary = $basic_salary + $house_allowance + 
+                               $incentives['allowances'] + 
+                               $incentives['overtime'] + 
+                               $incentives['bonuses'];
                 
-                // Calculate gross salary
-                $gross_salary = $basic_salary + $allowances + $overtime + $bonuses;
+                // === EMPLOYEE DEDUCTIONS ===
                 
-                // Calculate deductions
-                $nssf_employee = ($basic_salary * $rates['nssf_employee_rate'] / 100);
-                $paye_tax = calculate_paye_tax($basic_salary);
-                $nhif = $rates['enable_nhif'] ? ($basic_salary * $rates['nhif_rate'] / 100) : 0;
-                $other_deductions = 0; // Could be loans, advances, etc.
+                // 1. NSSF Employee: 10% of GROSS SALARY (matches Excel)
+                $nssf_employee = ($gross_salary * $rates['nssf_employee_rate'] / 100);
                 
-                $total_deductions = $nssf_employee + $paye_tax + $nhif + $other_deductions;
+                // 2. PAYE: Calculated on (Gross - NSSF) - matches Excel
+                $taxable_income = $gross_salary - $nssf_employee;
+                $paye_tax = calculate_paye_tax($taxable_income);
+                
+                // 3. NHIF: Get employee-specific rate (matches Excel variable rates)
+                $nhif_rate = (float)($emp['nhif_rate'] ?? getEmployeeNHIFRate($db, $emp['id']));
+                $nhif = ($nhif_rate > 0) ? ($gross_salary * $nhif_rate / 100) : 0;
+                
+                // 4. Loans/Other deductions
+                $loans = $loan_data['total'];
+                $other_deductions = (float)($emp['fixed_deductions'] ?? 0);
+                
+                // Total employee deductions
+                $total_deductions = $nssf_employee + $paye_tax + $nhif + $loans + $other_deductions;
+                
+                // Net Salary
                 $net_salary = $gross_salary - $total_deductions;
                 
-                // Calculate employer contributions
-                $nssf_employer = ($basic_salary * $rates['nssf_employer_rate'] / 100);
+                // === EMPLOYER CONTRIBUTIONS ===
+                $nssf_employer = ($gross_salary * $rates['nssf_employer_rate'] / 100);
                 $sdl = ($gross_salary * $rates['sdl_rate'] / 100);
                 $wcf = ($gross_salary * $rates['wcf_rate'] / 100);
                 $osha = ($gross_salary * $rates['osha_rate'] / 100);
@@ -504,13 +497,16 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     'employee_name' => $emp['full_name'],
                     'job_title' => $emp['job_title'],
                     'basic_salary' => $basic_salary,
-                    'allowances' => $allowances,
-                    'overtime' => $overtime,
-                    'bonuses' => $bonuses,
+                    'house_allowance' => $house_allowance,
+                    'allowances' => $incentives['allowances'],
+                    'overtime' => $incentives['overtime'],
+                    'bonuses' => $incentives['bonuses'],
                     'gross_salary' => $gross_salary,
                     'nssf_employee' => $nssf_employee,
                     'paye_tax' => $paye_tax,
                     'nhif' => $nhif,
+                    'loans' => $loans,
+                    'loan_details' => $loan_data['details'],
                     'other_deductions' => $other_deductions,
                     'total_deductions' => $total_deductions,
                     'net_salary' => $net_salary,
@@ -519,7 +515,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     'wcf' => $wcf,
                     'osha' => $osha,
                     'total_employer_contributions' => $total_employer_contributions,
-                    'total_employer_cost' => $total_employer_cost
+                    'total_employer_cost' => $total_employer_cost,
+                    'nhif_rate' => $nhif_rate
                 ];
                 
                 $salary_calculation['employees'][] = $employee_calc;
@@ -527,13 +524,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 // Update summary totals
                 $salary_calculation['summary']['total_employees']++;
                 $salary_calculation['summary']['total_basic_salary'] += $basic_salary;
-                $salary_calculation['summary']['total_allowances'] += $allowances;
-                $salary_calculation['summary']['total_overtime'] += $overtime;
-                $salary_calculation['summary']['total_bonuses'] += $bonuses;
+                $salary_calculation['summary']['total_house_allowance'] += $house_allowance;
+                $salary_calculation['summary']['total_allowances'] += $incentives['allowances'];
+                $salary_calculation['summary']['total_overtime'] += $incentives['overtime'];
+                $salary_calculation['summary']['total_bonuses'] += $incentives['bonuses'];
                 $salary_calculation['summary']['total_gross_salary'] += $gross_salary;
                 $salary_calculation['summary']['total_nssf_employee'] += $nssf_employee;
                 $salary_calculation['summary']['total_paye_tax'] += $paye_tax;
                 $salary_calculation['summary']['total_nhif'] += $nhif;
+                $salary_calculation['summary']['total_loans'] += $loans;
                 $salary_calculation['summary']['total_other_deductions'] += $other_deductions;
                 $salary_calculation['summary']['total_deductions'] += $total_deductions;
                 $salary_calculation['summary']['total_net_salary'] += $net_salary;
@@ -553,7 +552,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             redirect('hr/pay_salary.php?section=payment');
         }
         
-        // === 5. GENERATE PAYMENT REQUEST (USING TOTAL EMPLOYER COST) ===
+        // === 2. GENERATE PAYMENT REQUEST WITH GL POSTING ===
         elseif (isset($_POST['generate_payment_request'])) {
             if (!isset($_SESSION['salary_calculation'])) {
                 $error_message = 'No salary calculation found. Please calculate salaries first.';
@@ -564,15 +563,21 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 $payment_method = $_POST['payment_method'] ?? 'bank_transfer';
                 $notes = sanitize_input($_POST['notes'] ?? '');
                 
-                // IMPORTANT: Use TOTAL EMPLOYER COST for payment
                 $total_employer_cost = $salary_calculation['summary']['total_employer_cost'] ?? 0;
-                
-                // Breakdown
                 $net_salary = $salary_calculation['summary']['total_net_salary'] ?? 0;
-                $employer_contributions = ($salary_calculation['summary']['total_nssf_employer'] ?? 0) +
-                                         ($salary_calculation['summary']['total_sdl'] ?? 0) +
-                                         ($salary_calculation['summary']['total_wcf'] ?? 0) +
-                                         ($salary_calculation['summary']['total_osha'] ?? 0);
+                $total_gross = $salary_calculation['summary']['total_gross_salary'] ?? 0;
+                
+                // Summary of statutory deductions
+                $total_nssf_employee = $salary_calculation['summary']['total_nssf_employee'] ?? 0;
+                $total_paye = $salary_calculation['summary']['total_paye_tax'] ?? 0;
+                $total_nhif = $salary_calculation['summary']['total_nhif'] ?? 0;
+                $total_loans = $salary_calculation['summary']['total_loans'] ?? 0;
+                $total_other_ded = $salary_calculation['summary']['total_other_deductions'] ?? 0;
+                
+                $total_nssf_employer = $salary_calculation['summary']['total_nssf_employer'] ?? 0;
+                $total_sdl = $salary_calculation['summary']['total_sdl'] ?? 0;
+                $total_wcf = $salary_calculation['summary']['total_wcf'] ?? 0;
+                $total_osha = $salary_calculation['summary']['total_osha'] ?? 0;
                 
                 // Start database transaction
                 $db->beginTransaction();
@@ -581,7 +586,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     // Generate request number
                     $request_no = generate_salary_payment_request_no();
                     
-                    // Insert into pending_pay - Using TOTAL EMPLOYER COST
+                    // Insert into pending_pay
                     $stmt = $db->prepare("
                         INSERT INTO pending_pay (
                             request_no, subject, pay_to_type, payee_id, payee_name,
@@ -592,33 +597,43 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     ");
                     
                     $subject = "Salary Payment - " . date('F Y', strtotime($pay_period_month . '-01'));
-                    $description = "SALARY PAYMENT REQUEST\n" .
-                                  "========================\n" .
-                                  "Period: " . date('F Y', strtotime($pay_period_month . '-01')) . "\n" .
-                                  "Total Employees: " . $salary_calculation['summary']['total_employees'] . "\n\n" .
-                                  "PAYMENT BREAKDOWN:\n" .
-                                  "1. Net Salary to Employees: " . format_payroll_currency($net_salary) . "\n" .
-                                  "2. Employer Contributions:\n" .
-                                  "   - NSSF Employer: " . format_payroll_currency($salary_calculation['summary']['total_nssf_employer'] ?? 0) . "\n" .
-                                  "   - SDL: " . format_payroll_currency($salary_calculation['summary']['total_sdl'] ?? 0) . "\n" .
-                                  "   - WCF: " . format_payroll_currency($salary_calculation['summary']['total_wcf'] ?? 0) . "\n" .
-                                  "   - OSHA: " . format_payroll_currency($salary_calculation['summary']['total_osha'] ?? 0) . "\n" .
-                                  "   Total Employer Contributions: " . format_payroll_currency($employer_contributions) . "\n\n" .
-                                  "TOTAL PAYMENT REQUIRED (TOTAL EMPLOYER COST): " . format_payroll_currency($total_employer_cost) . "\n\n" .
-                                  "Payment Method: " . $payment_method . "\n" .
-                                  "Notes: " . $notes . "\n\n" .
-                                  "This payment includes both employee net salaries and all statutory employer contributions.";
+                    
+                    // Build detailed description with all deductions
+                    $description = "SALARY PAYMENT REQUEST\n";
+                    $description .= "========================\n";
+                    $description .= "Period: " . date('F Y', strtotime($pay_period_month . '-01')) . "\n";
+                    $description .= "Total Employees: " . $salary_calculation['summary']['total_employees'] . "\n\n";
+                    
+                    $description .= "PAYMENT BREAKDOWN:\n";
+                    $description .= "1. Gross Salary: " . format_payroll_currency($total_gross) . "\n";
+                    $description .= "2. Employee Deductions:\n";
+                    $description .= "   - NSSF (Employee): " . format_payroll_currency($total_nssf_employee) . "\n";
+                    $description .= "   - PAYE: " . format_payroll_currency($total_paye) . "\n";
+                    $description .= "   - NHIF: " . format_payroll_currency($total_nhif) . "\n";
+                    $description .= "   - Loans: " . format_payroll_currency($total_loans) . "\n";
+                    $description .= "   - Other Deductions: " . format_payroll_currency($total_other_ded) . "\n";
+                    $description .= "3. Net Salary to Employees: " . format_payroll_currency($net_salary) . "\n\n";
+                    
+                    $description .= "EMPLOYER CONTRIBUTIONS:\n";
+                    $description .= "   - NSSF (Employer): " . format_payroll_currency($total_nssf_employer) . "\n";
+                    $description .= "   - SDL: " . format_payroll_currency($total_sdl) . "\n";
+                    $description .= "   - WCF: " . format_payroll_currency($total_wcf) . "\n";
+                    $description .= "   - OSHA: " . format_payroll_currency($total_osha) . "\n\n";
+                    
+                    $description .= "TOTAL PAYMENT REQUIRED (TOTAL EMPLOYER COST): " . format_payroll_currency($total_employer_cost) . "\n\n";
+                    $description .= "Payment Method: " . $payment_method . "\n";
+                    $description .= "Notes: " . $notes;
                     
                     $stmt->execute([
                         $request_no,
                         $subject,
-                        'SALARY', // Special payee_id for salary payments
+                        'SALARY',
                         'Various Payees',
                         'Company Bank',
                         'Main Branch',
                         'Company Account',
                         'COMPANY-001',
-                        $total_employer_cost, // Using TOTAL EMPLOYER COST
+                        $total_employer_cost,
                         '',
                         $description,
                         $current_user_id
@@ -626,7 +641,51 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     
                     $payment_id = $db->lastInsertId();
                     
-                    // Save detailed calculation to salary_calculations table if it exists
+                    // === POST TO GENERAL LEDGER ===
+                    require_once '../includes/payroll_accounting.php';
+                    
+                    $gl_reference_no = $request_no;
+                    $gl_entries = [];
+                    
+                    foreach ($salary_calculation['employees'] as $emp) {
+                        // Prepare GL posting for each employee
+                        $statutory_deductions = [
+                            'nssf' => $emp['nssf_employee'] ?? 0,
+                            'paye' => $emp['paye_tax'] ?? 0,
+                            'health_insurance' => $emp['nhif'] ?? 0,
+                        ];
+                        
+                        $statutory_employer = [
+                            'nssf' => $emp['nssf_employer'] ?? 0,
+                            'sdl' => $emp['sdl'] ?? 0,
+                            'wcf' => $emp['wcf'] ?? 0,
+                            'osha' => $emp['osha'] ?? 0,
+                            'health_insurance' => 0,
+                        ];
+                        
+                        $result = postPayrollToGL([
+                            'reference_no' => $gl_reference_no,
+                            'employee_name' => $emp['employee_name'],
+                            'employee_id' => $emp['user_id'],
+                            'gross_salary' => $emp['gross_salary'] ?? 0,
+                            'deductions' => [
+                                'loans' => $emp['loans'] ?? 0,
+                                'other' => $emp['other_deductions'] ?? 0,
+                            ],
+                            'statutory_deductions' => $statutory_deductions,
+                            'statutory_employer' => $statutory_employer,
+                            'net_salary' => $emp['net_salary'] ?? 0,
+                            'period_start' => $pay_period_month . '-01',
+                            'period_end' => date('Y-m-t', strtotime($pay_period_month . '-01')),
+                            'posted_by' => $current_user_id,
+                        ]);
+                        
+                        if (!$result['success']) {
+                            error_log('Payroll GL posting error for employee ' . $emp['employee_name'] . ': ' . ($result['error'] ?? 'unknown'));
+                        }
+                    }
+                    
+                    // Save calculation to salary_calculations table
                     try {
                         $calc_stmt = $db->prepare("
                             INSERT INTO salary_calculations (
@@ -641,54 +700,18 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             $pay_period_month,
                             json_encode($salary_calculation),
                             $salary_calculation['summary']['total_employees'],
-                            $salary_calculation['summary']['total_gross_salary'],
+                            $total_gross,
                             $salary_calculation['summary']['total_deductions'],
                             $net_salary,
-                            $employer_contributions,
+                            $total_nssf_employer + $total_sdl + $total_wcf + $total_osha,
                             $total_employer_cost,
                             $current_user_id
                         ]);
                     } catch (Exception $e) {
-                        // Table might not exist, continue without saving calculation
                         error_log("salary_calculations table doesn't exist: " . $e->getMessage());
                     }
                     
                     $db->commit();
-
-                    require_once '../includes/payroll_accounting.php';
-                    
-                    // Post payroll entries to General Ledger
-                    $gl_reference_no = $request_no;
-                    foreach ($salary_calculation['employees'] as $emp) {
-                        $statutory_deductions = [
-                            'nssf'             => $emp['nssf_employee'] ?? 0,
-                            'paye'             => $emp['paye_tax'] ?? 0,
-                            'health_insurance' => $emp['nhif'] ?? 0,
-                        ];
-                        $statutory_employer = [
-                            'nssf'             => $emp['nssf_employer'] ?? 0,
-                            'sdl'              => $emp['sdl'] ?? 0,
-                            'wcf'              => $emp['wcf'] ?? 0,
-                            'osha'             => $emp['osha'] ?? 0,
-                            'health_insurance' => 0,
-                        ];
-                        $result = postPayrollToGL([
-                            'reference_no'         => $gl_reference_no,
-                            'employee_name'        => $emp['employee_name'],
-                            'employee_id'          => $emp['user_id'],
-                            'gross_salary'         => $emp['gross_salary'] ?? 0,
-                            'deductions'           => [],
-                            'statutory_deductions' => $statutory_deductions,
-                            'statutory_employer'   => $statutory_employer,
-                            'net_salary'           => $emp['net_salary'] ?? 0,
-                            'period_start'         => $pay_period_month . '-01',
-                            'period_end'           => date('Y-m-t', strtotime($pay_period_month . '-01')),
-                            'posted_by'            => $current_user_id,
-                        ]);
-                        if (!$result['success']) {
-                            error_log('Payroll GL posting error for employee ' . $emp['employee_name'] . ': ' . ($result['error'] ?? 'unknown'));
-                        }
-                    }
                     
                     // Clear session data
                     unset($_SESSION['salary_calculation']);
@@ -698,8 +721,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                                       <strong>Request No:</strong> {$request_no}<br>
                                       <strong>Total Employer Cost:</strong> " . format_payroll_currency($total_employer_cost) . "<br>
                                       <strong>Breakdown:</strong><br>
+                                      - Gross Salary: " . format_payroll_currency($total_gross) . "<br>
+                                      - Employee Deductions: " . format_payroll_currency($salary_calculation['summary']['total_deductions']) . "<br>
                                       - Net Salary: " . format_payroll_currency($net_salary) . "<br>
-                                      - Employer Contributions: " . format_payroll_currency($employer_contributions) . "<br>
+                                      - Employer Contributions: " . format_payroll_currency($total_nssf_employer + $total_sdl + $total_wcf + $total_osha) . "<br>
                                       <strong>Status:</strong> Sent to CEO for approval";
                     
                     redirect('hr/pay_salary.php?section=history');
@@ -709,6 +734,68 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     throw $e;
                 }
             }
+        }
+        
+        // === 3. CONFIGURE STATUTORY RATES ===
+        elseif (isset($_POST['configure_statutory'])) {
+            // Update rates in system_settings
+            $rate_keys = [
+                'nssf_employee_rate', 'nssf_employer_rate', 'sdl_rate', 
+                'wcf_rate', 'osha_rate', 'overtime_rate_per_hour', 'default_nhif_rate'
+            ];
+            
+            foreach ($rate_keys as $key) {
+                if (isset($_POST[$key])) {
+                    $value = (float)$_POST[$key];
+                    // Update or insert
+                    $stmt = $db->prepare("
+                        INSERT INTO system_settings (setting_key, setting_value, updated_at) 
+                        VALUES (?, ?, NOW()) 
+                        ON DUPLICATE KEY UPDATE setting_value = ?, updated_at = NOW()
+                    ");
+                    $stmt->execute([$key, $value, $value]);
+                }
+            }
+            
+            // Handle NHIF enable
+            $enable_nhif = isset($_POST['enable_nhif']) ? 1 : 0;
+            $stmt = $db->prepare("
+                INSERT INTO system_settings (setting_key, setting_value, updated_at) 
+                VALUES ('enable_nhif', ?, NOW()) 
+                ON DUPLICATE KEY UPDATE setting_value = ?, updated_at = NOW()
+            ");
+            $stmt->execute([$enable_nhif, $enable_nhif]);
+            
+            $success_message = 'Statutory rates configured successfully.';
+            redirect('hr/pay_salary.php?section=statutory');
+        }
+        
+        // === 4. SAVE PAYE BRACKET ===
+        elseif (isset($_POST['save_paye_bracket'])) {
+            $bracket_min = (float)$_POST['bracket_min'];
+            $bracket_max = (float)$_POST['bracket_max'];
+            $tax_rate = (float)$_POST['tax_rate'];
+            $description = sanitize_input($_POST['description'] ?? '');
+            
+            $stmt = $db->prepare("
+                INSERT INTO paye_tax_brackets (bracket_min, bracket_max, tax_rate, description, status)
+                VALUES (?, ?, ?, ?, 'active')
+            ");
+            $stmt->execute([$bracket_min, $bracket_max, $tax_rate, $description]);
+            
+            $success_message = 'PAYE bracket added successfully.';
+            redirect('hr/pay_salary.php?section=statutory');
+        }
+        
+        // === 5. DELETE PAYE BRACKET ===
+        elseif (isset($_POST['delete_paye_bracket'])) {
+            $bracket_id = (int)$_POST['bracket_id'];
+            
+            $stmt = $db->prepare("UPDATE paye_tax_brackets SET status = 'inactive' WHERE id = ?");
+            $stmt->execute([$bracket_id]);
+            
+            $success_message = 'PAYE bracket deleted successfully.';
+            redirect('hr/pay_salary.php?section=statutory');
         }
         
     } catch (Exception $e) {
@@ -721,7 +808,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 
 // ==================== GET DATA ====================
 
-// Get system rates for display
+// Get system rates
 $rates = get_system_rates();
 
 // Get active employees
@@ -751,7 +838,7 @@ try {
     $paye_brackets = [];
 }
 
-// Get recent salary payments with approval tracking
+// Get recent salary payments
 $salary_payments = [];
 try {
     $stmt = $db->query("
@@ -775,11 +862,8 @@ try {
     $salary_payments = [];
 }
 
-// Check if we have a calculation in session
 $salary_calculation = $_SESSION['salary_calculation'] ?? null;
 $pay_period_month = $_SESSION['pay_period_month'] ?? date('Y-m');
-
-// Get section from URL
 $section = $_GET['section'] ?? 'overview';
 
 ob_start();
@@ -793,35 +877,30 @@ include '../includes/header.php';
             <span class="badge bg-primary">HR Manager</span>
         </h1>
         <div class="d-flex gap-2">
-            <?php if ($current_user_role === 'hr_manager'): ?>
-                <button class="btn btn-primary" onclick="window.location.href='?section=statutory'">
-                    <i class="bi bi-gear me-2"></i>Configure Rates
+            <button class="btn btn-primary" onclick="window.location.href='?section=statutory'">
+                <i class="bi bi-gear me-2"></i>Configure Rates
+            </button>
+            <button class="btn btn-warning" data-bs-toggle="modal" data-bs-target="#calculateSalariesModal">
+                <i class="bi bi-calculator me-2"></i>Calculate Salaries
+            </button>
+            <?php if ($salary_calculation): ?>
+                <button class="btn btn-danger" onclick="window.location.href='?section=payment'">
+                    <i class="bi bi-send-check me-2"></i>Generate Payment
                 </button>
-                <button class="btn btn-warning" data-bs-toggle="modal" data-bs-target="#calculateSalariesModal">
-                    <i class="bi bi-calculator me-2"></i>Calculate Salaries
-                </button>
-                <?php if ($salary_calculation): ?>
-                    <button class="btn btn-danger" onclick="window.location.href='?section=payment'">
-                        <i class="bi bi-send-check me-2"></i>Generate Payment
-                    </button>
-                <?php endif; ?>
             <?php endif; ?>
         </div>
     </div>
 
-    <!-- Alerts -->
     <?php if (!empty($error_message)): ?>
         <div class="alert alert-danger alert-dismissible fade show">
-            <i class="bi bi-exclamation-triangle me-2"></i>
-            <?php echo $error_message; ?>
+            <i class="bi bi-exclamation-triangle me-2"></i><?php echo $error_message; ?>
             <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
         </div>
     <?php endif; ?>
 
     <?php if (!empty($success_message)): ?>
         <div class="alert alert-success alert-dismissible fade show">
-            <i class="bi bi-check-circle me-2"></i>
-            <?php echo $success_message; ?>
+            <i class="bi bi-check-circle me-2"></i><?php echo $success_message; ?>
             <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
         </div>
     <?php endif; ?>
@@ -829,28 +908,22 @@ include '../includes/header.php';
     <!-- Navigation Tabs -->
     <ul class="nav nav-tabs mb-4">
         <li class="nav-item">
-            <a class="nav-link <?php echo $section === 'overview' ? 'active' : ''; ?>" 
-               href="?section=overview">
+            <a class="nav-link <?php echo $section === 'overview' ? 'active' : ''; ?>" href="?section=overview">
                 <i class="bi bi-house-door me-1"></i>Overview
             </a>
         </li>
-        <?php if ($current_user_role === 'hr_manager'): ?>
         <li class="nav-item">
-            <a class="nav-link <?php echo $section === 'statutory' ? 'active' : ''; ?>" 
-               href="?section=statutory">
+            <a class="nav-link <?php echo $section === 'statutory' ? 'active' : ''; ?>" href="?section=statutory">
                 <i class="bi bi-gear me-1"></i>Statutory Setup
             </a>
         </li>
         <li class="nav-item">
-            <a class="nav-link <?php echo $section === 'payment' ? 'active' : ''; ?>" 
-               href="?section=payment">
+            <a class="nav-link <?php echo $section === 'payment' ? 'active' : ''; ?>" href="?section=payment">
                 <i class="bi bi-cash-stack me-1"></i>Generate Payment
             </a>
         </li>
-        <?php endif; ?>
         <li class="nav-item">
-            <a class="nav-link <?php echo $section === 'history' ? 'active' : ''; ?>" 
-               href="?section=history">
+            <a class="nav-link <?php echo $section === 'history' ? 'active' : ''; ?>" href="?section=history">
                 <i class="bi bi-clock-history me-1"></i>Payment History
             </a>
         </li>
@@ -864,7 +937,7 @@ include '../includes/header.php';
                     <div class="card-header bg-primary">
                         <h5 class="mb-0">
                             <i class="bi bi-table me-2"></i>
-                            Complete Salary Structure
+                            Complete Salary Structure (Excel Matching)
                             <small class="float-end">Tanzanian Labor Laws</small>
                         </h5>
                     </div>
@@ -876,8 +949,8 @@ include '../includes/header.php';
                                         <th>Category</th>
                                         <th>Item</th>
                                         <th>% / Basis</th>
-                                        <th>Amount (TZS)</th>
-                                        <th>Affects Net Salary</th>
+                                        <th>GL Account</th>
+                                        <th>Affects Net</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -886,118 +959,124 @@ include '../includes/header.php';
                                         <td rowspan="5" class="align-middle fw-bold">EARNINGS</td>
                                         <td>Basic Salary</td>
                                         <td>Fixed</td>
-                                        <td><?php echo format_payroll_currency($total_basic_salary); ?></td>
-                                        <td class="text-center"><i class="bi bi-check-circle-fill text-success"></i> Yes</td>
+                                        <td>511 - Salaries & Wages</td>
+                                        <td><i class="bi bi-check-circle-fill text-success"></i></td>
                                     </tr>
                                     <tr class="table-success">
-                                        <td>Allowances</td>
+                                        <td>House Allowance</td>
                                         <td>Fixed</td>
-                                        <td>Variable</td>
-                                        <td class="text-center"><i class="bi bi-check-circle-fill text-success"></i> Yes</td>
+                                        <td>511 - Salaries & Wages</td>
+                                        <td><i class="bi bi-check-circle-fill text-success"></i></td>
+                                    </tr>
+                                    <tr class="table-success">
+                                        <td>Other Allowances</td>
+                                        <td>Fixed</td>
+                                        <td>511 - Salaries & Wages</td>
+                                        <td><i class="bi bi-check-circle-fill text-success"></i></td>
                                     </tr>
                                     <tr class="table-success">
                                         <td>Overtime</td>
-                                        <td>Fixed</td>
                                         <td><?php echo format_payroll_currency($rates['overtime_rate_per_hour']); ?>/hr</td>
-                                        <td class="text-center"><i class="bi bi-check-circle-fill text-success"></i> Yes</td>
-                                    </tr>
-                                    <tr class="table-success">
-                                        <td>Bonus</td>
-                                        <td>Fixed</td>
-                                        <td>Variable</td>
-                                        <td class="text-center"><i class="bi bi-check-circle-fill text-success"></i> Yes</td>
+                                        <td>511 - Salaries & Wages</td>
+                                        <td><i class="bi bi-check-circle-fill text-success"></i></td>
                                     </tr>
                                     <tr class="table-success fw-bold">
                                         <td class="text-primary">GROSS SALARY</td>
-                                        <td colspan="2">Sum of earnings</td>
-                                        <td class="text-primary"><?php echo format_payroll_currency($total_basic_salary); ?> + Variable</td>
-                                        <td class="text-center"><i class="bi bi-check-circle-fill text-success"></i> Yes</td>
+                                        <td>Sum of all earnings</td>
+                                        <td>511 - Salaries & Wages</td>
+                                        <td><i class="bi bi-check-circle-fill text-success"></i></td>
                                     </tr>
                                     
-                                    <!-- DEDUCTIONS (EMPLOYEE) -->
+                                    <!-- EMPLOYEE DEDUCTIONS -->
                                     <tr class="table-danger">
-                                        <td rowspan="5" class="align-middle fw-bold">DEDUCTIONS (EMPLOYEE)</td>
+                                        <td rowspan="6" class="align-middle fw-bold">EMPLOYEE DEDUCTIONS</td>
                                         <td>NSSF (Employee)</td>
-                                        <td><?php echo $rates['nssf_employee_rate']; ?>% of Basic</td>
-                                        <td><?php echo format_payroll_currency(($total_basic_salary * $rates['nssf_employee_rate'] / 100)); ?></td>
-                                        <td class="text-center"><i class="bi bi-check-circle-fill text-success"></i> Yes</td>
+                                        <td><?php echo $rates['nssf_employee_rate']; ?>% of Gross</td>
+                                        <td>2121 - NSSF Payable</td>
+                                        <td><i class="bi bi-check-circle-fill text-success"></i></td>
                                     </tr>
                                     <tr class="table-danger">
                                         <td>PAYE (Income Tax)</td>
-                                        <td>0% – 30% (Progressive)</td>
-                                        <td>Calculated per bracket</td>
-                                        <td class="text-center"><i class="bi bi-check-circle-fill text-success"></i> Yes</td>
+                                        <td>0% – 30% (Gross - NSSF)</td>
+                                        <td>2126 - PAYE Payable</td>
+                                        <td><i class="bi bi-check-circle-fill text-success"></i></td>
                                     </tr>
                                     <tr class="table-danger">
-                                        <td>NHIF (Optional)</td>
-                                        <td><?php echo $rates['enable_nhif'] ? $rates['nhif_rate'] . '% of Basic' : 'Disabled'; ?></td>
-                                        <td><?php echo $rates['enable_nhif'] ? format_payroll_currency(($total_basic_salary * $rates['nhif_rate'] / 100)) : '-'; ?></td>
-                                        <td class="text-center"><i class="bi bi-check-circle-fill text-success"></i> Yes</td>
+                                        <td>NHIF</td>
+                                        <td>Variable (per employee)</td>
+                                        <td>2125 - Health Insurance Payable</td>
+                                        <td><i class="bi bi-check-circle-fill text-success"></i></td>
                                     </tr>
                                     <tr class="table-danger">
-                                        <td>Loan / Other</td>
+                                        <td>Loans</td>
                                         <td>Fixed</td>
-                                        <td>Variable</td>
-                                        <td class="text-center"><i class="bi bi-check-circle-fill text-success"></i> Yes</td>
+                                        <td>Various</td>
+                                        <td><i class="bi bi-check-circle-fill text-success"></i></td>
+                                    </tr>
+                                    <tr class="table-danger">
+                                        <td>Other Deductions</td>
+                                        <td>Fixed</td>
+                                        <td>Various</td>
+                                        <td><i class="bi bi-check-circle-fill text-success"></i></td>
                                     </tr>
                                     <tr class="table-danger fw-bold">
                                         <td class="text-danger">TOTAL DEDUCTIONS</td>
-                                        <td colspan="2">Sum of deductions</td>
-                                        <td class="text-danger">NSSF + PAYE + NHIF + Other</td>
-                                        <td class="text-center"><i class="bi bi-check-circle-fill text-success"></i> Yes</td>
+                                        <td>Sum of all deductions</td>
+                                        <td>-</td>
+                                        <td><i class="bi bi-check-circle-fill text-success"></i></td>
                                     </tr>
                                     
                                     <!-- NET PAY -->
                                     <tr class="table-primary fw-bold">
                                         <td>NET PAY</td>
-                                        <td colspan="2">Net Salary</td>
-                                        <td colspan="2" class="text-success">Gross – Deductions = Final Pay</td>
+                                        <td>Gross - Deductions</td>
+                                        <td>212 - Accrued Expenses</td>
+                                        <td class="text-success"><strong>Final Pay</strong></td>
                                     </tr>
                                     
                                     <!-- EMPLOYER CONTRIBUTIONS -->
                                     <tr class="table-warning">
-                                        <td rowspan="5" class="align-middle fw-bold">EMPLOYER CONTRIBUTIONS (INFO ONLY)</td>
+                                        <td rowspan="5" class="align-middle fw-bold">EMPLOYER CONTRIBUTIONS</td>
                                         <td>NSSF (Employer)</td>
-                                        <td><?php echo $rates['nssf_employer_rate']; ?>% of Basic</td>
-                                        <td><?php echo format_payroll_currency(($total_basic_salary * $rates['nssf_employer_rate'] / 100)); ?></td>
-                                        <td class="text-center"><i class="bi bi-x-circle-fill text-danger"></i> No</td>
+                                        <td><?php echo $rates['nssf_employer_rate']; ?>% of Gross</td>
+                                        <td>5121 - NSSF Employer</td>
+                                        <td><i class="bi bi-x-circle-fill text-danger"></i></td>
                                     </tr>
                                     <tr class="table-warning">
                                         <td>SDL</td>
                                         <td><?php echo $rates['sdl_rate']; ?>% of Gross</td>
-                                        <td>3.5% of Gross Salary</td>
-                                        <td class="text-center"><i class="bi bi-x-circle-fill text-danger"></i> No</td>
+                                        <td>5122 - SDL Expense</td>
+                                        <td><i class="bi bi-x-circle-fill text-danger"></i></td>
                                     </tr>
                                     <tr class="table-warning">
                                         <td>WCF</td>
                                         <td><?php echo $rates['wcf_rate']; ?>% of Gross</td>
-                                        <td>0.5% of Gross Salary</td>
-                                        <td class="text-center"><i class="bi bi-x-circle-fill text-danger"></i> No</td>
+                                        <td>5123 - WCF Expense</td>
+                                        <td><i class="bi bi-x-circle-fill text-danger"></i></td>
                                     </tr>
                                     <tr class="table-warning">
                                         <td>OSHA</td>
                                         <td><?php echo $rates['osha_rate']; ?>% of Gross</td>
-                                        <td>0.5% of Gross Salary</td>
-                                        <td class="text-center"><i class="bi bi-x-circle-fill text-danger"></i> No</td>
+                                        <td>5124 - OSHA Expense</td>
+                                        <td><i class="bi bi-x-circle-fill text-danger"></i></td>
                                     </tr>
                                     <tr class="table-warning fw-bold">
                                         <td class="text-warning">TOTAL EMPLOYER COST</td>
-                                        <td colspan="2">Gross + Employer costs</td>
-                                        <td class="text-warning">Gross + NSSF(Employer) + SDL + WCF + OSHA</td>
-                                        <td class="text-center"><i class="bi bi-x-circle-fill text-danger"></i> No</td>
+                                        <td>Gross + Employer Costs</td>
+                                        <td>-</td>
+                                        <td><i class="bi bi-x-circle-fill text-danger"></i></td>
                                     </tr>
                                 </tbody>
                             </table>
                         </div>
                         
+                        <!-- Quick Stats -->
                         <div class="row mt-4">
                             <div class="col-md-3">
                                 <div class="card border-start-success shadow h-100">
                                     <div class="card-body">
                                         <div class="d-flex align-items-center">
-                                            <div class="me-3">
-                                                <i class="bi bi-people fs-1 text-success"></i>
-                                            </div>
+                                            <div class="me-3"><i class="bi bi-people fs-1 text-success"></i></div>
                                             <div>
                                                 <div class="text-muted">Active Employees</div>
                                                 <div class="fs-4 fw-bold"><?php echo $active_employees; ?></div>
@@ -1010,9 +1089,7 @@ include '../includes/header.php';
                                 <div class="card border-start-primary shadow h-100">
                                     <div class="card-body">
                                         <div class="d-flex align-items-center">
-                                            <div class="me-3">
-                                                <i class="bi bi-cash-stack fs-1 text-primary"></i>
-                                            </div>
+                                            <div class="me-3"><i class="bi bi-cash-stack fs-1 text-primary"></i></div>
                                             <div>
                                                 <div class="text-muted">Total Basic Salary</div>
                                                 <div class="fs-4 fw-bold"><?php echo format_payroll_currency($total_basic_salary); ?></div>
@@ -1025,12 +1102,10 @@ include '../includes/header.php';
                                 <div class="card border-start-warning shadow h-100">
                                     <div class="card-body">
                                         <div class="d-flex align-items-center">
-                                            <div class="me-3">
-                                                <i class="bi bi-clock-history fs-1 text-warning"></i>
-                                            </div>
+                                            <div class="me-3"><i class="bi bi-clock-history fs-1 text-warning"></i></div>
                                             <div>
-                                                <div class="text-muted">Overtime Rate</div>
-                                                <div class="fs-4 fw-bold"><?php echo format_payroll_currency($rates['overtime_rate_per_hour']); ?>/hr</div>
+                                                <div class="text-muted">PAYE Basis</div>
+                                                <div class="fs-6 fw-bold">Gross - NSSF (Excel Match)</div>
                                             </div>
                                         </div>
                                     </div>
@@ -1040,9 +1115,7 @@ include '../includes/header.php';
                                 <div class="card border-start-info shadow h-100">
                                     <div class="card-body">
                                         <div class="d-flex align-items-center">
-                                            <div class="me-3">
-                                                <i class="bi bi-building fs-1 text-info"></i>
-                                            </div>
+                                            <div class="me-3"><i class="bi bi-building fs-1 text-info"></i></div>
                                             <div>
                                                 <div class="text-muted">NSSF Rate</div>
                                                 <div class="fs-4 fw-bold"><?php echo $rates['nssf_employee_rate']; ?>% / <?php echo $rates['nssf_employer_rate']; ?>%</div>
@@ -1057,13 +1130,13 @@ include '../includes/header.php';
             </div>
         </div>
     
-    <!-- Statutory Setup Section (HR only) -->
-    <?php elseif ($section === 'statutory' && $current_user_role === 'hr_manager'): ?>
+    <!-- Statutory Setup Section -->
+    <?php elseif ($section === 'statutory'): ?>
         <div class="row">
             <div class="col-md-8">
                 <div class="card shadow mb-4">
                     <div class="card-header bg-primary">
-                        <h5 class="mb-0"><i class="bi bi-gear me-2"></i>Configure Statutory Deductions</h5>
+                        <h5 class="mb-0"><i class="bi bi-gear me-2"></i>Configure Statutory Rates</h5>
                     </div>
                     <div class="card-body">
                         <form method="POST">
@@ -1072,13 +1145,13 @@ include '../includes/header.php';
                                     <label class="form-label">NSSF Employee Rate (%)</label>
                                     <input type="number" class="form-control" name="nssf_employee_rate" 
                                            step="0.1" min="0" max="100" value="<?php echo $rates['nssf_employee_rate']; ?>" required>
-                                    <small class="text-muted">Standard: 10% of basic salary</small>
+                                    <small class="text-muted">% of Gross Salary (Excel: 10%)</small>
                                 </div>
                                 <div class="col-md-6">
                                     <label class="form-label">NSSF Employer Rate (%)</label>
                                     <input type="number" class="form-control" name="nssf_employer_rate" 
                                            step="0.1" min="0" max="100" value="<?php echo $rates['nssf_employer_rate']; ?>" required>
-                                    <small class="text-muted">Standard: 10% of basic salary</small>
+                                    <small class="text-muted">% of Gross Salary (Excel: 10%)</small>
                                 </div>
                             </div>
                             
@@ -1114,22 +1187,20 @@ include '../includes/header.php';
                                     <div class="form-check form-switch mt-4">
                                         <input class="form-check-input" type="checkbox" name="enable_nhif" 
                                                id="enable_nhif" value="1" <?php echo $rates['enable_nhif'] ? 'checked' : ''; ?>>
-                                        <label class="form-check-label" for="enable_nhif">
-                                            Enable NHIF Deduction
-                                        </label>
+                                        <label class="form-check-label" for="enable_nhif">Enable NHIF Deduction</label>
                                     </div>
                                     <div id="nhifSettings" class="mt-2" style="<?php echo $rates['enable_nhif'] ? '' : 'display: none;'; ?>">
-                                        <label class="form-label">NHIF Rate (%)</label>
-                                        <input type="number" class="form-control" name="nhif_rate" 
-                                               step="0.1" min="0" max="100" value="<?php echo $rates['nhif_rate']; ?>" required>
-                                        <small class="text-muted">National Health Insurance Fund (3%)</small>
+                                        <label class="form-label">Default NHIF Rate (%)</label>
+                                        <input type="number" class="form-control" name="default_nhif_rate" 
+                                               step="0.1" min="0" max="100" value="<?php echo $rates['default_nhif_rate']; ?>">
+                                        <small class="text-muted">Default rate if employee has no specific rate</small>
                                     </div>
                                 </div>
                             </div>
                             
                             <div class="alert alert-warning">
                                 <i class="bi bi-exclamation-triangle me-2"></i>
-                                These rates should match current Tanzanian labor laws. Consult legal experts before changing.
+                                <strong>Excel Match:</strong> NSSF = 10% of Gross, PAYE = Tax on (Gross - NSSF)
                             </div>
                             
                             <div class="text-end">
@@ -1152,12 +1223,7 @@ include '../includes/header.php';
                             <div class="table-responsive">
                                 <table class="table table-sm table-bordered">
                                     <thead>
-                                        <tr>
-                                            <th>Min</th>
-                                            <th>Max</th>
-                                            <th>Rate</th>
-                                            <th>Action</th>
-                                        </tr>
+                                        <tr><th>Min</th><th>Max</th><th>Rate</th><th>Action</th></tr>
                                     </thead>
                                     <tbody>
                                         <?php foreach ($paye_brackets as $bracket): ?>
@@ -1177,11 +1243,18 @@ include '../includes/header.php';
                                                 </td>
                                             </tr>
                                         <?php endforeach; ?>
-                                        </tbody>
+                                    </tbody>
                                 </table>
                             </div>
                         <?php else: ?>
-                            <p class="text-muted">No PAYE brackets configured. Using default rates.</p>
+                            <p class="text-muted">Default brackets:</p>
+                            <ul class="small">
+                                <li>0 - 270,000: 0%</li>
+                                <li>270,001 - 520,000: 8%</li>
+                                <li>520,001 - 760,000: 20%</li>
+                                <li>760,001 - 1,000,000: 25%</li>
+                                <li>Above 1,000,000: 30%</li>
+                            </ul>
                         <?php endif; ?>
                         
                         <button type="button" class="btn btn-sm btn-primary w-100 mt-2" data-bs-toggle="modal" data-bs-target="#addPayeBracketModal">
@@ -1192,8 +1265,8 @@ include '../includes/header.php';
             </div>
         </div>
     
-    <!-- Generate Payment Section (HR only) -->
-    <?php elseif ($section === 'payment' && $current_user_role === 'hr_manager'): ?>
+    <!-- Generate Payment Section -->
+    <?php elseif ($section === 'payment'): ?>
         <?php if ($salary_calculation): ?>
             <div class="row">
                 <div class="col-12">
@@ -1202,13 +1275,11 @@ include '../includes/header.php';
                             <h5 class="mb-0">
                                 <i class="bi bi-calculator me-2"></i>
                                 Salary Calculation - <?php echo date('F Y', strtotime($pay_period_month . '-01')); ?>
-                                <?php if ($salary_calculation): ?>
-                                    <span class="float-end">
-                                        <a href="?export=excel" class="btn btn-sm btn-success">
-                                            <i class="bi bi-file-earmark-excel me-1"></i>Export to Excel
-                                        </a>
-                                    </span>
-                                <?php endif; ?>
+                                <span class="float-end">
+                                    <a href="?export=excel" class="btn btn-sm btn-success">
+                                        <i class="bi bi-file-earmark-excel me-1"></i>Export to Excel
+                                    </a>
+                                </span>
                             </h5>
                         </div>
                         <div class="card-body">
@@ -1230,95 +1301,104 @@ include '../includes/header.php';
                                 </div>
                             </div>
                             
+                            <!-- Employee Deduction Summary -->
+                            <div class="alert alert-danger mb-4">
+                                <div class="row">
+                                    <div class="col-md-3">
+                                        <strong>NSSF Employee:</strong> <?php echo format_payroll_currency($salary_calculation['summary']['total_nssf_employee']); ?>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <strong>PAYE:</strong> <?php echo format_payroll_currency($salary_calculation['summary']['total_paye_tax']); ?>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <strong>NHIF:</strong> <?php echo format_payroll_currency($salary_calculation['summary']['total_nhif']); ?>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <strong>Loans:</strong> <?php echo format_payroll_currency($salary_calculation['summary']['total_loans']); ?>
+                                    </div>
+                                </div>
+                            </div>
+                            
                             <!-- Employer Contributions -->
                             <div class="alert alert-warning mb-4">
                                 <div class="row">
                                     <div class="col-md-3">
-                                        <strong>NSSF Employer:</strong> <?php echo format_payroll_currency($salary_calculation['summary']['total_nssf_employer'] ?? 0); ?>
+                                        <strong>NSSF Employer:</strong> <?php echo format_payroll_currency($salary_calculation['summary']['total_nssf_employer']); ?>
                                     </div>
                                     <div class="col-md-3">
-                                        <strong>SDL:</strong> <?php echo format_payroll_currency($salary_calculation['summary']['total_sdl'] ?? 0); ?>
+                                        <strong>SDL:</strong> <?php echo format_payroll_currency($salary_calculation['summary']['total_sdl']); ?>
                                     </div>
                                     <div class="col-md-3">
-                                        <strong>WCF:</strong> <?php echo format_payroll_currency($salary_calculation['summary']['total_wcf'] ?? 0); ?>
+                                        <strong>WCF:</strong> <?php echo format_payroll_currency($salary_calculation['summary']['total_wcf']); ?>
                                     </div>
                                     <div class="col-md-3">
-                                        <strong>OSHA:</strong> <?php echo format_payroll_currency($salary_calculation['summary']['total_osha'] ?? 0); ?>
+                                        <strong>OSHA:</strong> <?php echo format_payroll_currency($salary_calculation['summary']['total_osha']); ?>
                                     </div>
-                                </div>
-                                <div class="mt-2">
-                                    <strong>Total Employer Contributions:</strong> <?php 
-                                        $total_employer_contributions = ($salary_calculation['summary']['total_nssf_employer'] ?? 0) +
-                                                                       ($salary_calculation['summary']['total_sdl'] ?? 0) +
-                                                                       ($salary_calculation['summary']['total_wcf'] ?? 0) +
-                                                                       ($salary_calculation['summary']['total_osha'] ?? 0);
-                                        echo format_payroll_currency($total_employer_contributions);
-                                    ?>
                                 </div>
                                 <div class="mt-2">
                                     <strong>Total Employer Cost (Payment Required):</strong> 
-                                    <span class="fw-bold text-danger"><?php echo format_payroll_currency($salary_calculation['summary']['total_employer_cost'] ?? 0); ?></span>
+                                    <span class="fw-bold text-danger"><?php echo format_payroll_currency($salary_calculation['summary']['total_employer_cost']); ?></span>
                                 </div>
                             </div>
                             
-                            <!-- Detailed Breakdown -->
+                            <!-- Employee Details Table -->
                             <?php if (isset($salary_calculation['employees']) && !empty($salary_calculation['employees'])): ?>
                             <div class="table-responsive mb-4">
-                                <table class="table table-bordered table-sm">
+                                <table class="table table-bordered table-sm table-striped">
                                     <thead class="table-dark">
                                         <tr>
                                             <th>Employee</th>
                                             <th>Basic</th>
-                                            <th>Allowance</th>
-                                            <th>Overtime</th>
+                                            <th>House Allow</th>
+                                            <th>Other</th>
+                                            <th>O/T</th>
                                             <th>Bonus</th>
                                             <th>Gross</th>
                                             <th>NSSF</th>
                                             <th>PAYE</th>
                                             <th>NHIF</th>
+                                            <th>Loans</th>
                                             <th>Other</th>
                                             <th>Total Ded</th>
                                             <th>Net Pay</th>
-                                            <th>Employer Cost</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         <?php foreach ($salary_calculation['employees'] as $emp): ?>
                                             <tr>
-                                                <td>
-                                                    <small><?php echo htmlspecialchars($emp['employee_name'] ?? 'Unknown'); ?></small><br>
-                                                    <small class="text-muted"><?php echo htmlspecialchars($emp['job_title'] ?? ''); ?></small>
-                                                </td>
-                                                <td class="text-end"><?php echo format_payroll_currency($emp['basic_salary'] ?? 0); ?></td>
+                                                <td><small><?php echo htmlspecialchars($emp['employee_name']); ?></small></td>
+                                                <td class="text-end"><?php echo format_payroll_currency($emp['basic_salary']); ?></td>
+                                                <td class="text-end"><?php echo format_payroll_currency($emp['house_allowance'] ?? 0); ?></td>
                                                 <td class="text-end"><?php echo format_payroll_currency($emp['allowances'] ?? 0); ?></td>
                                                 <td class="text-end"><?php echo format_payroll_currency($emp['overtime'] ?? 0); ?></td>
                                                 <td class="text-end"><?php echo format_payroll_currency($emp['bonuses'] ?? 0); ?></td>
-                                                <td class="text-end fw-bold"><?php echo format_payroll_currency($emp['gross_salary'] ?? 0); ?></td>
-                                                <td class="text-end text-danger"><?php echo format_payroll_currency($emp['nssf_employee'] ?? 0); ?></td>
-                                                <td class="text-end text-danger"><?php echo format_payroll_currency($emp['paye_tax'] ?? 0); ?></td>
-                                                <td class="text-end text-danger"><?php echo format_payroll_currency($emp['nhif'] ?? 0); ?></td>
-                                                <td class="text-end text-danger"><?php echo format_payroll_currency($emp['other_deductions'] ?? 0); ?></td>
-                                                <td class="text-end text-danger fw-bold"><?php echo format_payroll_currency($emp['total_deductions'] ?? 0); ?></td>
-                                                <td class="text-end text-success fw-bold"><?php echo format_payroll_currency($emp['net_salary'] ?? 0); ?></td>
-                                                <td class="text-end text-warning fw-bold"><?php echo format_payroll_currency($emp['total_employer_cost'] ?? 0); ?></td>
+                                                <td class="text-end fw-bold"><?php echo format_payroll_currency($emp['gross_salary']); ?></td>
+                                                <td class="text-end text-danger"><?php echo format_payroll_currency($emp['nssf_employee']); ?></td>
+                                                <td class="text-end text-danger"><?php echo format_payroll_currency($emp['paye_tax']); ?></td>
+                                                <td class="text-end text-danger"><?php echo format_payroll_currency($emp['nhif']); ?></td>
+                                                <td class="text-end text-danger"><?php echo format_payroll_currency($emp['loans'] ?? 0); ?></td>
+                                                <td class="text-end text-danger"><?php echo format_payroll_currency($emp['other_deductions']); ?></td>
+                                                <td class="text-end text-danger fw-bold"><?php echo format_payroll_currency($emp['total_deductions']); ?></td>
+                                                <td class="text-end text-success fw-bold"><?php echo format_payroll_currency($emp['net_salary']); ?></td>
                                             </tr>
                                         <?php endforeach; ?>
                                     </tbody>
                                     <tfoot class="table-secondary fw-bold">
                                         <tr>
                                             <td>TOTALS</td>
-                                            <td class="text-end"><?php echo format_payroll_currency($salary_calculation['summary']['total_basic_salary'] ?? 0); ?></td>
-                                            <td class="text-end"><?php echo format_payroll_currency($salary_calculation['summary']['total_allowances'] ?? 0); ?></td>
-                                            <td class="text-end"><?php echo format_payroll_currency($salary_calculation['summary']['total_overtime'] ?? 0); ?></td>
-                                            <td class="text-end"><?php echo format_payroll_currency($salary_calculation['summary']['total_bonuses'] ?? 0); ?></td>
-                                            <td class="text-end"><?php echo format_payroll_currency($salary_calculation['summary']['total_gross_salary'] ?? 0); ?></td>
-                                            <td class="text-end"><?php echo format_payroll_currency($salary_calculation['summary']['total_nssf_employee'] ?? 0); ?></td>
-                                            <td class="text-end"><?php echo format_payroll_currency($salary_calculation['summary']['total_paye_tax'] ?? 0); ?></td>
-                                            <td class="text-end"><?php echo format_payroll_currency($salary_calculation['summary']['total_nhif'] ?? 0); ?></td>
-                                            <td class="text-end"><?php echo format_payroll_currency($salary_calculation['summary']['total_other_deductions'] ?? 0); ?></td>
-                                            <td class="text-end"><?php echo format_payroll_currency($salary_calculation['summary']['total_deductions'] ?? 0); ?></td>
-                                            <td class="text-end text-success"><?php echo format_payroll_currency($salary_calculation['summary']['total_net_salary'] ?? 0); ?></td>
-                                            <td class="text-end text-warning"><?php echo format_payroll_currency($salary_calculation['summary']['total_employer_cost'] ?? 0); ?></td>
+                                            <td class="text-end"><?php echo format_payroll_currency($salary_calculation['summary']['total_basic_salary']); ?></td>
+                                            <td class="text-end"><?php echo format_payroll_currency($salary_calculation['summary']['total_house_allowance']); ?></td>
+                                            <td class="text-end"><?php echo format_payroll_currency($salary_calculation['summary']['total_allowances']); ?></td>
+                                            <td class="text-end"><?php echo format_payroll_currency($salary_calculation['summary']['total_overtime']); ?></td>
+                                            <td class="text-end"><?php echo format_payroll_currency($salary_calculation['summary']['total_bonuses']); ?></td>
+                                            <td class="text-end"><?php echo format_payroll_currency($salary_calculation['summary']['total_gross_salary']); ?></td>
+                                            <td class="text-end"><?php echo format_payroll_currency($salary_calculation['summary']['total_nssf_employee']); ?></td>
+                                            <td class="text-end"><?php echo format_payroll_currency($salary_calculation['summary']['total_paye_tax']); ?></td>
+                                            <td class="text-end"><?php echo format_payroll_currency($salary_calculation['summary']['total_nhif']); ?></td>
+                                            <td class="text-end"><?php echo format_payroll_currency($salary_calculation['summary']['total_loans']); ?></td>
+                                            <td class="text-end"><?php echo format_payroll_currency($salary_calculation['summary']['total_other_deductions']); ?></td>
+                                            <td class="text-end"><?php echo format_payroll_currency($salary_calculation['summary']['total_deductions']); ?></td>
+                                            <td class="text-end text-success"><?php echo format_payroll_currency($salary_calculation['summary']['total_net_salary']); ?></td>
                                         </tr>
                                     </tfoot>
                                 </table>
@@ -1349,26 +1429,48 @@ include '../includes/header.php';
                                         </div>
                                         <div class="mb-3">
                                             <label class="form-label">Notes (for approval)</label>
-                                            <textarea class="form-control" name="notes" rows="3" 
-                                                      placeholder="Add notes for CEO approval..."></textarea>
+                                            <textarea class="form-control" name="notes" rows="3"></textarea>
                                         </div>
+                                        
+                                        <!-- GL Posting Summary -->
+                                        <div class="alert alert-info">
+                                            <h6><i class="bi bi-journal me-2"></i>General Ledger Posting</h6>
+                                            <div class="row">
+                                                <div class="col-md-6">
+                                                    <strong>Expense Accounts (DR):</strong><br>
+                                                    <span class="small">511 - Salaries & Wages: <?php echo format_payroll_currency($salary_calculation['summary']['total_gross_salary']); ?></span><br>
+                                                    <span class="small">5121 - NSSF Employer: <?php echo format_payroll_currency($salary_calculation['summary']['total_nssf_employer']); ?></span><br>
+                                                    <span class="small">5122 - SDL Expense: <?php echo format_payroll_currency($salary_calculation['summary']['total_sdl']); ?></span><br>
+                                                    <span class="small">5123 - WCF Expense: <?php echo format_payroll_currency($salary_calculation['summary']['total_wcf']); ?></span><br>
+                                                    <span class="small">5124 - OSHA Expense: <?php echo format_payroll_currency($salary_calculation['summary']['total_osha']); ?></span>
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <strong>Liability Accounts (CR):</strong><br>
+                                                    <span class="small">2121 - NSSF Payable: <?php echo format_payroll_currency($salary_calculation['summary']['total_nssf_employee'] + $salary_calculation['summary']['total_nssf_employer']); ?></span><br>
+                                                    <span class="small">2126 - PAYE Payable: <?php echo format_payroll_currency($salary_calculation['summary']['total_paye_tax']); ?></span><br>
+                                                    <span class="small">2125 - Health Insurance: <?php echo format_payroll_currency($salary_calculation['summary']['total_nhif']); ?></span><br>
+                                                    <span class="small">2122 - SDL Payable: <?php echo format_payroll_currency($salary_calculation['summary']['total_sdl']); ?></span><br>
+                                                    <span class="small">2123 - WCF Payable: <?php echo format_payroll_currency($salary_calculation['summary']['total_wcf']); ?></span><br>
+                                                    <span class="small">2124 - OSHA Payable: <?php echo format_payroll_currency($salary_calculation['summary']['total_osha']); ?></span><br>
+                                                    <span class="small">212 - Accrued Expenses: <?php echo format_payroll_currency($salary_calculation['summary']['total_net_salary']); ?></span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
                                         <div class="alert alert-danger">
                                             <i class="bi bi-exclamation-triangle me-2"></i>
-                                            <?php
-                                            $net_salary = $salary_calculation['summary']['total_net_salary'] ?? 0;
-                                            $employer_contributions = ($salary_calculation['summary']['total_nssf_employer'] ?? 0) +
-                                                                     ($salary_calculation['summary']['total_sdl'] ?? 0) +
-                                                                     ($salary_calculation['summary']['total_wcf'] ?? 0) +
-                                                                     ($salary_calculation['summary']['total_osha'] ?? 0);
-                                            $total_employer_cost = $salary_calculation['summary']['total_employer_cost'] ?? 0;
-                                            ?>
                                             <strong>PAYMENT REQUEST SUMMARY:</strong><br>
-                                            • <strong>Net Salary to Employees:</strong> <?php echo format_payroll_currency($net_salary); ?><br>
-                                            • <strong>Employer Contributions:</strong> <?php echo format_payroll_currency($employer_contributions); ?><br>
-                                            • <strong>TOTAL EMPLOYER COST (Payment Required):</strong> 
-                                            <span class="fw-bold text-danger"><?php echo format_payroll_currency($total_employer_cost); ?></span><br><br>
-                                            <strong>This amount will be sent to CEO for approval, then to Finance for processing.</strong>
+                                            • <strong>Net Salary to Employees:</strong> <?php echo format_payroll_currency($salary_calculation['summary']['total_net_salary']); ?><br>
+                                            • <strong>Employer Contributions:</strong> <?php echo format_payroll_currency(
+                                                $salary_calculation['summary']['total_nssf_employer'] + 
+                                                $salary_calculation['summary']['total_sdl'] + 
+                                                $salary_calculation['summary']['total_wcf'] + 
+                                                $salary_calculation['summary']['total_osha']
+                                            ); ?><br>
+                                            • <strong>TOTAL EMPLOYER COST:</strong> 
+                                            <span class="fw-bold text-danger"><?php echo format_payroll_currency($salary_calculation['summary']['total_employer_cost']); ?></span>
                                         </div>
+                                        
                                         <div class="text-end">
                                             <button type="submit" name="generate_payment_request" class="btn btn-primary">
                                                 <i class="bi bi-send-check me-2"></i>Generate Payment Request
@@ -1407,63 +1509,32 @@ include '../includes/header.php';
                                     <th>Request No</th>
                                     <th>Date</th>
                                     <th>Period</th>
-                                    <th>Employees</th>
                                     <th>Amount</th>
                                     <th>Status</th>
-                                    <th>Approval Progress</th>
+                                    <th>Approval</th>
                                     <th>Requested By</th>
                                     <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <?php foreach ($salary_payments as $payment): 
-                                    // Determine approval progress
                                     $progress = 0;
-                                    $progress_text = '';
                                     $progress_class = '';
-                                    
-                                    if ($payment['status'] == 'pending') {
-                                        $progress = 0;
-                                        $progress_text = 'CEO Approval Pending';
-                                        $progress_class = 'bg-warning';
-                                    } elseif ($payment['status'] == 'approved_ceo') {
-                                        $progress = 50;
-                                        $progress_text = 'Finance Approval Pending';
-                                        $progress_class = 'bg-info';
-                                    } elseif ($payment['status'] == 'approved_finance') {
-                                        $progress = 75;
-                                        $progress_text = 'Payment Processing';
-                                        $progress_class = 'bg-success';
-                                    } elseif ($payment['status'] == 'paid') {
-                                        $progress = 100;
-                                        $progress_text = 'Completed';
-                                        $progress_class = 'bg-primary';
-                                    } elseif ($payment['status'] == 'rejected') {
-                                        $progress = 0;
-                                        $progress_text = 'Rejected';
-                                        $progress_class = 'bg-danger';
-                                    }
-                                    
-                                    // Extract period from subject
-                                    $period = 'N/A';
-                                    if (preg_match('/Salary Payment - (\w+ \d{4})/', $payment['subject'], $matches)) {
-                                        $period = $matches[1];
-                                    }
-                                    
-                                    // Extract employees from description
-                                    $employees = 'N/A';
-                                    if (preg_match('/Total Employees:\s*(\d+)/', $payment['payment_description'] ?? '', $emp_matches)) {
-                                        $employees = $emp_matches[1];
-                                    }
+                                    if ($payment['status'] == 'pending') { $progress = 0; $progress_class = 'bg-warning'; }
+                                    elseif ($payment['status'] == 'approved_ceo') { $progress = 50; $progress_class = 'bg-info'; }
+                                    elseif ($payment['status'] == 'approved_finance') { $progress = 75; $progress_class = 'bg-success'; }
+                                    elseif ($payment['status'] == 'paid') { $progress = 100; $progress_class = 'bg-primary'; }
+                                    elseif ($payment['status'] == 'rejected') { $progress = 0; $progress_class = 'bg-danger'; }
                                 ?>
                                     <tr>
                                         <td><strong><?php echo htmlspecialchars($payment['request_no']); ?></strong></td>
                                         <td><?php echo date('d/m/Y', strtotime($payment['requested_at'])); ?></td>
-                                        <td><?php echo $period; ?></td>
-                                        <td class="text-center"><?php echo $employees; ?></td>
-                                        <td class="text-end">
-                                            <strong class="text-success"><?php echo format_payroll_currency($payment['amount_paid']); ?></strong>
-                                        </td>
+                                        <td><?php 
+                                            if (preg_match('/Salary Payment - (\w+ \d{4})/', $payment['subject'], $matches)) {
+                                                echo $matches[1];
+                                            }
+                                        ?></td>
+                                        <td class="text-end"><strong class="text-success"><?php echo format_payroll_currency($payment['amount_paid']); ?></strong></td>
                                         <td>
                                             <span class="badge bg-<?php 
                                                 echo $payment['status'] === 'pending' ? 'warning' : 
@@ -1476,39 +1547,18 @@ include '../includes/header.php';
                                         </td>
                                         <td>
                                             <div class="progress" style="height: 20px;">
-                                                <div class="progress-bar progress-bar-striped progress-bar-animated <?php echo $progress_class; ?>" 
-                                                     role="progressbar" style="width: <?php echo $progress; ?>%;" 
-                                                     aria-valuenow="<?php echo $progress; ?>" aria-valuemin="0" aria-valuemax="100">
+                                                <div class="progress-bar progress-bar-striped <?php echo $progress_class; ?>" 
+                                                     style="width: <?php echo $progress; ?>%;">
                                                     <?php echo $progress; ?>%
                                                 </div>
                                             </div>
-                                            <small class="text-muted"><?php echo $progress_text; ?></small>
                                         </td>
                                         <td><?php echo htmlspecialchars($payment['requested_by_name']); ?></td>
                                         <td>
-                                            <div class="btn-group btn-group-sm" role="group">
-                                                <a href="../hr/payment_request.php?request_id=<?php echo $payment['id']; ?>" 
-                                                   class="btn btn-outline-primary" title="View Details">
-                                                    <i class="bi bi-eye"></i>
-                                                </a>
-                                                <?php if ($current_user_role === 'ceo' && $payment['status'] === 'pending'): ?>
-                                                    <a href="../hr/approve_payment.php?request_id=<?php echo $payment['id']; ?>&action=approve" 
-                                                       class="btn btn-outline-success" title="Approve"
-                                                       onclick="return confirm('Approve this salary payment of <?php echo format_payroll_currency($payment['amount_paid']); ?>?')">
-                                                        <i class="bi bi-check"></i>
-                                                    </a>
-                                                    <a href="../hr/approve_payment.php?request_id=<?php echo $payment['id']; ?>&action=reject" 
-                                                       class="btn btn-outline-danger" title="Reject"
-                                                       onclick="return confirm('Reject this salary payment request?')">
-                                                        <i class="bi bi-x"></i>
-                                                    </a>
-                                                <?php endif; ?>
-                                                <button type="button" class="btn btn-outline-info" 
-                                                        onclick="showApprovalDetails(<?php echo $payment['id']; ?>)"
-                                                        title="View Approval Details">
-                                                    <i class="bi bi-info-circle"></i>
-                                                </button>
-                                            </div>
+                                            <a href="../hr/payment_request.php?request_id=<?php echo $payment['id']; ?>" 
+                                               class="btn btn-sm btn-outline-primary">
+                                                <i class="bi bi-eye"></i>
+                                            </a>
                                         </td>
                                     </tr>
                                 <?php endforeach; ?>
@@ -1524,11 +1574,8 @@ include '../includes/header.php';
                 <?php endif; ?>
             </div>
         </div>
-    
     <?php endif; ?>
 </div>
-
-<!-- === MODALS === -->
 
 <!-- Calculate Salaries Modal -->
 <div class="modal fade" id="calculateSalariesModal" tabindex="-1">
@@ -1536,9 +1583,7 @@ include '../includes/header.php';
         <div class="modal-content">
             <form method="POST">
                 <div class="modal-header bg-primary">
-                    <h5 class="modal-title">
-                        <i class="bi bi-calculator me-2"></i>Calculate Salaries
-                    </h5>
+                    <h5 class="modal-title"><i class="bi bi-calculator me-2"></i>Calculate Salaries</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
@@ -1549,13 +1594,15 @@ include '../includes/header.php';
                     </div>
                     <div class="alert alert-info">
                         <i class="bi bi-info-circle me-2"></i>
-                        Calculation includes:
+                        <strong>Calculation Method (Excel Match):</strong>
                         <ul class="mb-0 mt-2">
-                            <li>Basic salaries</li>
-                            <li>Approved allowances, overtime, bonuses</li>
-                            <li>NSSF, PAYE, NHIF deductions</li>
-                            <li>Other assigned deductions</li>
-                            <li>Employer costs (NSSF, SDL, WCF, OSHA)</li>
+                            <li><strong>Gross =</strong> Basic + House Allowance + Allowances + Overtime + Bonuses</li>
+                            <li><strong>NSSF =</strong> 10% of Gross (Employee & Employer)</li>
+                            <li><strong>PAYE =</strong> Tax on (Gross - NSSF) using progressive brackets</li>
+                            <li><strong>NHIF =</strong> Variable rate per employee</li>
+                            <li><strong>SDL</strong> = 3.5% of Gross</li>
+                            <li><strong>WCF</strong> = 0.5% of Gross</li>
+                            <li><strong>OSHA</strong> = 0.5% of Gross</li>
                         </ul>
                     </div>
                 </div>
@@ -1576,34 +1623,28 @@ include '../includes/header.php';
         <div class="modal-content">
             <form method="POST">
                 <div class="modal-header bg-primary">
-                    <h5 class="modal-title">
-                        <i class="bi bi-percent me-2"></i>Add PAYE Tax Bracket
-                    </h5>
+                    <h5 class="modal-title"><i class="bi bi-percent me-2"></i>Add PAYE Tax Bracket</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
                     <div class="row mb-3">
                         <div class="col-md-6">
-                            <label class="form-label">Minimum Income (TZS) <span class="text-danger">*</span></label>
-                            <input type="number" class="form-control" name="bracket_min" 
-                                   step="0.01" min="0" required>
+                            <label class="form-label">Minimum (TZS) <span class="text-danger">*</span></label>
+                            <input type="number" class="form-control" name="bracket_min" step="0.01" min="0" required>
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label">Maximum Income (TZS)</label>
-                            <input type="number" class="form-control" name="bracket_max" 
-                                   step="0.01" min="0">
-                            <small class="text-muted">Leave 0 for unlimited</small>
+                            <label class="form-label">Maximum (TZS)</label>
+                            <input type="number" class="form-control" name="bracket_max" step="0.01" min="0">
+                            <small class="text-muted">0 = unlimited</small>
                         </div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Tax Rate (%) <span class="text-danger">*</span></label>
-                        <input type="number" class="form-control" name="tax_rate" 
-                               step="0.1" min="0" max="100" required>
+                        <input type="number" class="form-control" name="tax_rate" step="0.1" min="0" max="100" required>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Description</label>
-                        <input type="text" class="form-control" name="description" 
-                               placeholder="e.g., First bracket, Standard rate">
+                        <input type="text" class="form-control" name="description" placeholder="e.g., First bracket">
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -1617,112 +1658,17 @@ include '../includes/header.php';
     </div>
 </div>
 
-<!-- Approval Details Modal -->
-<div class="modal fade" id="approvalDetailsModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header bg-info">
-                <h5 class="modal-title">
-                    <i class="bi bi-check-circle me-2"></i>Approval Details
-                </h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body" id="approvalDetailsContent">
-                <!-- Approval details will be loaded here -->
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-            </div>
-        </div>
-    </div>
-</div>
-
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    // NHIF toggle
     const enableNHIF = document.getElementById('enable_nhif');
     const nhifSettings = document.getElementById('nhifSettings');
     
     if (enableNHIF && nhifSettings) {
         enableNHIF.addEventListener('change', function() {
             nhifSettings.style.display = this.checked ? 'block' : 'none';
-            if (!this.checked) {
-                nhifSettings.querySelector('input').value = '3';
-            }
         });
-    }
-    
-    // Tab handling
-    const currentSection = '<?php echo $section; ?>';
-    if (currentSection) {
-        const activeTab = document.querySelector(`a[href="?section=${currentSection}"]`);
-        if (activeTab) {
-            activeTab.classList.add('active');
-        }
     }
 });
-
-// Show approval details
-function showApprovalDetails(requestId) {
-    fetch(`../hr/get_payment_approval_details.php?request_id=${requestId}`)
-        .then(response => response.json())
-        .then(data => {
-            let content = '';
-            if (data.error) {
-                content = `<div class="alert alert-danger">${data.error}</div>`;
-            } else {
-                content = `
-                    <h6>Request: ${data.request_no}</h6>
-                    <p><strong>Amount:</strong> ${new Intl.NumberFormat('en-TZ', {
-                        style: 'currency',
-                        currency: 'TZS',
-                        minimumFractionDigits: 0,
-                        maximumFractionDigits: 0
-                    }).format(data.amount_paid)}</p>
-                    
-                    <h6 class="mt-3">Approval Timeline:</h6>
-                    <ul class="list-group">
-                        <li class="list-group-item">
-                            <strong>Requested:</strong> ${new Date(data.requested_at).toLocaleString()} 
-                            by ${data.requested_by_name || 'Unknown'}
-                        </li>
-                        ${data.ceo_approved_at ? `
-                        <li class="list-group-item list-group-item-success">
-                            <strong>CEO Approved:</strong> ${new Date(data.ceo_approved_at).toLocaleString()} 
-                            by ${data.ceo_approved_by_name || 'Unknown'}
-                            ${data.ceo_approval_notes ? `<br><small>Notes: ${data.ceo_approval_notes}</small>` : ''}
-                        </li>` : ''}
-                        ${data.finance_approved_at ? `
-                        <li class="list-group-item list-group-item-success">
-                            <strong>Finance Approved:</strong> ${new Date(data.finance_approved_at).toLocaleString()} 
-                            by ${data.finance_approved_by_name || 'Unknown'}
-                            ${data.finance_approval_notes ? `<br><small>Notes: ${data.finance_approval_notes}</small>` : ''}
-                        </li>` : ''}
-                        ${data.paid_at ? `
-                        <li class="list-group-item list-group-item-primary">
-                            <strong>Paid:</strong> ${new Date(data.paid_at).toLocaleString()} 
-                            by ${data.paid_by_name || 'Unknown'}
-                        </li>` : ''}
-                    </ul>
-                    
-                    ${data.rejection_reason ? `
-                    <div class="alert alert-danger mt-3">
-                        <strong>Rejection Reason:</strong> ${data.rejection_reason}
-                    </div>` : ''}
-                `;
-            }
-            
-            document.getElementById('approvalDetailsContent').innerHTML = content;
-            const modal = new bootstrap.Modal(document.getElementById('approvalDetailsModal'));
-            modal.show();
-        })
-        .catch(error => {
-            document.getElementById('approvalDetailsContent').innerHTML = 
-                `<div class="alert alert-danger">Error loading approval details: ${error.message}</div>`;
-            const modal = new bootstrap.Modal(document.getElementById('approvalDetailsModal'));
-            modal.show();
-        });
-}
 </script>
 
 <?php

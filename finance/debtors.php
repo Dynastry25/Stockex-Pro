@@ -8,7 +8,7 @@ header("X-Frame-Options: DENY");
 header("X-Content-Type-Options: nosniff");
 header("X-XSS-Protection: 1; mode=block");
 header("Referrer-Policy: strict-origin-when-cross-origin");
-header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; font-src 'self' https://cdn.jsdelivr.net");
+header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' https://cdn.jsdelivr.net https://fonts.gstatic.com");
 
 require_finance_officer();
 
@@ -27,8 +27,7 @@ $error_message = '';
 
 // Pagination configuration
 $records_per_page = isset($_GET['per_page']) ? (int)$_GET['per_page'] : 20;
-if ($records_per_page <= 0) $records_per_page = 0; // 0 means show all
-
+if ($records_per_page <= 0) $records_per_page = 0;
 $current_page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 if ($current_page < 1) $current_page = 1;
 $offset = ($records_per_page > 0) ? ($current_page - 1) * $records_per_page : 0;
@@ -64,68 +63,6 @@ function getAgingCategory($days) {
     return '90+ Days';
 }
 
-// Get entity name from ID
-function getEntityName($db, $entity_type, $entity_id) {
-    try {
-        switch ($entity_type) {
-            case 'client':
-                $stmt = $db->prepare("SELECT client_name FROM clients WHERE id = ?");
-                $stmt->execute([$entity_id]);
-                $result = $stmt->fetch();
-                return $result ? $result['client_name'] : "Client #$entity_id";
-                
-            case 'custodian':
-                $stmt = $db->prepare("SELECT custodian_name FROM custodians WHERE id = ?");
-                $stmt->execute([$entity_id]);
-                $result = $stmt->fetch();
-                return $result ? $result['custodian_name'] : "Custodian #$entity_id";
-                
-            case 'employee':
-                $stmt = $db->prepare("SELECT full_name FROM users WHERE id = ?");
-                $stmt->execute([$entity_id]);
-                $result = $stmt->fetch();
-                return $result ? $result['full_name'] : "Employee #$entity_id";
-                
-            case 'agent':
-                $stmt = $db->prepare("SELECT name FROM agents WHERE id = ?");
-                $stmt->execute([$entity_id]);
-                $result = $stmt->fetch();
-                return $result ? $result['name'] : "Agent #$entity_id";
-                
-            case 'broker':
-                $stmt = $db->prepare("SELECT broker_name FROM brokers WHERE id = ?");
-                $stmt->execute([$entity_id]);
-                $result = $stmt->fetch();
-                return $result ? $result['broker_name'] : "Broker #$entity_id";
-                
-            case 'supplier':
-                $stmt = $db->prepare("SELECT name FROM suppliers WHERE id = ?");
-                $stmt->execute([$entity_id]);
-                $result = $stmt->fetch();
-                return $result ? $result['name'] : "Supplier #$entity_id";
-                
-            case 'chart_account':
-                $stmt = $db->prepare("SELECT account_name FROM chart_of_accounts WHERE account_code = ?");
-                $stmt->execute([$entity_id]);
-                $result = $stmt->fetch();
-                return $result ? $result['account_name'] : "Account #$entity_id";
-                
-            case 'bank_account':
-                $stmt = $db->prepare("SELECT account_name, account_number FROM banks_accounts WHERE id = ?");
-                $stmt->execute([$entity_id]);
-                $result = $stmt->fetch();
-                return $result ? $result['account_name'] . ' (' . $result['account_number'] . ')' : "Bank Account #$entity_id";
-                
-            default:
-                return "Entity #$entity_id";
-        }
-    } catch (Exception $e) {
-        error_log("Error getting entity name: " . $e->getMessage());
-        return "Entity #$entity_id";
-    }
-}
-
-// Helper function to get ledger code from entity type
 function getLedgerCode($entity_type) {
     $mapping = [
         'client' => 'C',
@@ -138,6 +75,34 @@ function getLedgerCode($entity_type) {
         'bank_account' => 'B'
     ];
     return $mapping[$entity_type] ?? 'O';
+}
+
+function getEntityTypeIcon($type) {
+    $icons = [
+        'client' => 'bi-person-badge',
+        'custodian' => 'bi-shield-check',
+        'employee' => 'bi-person-workspace',
+        'agent' => 'bi-person-rolodex',
+        'broker' => 'bi-graph-up',
+        'supplier' => 'bi-truck',
+        'chart_account' => 'bi-journal-bookmark',
+        'bank_account' => 'bi-bank'
+    ];
+    return $icons[$type] ?? 'bi-building';
+}
+
+function getEntityTypeColor($type) {
+    $colors = [
+        'client' => '#4F46E5',
+        'custodian' => '#0891B2',
+        'employee' => '#059669',
+        'agent' => '#D97706',
+        'broker' => '#DC2626',
+        'supplier' => '#7C3AED',
+        'chart_account' => '#6D28D9',
+        'bank_account' => '#0D9488'
+    ];
+    return $colors[$type] ?? '#6B7280';
 }
 
 // Function to get all balances with aging
@@ -354,8 +319,7 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
             $total_receipts = array_sum(array_column($receipts, 'amount')) + $gl_receipts_total;
             $total_payments = array_sum(array_column($payments, 'amount')) + $gl_payments_total;
             
-            // For bank accounts, use current_balance as authoritative (receipts/payments are supplementary)
-            // For other entities, receipts are money we received (entity owes us), payments are money we paid (we owe entity)
+            // For bank accounts, use current_balance as authoritative
             if ($entity_type === 'bank_account') {
                 $current_balance = (float)($entity['current_balance'] ?? 0);
                 $net_balance = $current_balance;
@@ -363,7 +327,7 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
                 $debit_balance = $net_balance < 0 ? abs($net_balance) : 0;
                 $credit_balance = $net_balance > 0 ? $net_balance : 0;
             } else {
-                $net_balance = $total_payments - $total_receipts; // Payments minus receipts
+                $net_balance = $total_payments - $total_receipts;
                 $balance_status = $net_balance > 0 ? 'Credit Balance (We Owe)' : 
                                 ($net_balance < 0 ? 'Debit Balance (Entity Owes Us)' : 'Settled');
                 $debit_balance = ($net_balance < 0) ? abs($net_balance) : 0;
@@ -430,7 +394,7 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
                 $transaction['running_balance'] = $running_balance;
             }
             
-            // Calculate aging (only for debit balances of non-bank entities)
+            // Calculate aging
             $aging_buckets = [
                 'Current' => 0,
                 '31-60 Days' => 0,
@@ -441,7 +405,7 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
             if ($entity_type !== 'bank_account') {
                 $today = new DateTime($as_of_date);
                 foreach ($transactions as $transaction) {
-                    if ($transaction['amount'] < 0) { // Negative amount means entity owes us
+                    if ($transaction['amount'] < 0) {
                         $transaction_date = new DateTime($transaction['date']);
                         $days_diff = $today->diff($transaction_date)->days;
                         $aging_category = getAgingCategory($days_diff);
@@ -488,479 +452,6 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
         'data' => $all_data,
         'total_count' => $total_count
     ];
-}
-
-// Function to export to Excel
-function exportToExcel($data, $entity_type = null, $as_of_date = null, $start_date = null, $end_date = null) {
-    // Set headers for Excel download
-    header('Content-Type: application/vnd.ms-excel');
-    header('Content-Disposition: attachment; filename="debt_credit_report_' . date('Ymd_His') . '.xls"');
-    header('Pragma: no-cache');
-    header('Expires: 0');
-    
-    // Excel BOM for UTF-8
-    echo "\xEF\xBB\xBF";
-    
-    // Start Excel content
-    echo '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
-    echo '<head>';
-    echo '<meta charset="UTF-8">';
-    echo '<style>';
-    echo 'td { mso-number-format:\@; }';
-    echo '.text { mso-number-format:"\@"; }';
-    echo '.number { mso-number-format:"#,##0.00"; }';
-    echo '.date { mso-number-format:"Short Date"; }';
-    echo '.header { font-weight: bold; background-color: #f2f2f2; }';
-    echo '.debit { color: #c00000; font-weight: bold; }';
-    echo '.credit { color: #00b050; font-weight: bold; }';
-    echo '.total { font-weight: bold; background-color: #e6f3ff; }';
-    echo '</style>';
-    echo '</head>';
-    echo '<body>';
-    
-    echo '<table border="1" cellpadding="3" cellspacing="0">';
-    
-    // Report header
-    echo '<tr><td colspan="10" class="header" style="text-align: center; font-size: 16px;">DEBT & CREDIT TRACKING REPORT - COMPREHENSIVE</td></tr>';
-    echo '<tr><td colspan="10">Generated: ' . date('d/m/Y H:i:s') . '</td></tr>';
-    echo '<tr><td colspan="10">As of Date: ' . $as_of_date . '</td></tr>';
-    if ($start_date && $end_date) {
-        echo '<tr><td colspan="10">Date Range: ' . $start_date . ' to ' . $end_date . '</td></tr>';
-    }
-    if ($entity_type) {
-        echo '<tr><td colspan="10">Entity Type: ' . ucfirst($entity_type) . 's</td></tr>';
-    } else {
-        echo '<tr><td colspan="10">Entity Type: All Entities</td></tr>';
-    }
-    echo '<tr><td colspan="10"></td></tr>';
-    
-    // Column headers
-    echo '<tr class="header">';
-    echo '<td>Entity Type</td>';
-    echo '<td>Entity Code</td>';
-    echo '<td>Entity Name</td>';
-    echo '<td>Total Receipts (Money Received)</td>';
-    echo '<td>Total Payments (Money Paid)</td>';
-    echo '<td>Debit Balance</td>';
-    echo '<td>Credit Balance</td>';
-    echo '<td>Net Balance</td>';
-    echo '<td>Balance Status</td>';
-    echo '<td>Total Overdue</td>';
-    echo '</tr>';
-    
-    // Data rows
-    $summary_totals = [
-        'total_receipts' => 0,
-        'total_payments' => 0,
-        'total_debit' => 0,
-        'total_credit' => 0,
-        'total_overdue' => 0
-    ];
-    
-    foreach ($data as $entity_data) {
-        $entity_info = $entity_data['entity_info'];
-        $totals = $entity_data['totals'];
-        $aging = $entity_data['aging'];
-        
-        $summary_totals['total_receipts'] += $totals['receipts'];
-        $summary_totals['total_payments'] += $totals['payments'];
-        $summary_totals['total_debit'] += $totals['debit_balance'];
-        $summary_totals['total_credit'] += $totals['credit_balance'];
-        $summary_totals['total_overdue'] += $aging['total_overdue'];
-        
-        $net_balance_class = $totals['net_balance'] > 0 ? 'credit' : ($totals['net_balance'] < 0 ? 'debit' : '');
-        
-        echo '<tr>';
-        echo '<td>' . ucfirst($entity_info['type']) . '</td>';
-        echo '<td>' . htmlspecialchars($entity_info['code']) . '</td>';
-        echo '<td>' . htmlspecialchars($entity_info['name']) . '</td>';
-        echo '<td class="number">' . number_format($totals['receipts'], 2) . '</td>';
-        echo '<td class="number">' . number_format($totals['payments'], 2) . '</td>';
-        echo '<td class="number debit">' . number_format($totals['debit_balance'], 2) . '</td>';
-        echo '<td class="number credit">' . number_format($totals['credit_balance'], 2) . '</td>';
-        echo '<td class="number ' . $net_balance_class . '">' . number_format(abs($totals['net_balance']), 2) . '</td>';
-        echo '<td>' . $totals['balance_status'] . '</td>';
-        echo '<td class="number">' . number_format($aging['total_overdue'], 2) . '</td>';
-        echo '</tr>';
-    }
-    
-    // Summary row
-    $net_balance_total = $summary_totals['total_credit'] - $summary_totals['total_debit'];
-    $net_balance_class = $net_balance_total > 0 ? 'credit' : ($net_balance_total < 0 ? 'debit' : '');
-    
-    echo '<tr class="total">';
-    echo '<td colspan="3">TOTALS:</td>';
-    echo '<td class="number">' . number_format($summary_totals['total_receipts'], 2) . '</td>';
-    echo '<td class="number">' . number_format($summary_totals['total_payments'], 2) . '</td>';
-    echo '<td class="number debit">' . number_format($summary_totals['total_debit'], 2) . '</td>';
-    echo '<td class="number credit">' . number_format($summary_totals['total_credit'], 2) . '</td>';
-    echo '<td class="number ' . $net_balance_class . '">' . number_format(abs($net_balance_total), 2) . '</td>';
-    echo '<td>' . ($net_balance_total > 0 ? 'Net Credit' : ($net_balance_total < 0 ? 'Net Debit' : 'Balanced')) . '</td>';
-    echo '<td class="number">' . number_format($summary_totals['total_overdue'], 2) . '</td>';
-    echo '</tr>';
-    
-    echo '</table>';
-    
-    // Add aging analysis section
-    echo '<br><br>';
-    echo '<table border="1" cellpadding="3" cellspacing="0">';
-    echo '<tr><td colspan="5" class="header" style="text-align: center;">AGING ANALYSIS (Amounts Owed to Us)</td></tr>';
-    echo '<tr class="header">';
-    echo '<td>Aging Category</td>';
-    echo '<td>Amount</td>';
-    echo '<td>% of Total Debit</td>';
-    echo '<td>Risk Level</td>';
-    echo '<td>Recommended Action</td>';
-    echo '</tr>';
-    
-    $aging_summary = [
-        'Current' => 0,
-        '31-60 Days' => 0,
-        '61-90 Days' => 0,
-        '90+ Days' => 0
-    ];
-    
-    foreach ($data as $entity_data) {
-        $aging_buckets = $entity_data['aging']['buckets'];
-        foreach ($aging_buckets as $category => $amount) {
-            $aging_summary[$category] += $amount;
-        }
-    }
-    
-    $total_debit_aging = array_sum($aging_summary);
-    
-    $aging_rows = [
-        ['Current (0-30 days)', $aging_summary['Current'], 'Low Risk', 'Monitor'],
-        ['31-60 Days Overdue', $aging_summary['31-60 Days'], 'Medium Risk', 'Follow-up Required'],
-        ['61-90 Days Overdue', $aging_summary['61-90 Days'], 'High Risk', 'Urgent Action Needed'],
-        ['90+ Days Overdue', $aging_summary['90+ Days'], 'Critical Risk', 'Legal/Collection Action']
-    ];
-    
-    foreach ($aging_rows as $row) {
-        $percentage = $total_debit_aging > 0 ? ($row[1] / $total_debit_aging * 100) : 0;
-        echo '<tr>';
-        echo '<td>' . $row[0] . '</td>';
-        echo '<td class="number">' . number_format($row[1], 2) . '</td>';
-        echo '<td class="number">' . number_format($percentage, 1) . '%</td>';
-        echo '<td>' . $row[2] . '</td>';
-        echo '<td>' . $row[3] . '</td>';
-        echo '</tr>';
-    }
-    
-    echo '</table>';
-    
-    // Add transaction details for each entity
-    echo '<br><br>';
-    echo '<table border="1" cellpadding="3" cellspacing="0">';
-    echo '<tr><td colspan="9" class="header" style="text-align: center;">DETAILED TRANSACTION HISTORY</td></tr>';
-    echo '<tr class="header">';
-    echo '<td>Entity Type</td>';
-    echo '<td>Entity Name</td>';
-    echo '<td>Date</td>';
-    echo '<td>Transaction Type</td>';
-    echo '<td>Reference No</td>';
-    echo '<td>Description</td>';
-    echo '<td>Bank Account</td>';
-    echo '<td>Amount</td>';
-    echo '<td>Running Balance</td>';
-    echo '</tr>';
-    
-    foreach ($data as $entity_data) {
-        $entity_info = $entity_data['entity_info'];
-        $transactions = $entity_data['transactions'];
-        
-        foreach ($transactions as $transaction) {
-            $amount_class = $transaction['amount'] > 0 ? 'credit' : 'debit';
-            $balance_class = $transaction['running_balance'] >= 0 ? 'credit' : 'debit';
-            
-            echo '<tr>';
-            echo '<td>' . ucfirst($entity_info['type']) . '</td>';
-            echo '<td>' . htmlspecialchars($entity_info['name']) . '</td>';
-            echo '<td class="date">' . $transaction['date'] . '</td>';
-            $type_label = $transaction['type'] === 'gl_entry' ? 'GL Entry' : ucfirst($transaction['type']);
-            echo '<td>' . $type_label . '</td>';
-            echo '<td>' . htmlspecialchars($transaction['reference']) . '</td>';
-            echo '<td>' . htmlspecialchars($transaction['description']) . '</td>';
-            echo '<td>' . ($transaction['bank_account'] ?: 'N/A') . '</td>';
-            echo '<td class="number ' . $amount_class . '">' . number_format($transaction['amount'], 2) . '</td>';
-            echo '<td class="number ' . $balance_class . '">' . number_format($transaction['running_balance'], 2) . '</td>';
-            echo '</tr>';
-        }
-    }
-    
-    echo '</table>';
-    
-    echo '</body></html>';
-    exit;
-}
-
-// Handle Excel export
-if (isset($_GET['export']) && $_GET['export'] == 'excel') {
-    $entity_type = isset($_GET['entity_type']) ? $_GET['entity_type'] : null;
-    $as_of_date = isset($_GET['as_of_date']) ? $_GET['as_of_date'] : date('Y-m-d');
-    $start_date = isset($_GET['start_date']) ? $_GET['start_date'] : null;
-    $end_date = isset($_GET['end_date']) ? $_GET['end_date'] : null;
-    
-    // Get all data for export (no pagination)
-    $result = getAllBalances($db, $entity_type, $as_of_date, $start_date, $end_date, null, 0);
-    $data = $result['data'];
-    
-    exportToExcel($data, $entity_type, $as_of_date, $start_date, $end_date);
-    exit;
-}
-
-// Handle single entity Excel export
-if (isset($_GET['export']) && $_GET['export'] == 'single_excel') {
-    $entity_type = isset($_GET['entity_type']) ? $_GET['entity_type'] : null;
-    $entity_id = isset($_GET['entity_id']) ? $_GET['entity_id'] : null;
-    
-    if (!$entity_type || !$entity_id) {
-        die('Entity type and ID required');
-    }
-    
-    $result = getAllBalances($db, $entity_type, date('Y-m-d'), null, null, null, 0);
-    $all_data = $result['data'];
-    
-    // Find specific entity
-    $entity_data = null;
-    foreach ($all_data as $data) {
-        if ($data['entity_info']['type'] === $entity_type && (string)$data['entity_info']['id'] === (string)$entity_id) {
-            $entity_data = $data;
-            break;
-        }
-    }
-    
-    if (!$entity_data) {
-        die('Entity not found');
-    }
-    
-    $entity_info = $entity_data['entity_info'];
-    $transactions = $entity_data['transactions'];
-    $totals = $entity_data['totals'];
-    
-    header('Content-Type: application/vnd.ms-excel');
-    header('Content-Disposition: attachment; filename="gl_' . $entity_type . '_' . $entity_id . '_' . date('Ymd_His') . '.xls"');
-    header('Pragma: no-cache');
-    header('Expires: 0');
-    
-    echo "\xEF\xBB\xBF";
-    echo '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
-    echo '<head><meta charset="UTF-8">';
-    echo '<style>';
-    echo 'td { mso-number-format:\@; }';
-    echo '.header { font-weight: bold; background-color: #f2f2f2; }';
-    echo '.debit { color: #c00000; }';
-    echo '.credit { color: #00b050; }';
-    echo '.total { font-weight: bold; background-color: #e6f3ff; }';
-    echo '</style></head><body>';
-    
-    echo '<table border="1" cellpadding="3" cellspacing="0">';
-    echo '<tr><td colspan="6" class="header" style="text-align: center; font-size: 14px;">GENERAL LEDGER</td></tr>';
-    echo '<tr><td colspan="6"><strong>Entity:</strong> ' . htmlspecialchars($entity_info['name']) . ' (' . ucfirst($entity_type) . ')</td></tr>';
-    echo '<tr><td colspan="6"><strong>Code:</strong> ' . htmlspecialchars($entity_info['code']) . '</td></tr>';
-    echo '<tr><td colspan="6"><strong>Generated:</strong> ' . date('d/m/Y H:i:s') . '</td></tr>';
-    echo '<tr><td colspan="6"></td></tr>';
-    
-    echo '<tr class="header">';
-    echo '<td>Date</td>';
-    echo '<td>Reference</td>';
-    echo '<td>Description</td>';
-    echo '<td>Debit (TZS)</td>';
-    echo '<td>Credit (TZS)</td>';
-    echo '<td>Balance (TZS)</td>';
-    echo '</tr>';
-    
-    foreach ($transactions as $t) {
-        $is_debit = ($entity_type === 'bank_account') ? ($t['amount'] > 0) : ($t['amount'] < 0);
-        $debit = $is_debit ? abs($t['amount']) : 0;
-        $credit = $is_debit ? 0 : abs($t['amount']);
-        
-        echo '<tr>';
-        echo '<td>' . $t['date'] . '</td>';
-        echo '<td>' . htmlspecialchars($t['reference']) . '</td>';
-        echo '<td>' . htmlspecialchars($t['description']) . '</td>';
-        echo '<td class="debit">' . number_format($debit, 2) . '</td>';
-        echo '<td class="credit">' . number_format($credit, 2) . '</td>';
-        echo '<td>' . number_format($t['running_balance'], 2) . '</td>';
-        echo '</tr>';
-    }
-    
-    echo '<tr class="total">';
-    echo '<td colspan="3">TOTALS:</td>';
-    $total_debit = 0; $total_credit = 0;
-    foreach ($transactions as $t) {
-        $is_debit = ($entity_type === 'bank_account') ? ($t['amount'] > 0) : ($t['amount'] < 0);
-        if ($is_debit) $total_debit += abs($t['amount']);
-        else $total_credit += abs($t['amount']);
-    }
-    echo '<td class="debit">' . number_format($total_debit, 2) . '</td>';
-    echo '<td class="credit">' . number_format($total_credit, 2) . '</td>';
-    echo '<td>' . number_format(end($transactions)['running_balance'] ?? 0, 2) . '</td>';
-    echo '</tr>';
-    
-    echo '</table></body></html>';
-    exit;
-}
-
-// Handle PDF export
-if (isset($_GET['export']) && $_GET['export'] == 'pdf') {
-    $entity_type = isset($_GET['entity_type']) ? $_GET['entity_type'] : null;
-    $as_of_date = isset($_GET['as_of_date']) ? $_GET['as_of_date'] : date('Y-m-d');
-    $start_date = isset($_GET['start_date']) ? $_GET['start_date'] : null;
-    $end_date = isset($_GET['end_date']) ? $_GET['end_date'] : null;
-    
-    $result = getAllBalances($db, $entity_type, $as_of_date, $start_date, $end_date, null, 0);
-    $data = $result['data'];
-    
-    // Create PDF
-    $pdf = new TCPDF('L', PDF_UNIT, 'A4', true, 'UTF-8', false);
-    $pdf->SetCreator(PDF_CREATOR);
-    $pdf->SetAuthor('Financial System');
-    $pdf->SetTitle('Debt & Credit Aged Balances Report');
-    $pdf->SetSubject('Aged Debtors Report');
-    $pdf->SetHeaderData('', 0, 'Debt & Credit Tracking Report', 'Aged Balances Analysis');
-    $pdf->setHeaderFont(Array(PDF_FONT_NAME_MAIN, '', PDF_FONT_SIZE_MAIN));
-    $pdf->setFooterFont(Array(PDF_FONT_NAME_DATA, '', PDF_FONT_SIZE_DATA));
-    $pdf->SetDefaultMonospacedFont(PDF_FONT_MONOSPACED);
-    $pdf->SetMargins(10, 25, 10);
-    $pdf->SetHeaderMargin(10);
-    $pdf->SetFooterMargin(10);
-    $pdf->SetAutoPageBreak(TRUE, 15);
-    $pdf->AddPage();
-    
-    // Title
-    $pdf->SetFont('helvetica', 'B', 16);
-    $pdf->Cell(0, 10, 'DEBT & CREDIT TRACKING REPORT - COMPREHENSIVE', 0, 1, 'C');
-    $pdf->Ln(5);
-    
-    // Report info
-    $pdf->SetFont('helvetica', '', 10);
-    $pdf->Cell(0, 6, 'Generated: ' . date('d/m/Y H:i:s'), 0, 1);
-    $pdf->Cell(0, 6, 'As of Date: ' . $as_of_date, 0, 1);
-    if ($start_date && $end_date) {
-        $pdf->Cell(0, 6, 'Date Range: ' . $start_date . ' to ' . $end_date, 0, 1);
-    }
-    $pdf->Cell(0, 6, 'Entity Type: ' . ($entity_type ? ucfirst($entity_type) . 's' : 'All Entities'), 0, 1);
-    $pdf->Ln(10);
-    
-    // Calculate summary
-    $summary_totals = [
-        'total_receipts' => 0,
-        'total_payments' => 0,
-        'total_debit' => 0,
-        'total_credit' => 0,
-        'total_overdue' => 0
-    ];
-    
-    foreach ($data as $entity_data) {
-        $totals = $entity_data['totals'];
-        $aging = $entity_data['aging'];
-        
-        $summary_totals['total_receipts'] += $totals['receipts'];
-        $summary_totals['total_payments'] += $totals['payments'];
-        $summary_totals['total_debit'] += $totals['debit_balance'];
-        $summary_totals['total_credit'] += $totals['credit_balance'];
-        $summary_totals['total_overdue'] += $aging['total_overdue'];
-    }
-    
-    $net_balance_total = $summary_totals['total_credit'] - $summary_totals['total_debit'];
-    
-    // Summary table
-    $summary_html = '<table border="1" cellpadding="4" cellspacing="0">
-        <thead>
-            <tr style="background-color:#f2f2f2; font-weight:bold;">
-                <th width="20%">Description</th>
-                <th width="20%">Amount</th>
-                <th width="20%">Type</th>
-                <th width="40%">Status</th>
-            </tr>
-        </thead>
-        <tbody>
-            <tr>
-                <td>Total Receipts (Money Received)</td>
-                <td align="right">' . number_format($summary_totals['total_receipts'], 2) . '</td>
-                <td>Income</td>
-                <td>Money received from all entities</td>
-            </tr>
-            <tr>
-                <td>Total Payments (Money Paid)</td>
-                <td align="right">' . number_format($summary_totals['total_payments'], 2) . '</td>
-                <td>Expense</td>
-                <td>Money paid to all entities</td>
-            </tr>
-            <tr>
-                <td>Total Debit Balance</td>
-                <td align="right" style="color:#c00000;">' . number_format($summary_totals['total_debit'], 2) . '</td>
-                <td>Assets</td>
-                <td>Money entities owe to us</td>
-            </tr>
-            <tr>
-                <td>Total Credit Balance</td>
-                <td align="right" style="color:#00b050;">' . number_format($summary_totals['total_credit'], 2) . '</td>
-                <td>Liabilities</td>
-                <td>Money we owe to entities</td>
-            </tr>
-            <tr style="background-color:#e6f3ff; font-weight:bold;">
-                <td>NET BALANCE</td>
-                <td align="right" style="color:' . ($net_balance_total > 0 ? '#00b050' : '#c00000') . ';">' . number_format(abs($net_balance_total), 2) . '</td>
-                <td>' . ($net_balance_total > 0 ? 'Liability' : 'Asset') . '</td>
-                <td>' . ($net_balance_total > 0 ? 'We owe more to entities' : 'Entities owe more to us') . '</td>
-            </tr>
-        </tbody>
-    </table>';
-    
-    $pdf->writeHTML($summary_html, true, false, true, false, '');
-    $pdf->Ln(10);
-    
-    // Entity details table
-    $pdf->SetFont('helvetica', 'B', 12);
-    $pdf->Cell(0, 8, 'ENTITY BALANCE DETAILS', 0, 1);
-    $pdf->SetFont('helvetica', '', 9);
-    
-    $entity_html = '<table border="1" cellpadding="3" cellspacing="0">
-        <thead>
-            <tr style="background-color:#f2f2f2; font-weight:bold;">
-                <th width="8%">Type</th>
-                <th width="12%">Code</th>
-                <th width="20%">Name</th>
-                <th width="10%">Receipts</th>
-                <th width="10%">Payments</th>
-                <th width="10%">Debit</th>
-                <th width="10%">Credit</th>
-                <th width="10%">Net</th>
-                <th width="10%">Overdue</th>
-            </tr>
-        </thead>
-        <tbody>';
-    
-    foreach ($data as $entity_data) {
-        $entity_info = $entity_data['entity_info'];
-        $totals = $entity_data['totals'];
-        $aging = $entity_data['aging'];
-        
-        $net_class = $totals['net_balance'] > 0 ? 'color:#00b050;' : 'color:#c00000;';
-        
-        $entity_html .= '
-            <tr>
-                <td>' . ucfirst($entity_info['type']) . '</td>
-                <td>' . htmlspecialchars($entity_info['code']) . '</td>
-                <td>' . htmlspecialchars($entity_info['name']) . '</td>
-                <td align="right">' . number_format($totals['receipts'], 2) . '</td>
-                <td align="right">' . number_format($totals['payments'], 2) . '</td>
-                <td align="right" style="color:#c00000;">' . number_format($totals['debit_balance'], 2) . '</td>
-                <td align="right" style="color:#00b050;">' . number_format($totals['credit_balance'], 2) . '</td>
-                <td align="right" style="' . $net_class . '">' . number_format(abs($totals['net_balance']), 2) . '</td>
-                <td align="right">' . number_format($aging['total_overdue'], 2) . '</td>
-            </tr>';
-    }
-    
-    $entity_html .= '</tbody></table>';
-    $pdf->writeHTML($entity_html, true, false, true, false, '');
-    
-    // Output PDF
-    $filename = 'debt_credit_report_' . date('Ymd_His') . '.pdf';
-    $pdf->Output($filename, 'I');
-    exit;
 }
 
 // Get filter parameters
@@ -1022,10 +513,10 @@ $summary_stats = [
 ];
 
 foreach ($all_data as $data) {
-    $entity_type = $data['entity_info']['type'];
+    $entity_type_key = $data['entity_info']['type'];
     
-    if (!isset($summary_stats['by_type'][$entity_type])) {
-        $summary_stats['by_type'][$entity_type] = [
+    if (!isset($summary_stats['by_type'][$entity_type_key])) {
+        $summary_stats['by_type'][$entity_type_key] = [
             'count' => 0,
             'debit' => 0,
             'credit' => 0,
@@ -1040,10 +531,10 @@ foreach ($all_data as $data) {
     $summary_stats['total_current'] += $data['aging']['buckets']['Current'];
     $summary_stats['total_overdue'] += $data['aging']['total_overdue'];
     
-    $summary_stats['by_type'][$entity_type]['count']++;
-    $summary_stats['by_type'][$entity_type]['debit'] += $data['totals']['debit_balance'];
-    $summary_stats['by_type'][$entity_type]['credit'] += $data['totals']['credit_balance'];
-    $summary_stats['by_type'][$entity_type]['overdue'] += $data['aging']['total_overdue'];
+    $summary_stats['by_type'][$entity_type_key]['count']++;
+    $summary_stats['by_type'][$entity_type_key]['debit'] += $data['totals']['debit_balance'];
+    $summary_stats['by_type'][$entity_type_key]['credit'] += $data['totals']['credit_balance'];
+    $summary_stats['by_type'][$entity_type_key]['overdue'] += $data['aging']['total_overdue'];
     
     if ($data['totals']['net_balance'] > 0) $summary_stats['entities_in_credit']++;
     elseif ($data['totals']['net_balance'] < 0) $summary_stats['entities_in_debit']++;
@@ -1053,1026 +544,1235 @@ foreach ($all_data as $data) {
 // Calculate net balance
 $net_balance = $summary_stats['total_credit_balance'] - $summary_stats['total_debit_balance'];
 
-$page_title = 'Comprehensive Debt & Credit Tracking';
+$page_title = 'Debtors & Credit Tracking';
 include '../includes/header.php';
 ?>
 
-<style>
-    .stats-card {
-        border-radius: 10px;
-        transition: transform 0.3s ease;
-        border: none;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-    }
-    
-    .stats-card:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 5px 20px rgba(0,0,0,0.15);
-    }
-    
-    .stats-card-total {
-        border-left: 5px solid #007bff;
-    }
-    
-    .stats-card-debit {
-        border-left: 5px solid #dc3545;
-    }
-    
-    .stats-card-credit {
-        border-left: 5px solid #28a745;
-    }
-    
-    .stats-card-net {
-        border-left: 5px solid #6f42c1;
-    }
-    
-    .stats-card-overdue {
-        border-left: 5px solid #ffc107;
-    }
-    
-    .entity-type-badge {
-        font-size: 0.7rem;
-        padding: 0.2rem 0.4rem;
-        border-radius: 4px;
-    }
-    
-    .badge-client { background-color: #007bff; color: white; }
-    .badge-custodian { background-color: #17a2b8; color: white; }
-    .badge-employee { background-color: #28a745; color: white; }
-    .badge-agent { background-color: #ffc107; color: #212529; }
-    .badge-broker { background-color: #fd7e14; color: white; }
-    .badge-supplier { background-color: #e83e8c; color: white; }
-    .badge-chart_account { background-color: #6f42c1; color: white; }
-    .badge-bank_account { background-color: #20c997; color: white; }
-    
-    .aging-badge {
-        font-size: 0.75rem;
-        padding: 0.25rem 0.5rem;
-    }
-    
-    .aging-current { background-color: #d4edda; color: #155724; }
-    .aging-31-60 { background-color: #fff3cd; color: #856404; }
-    .aging-61-90 { background-color: #f8d7da; color: #721c24; }
-    .aging-90plus { background-color: #dc3545; color: white; }
-    
-    .balance-positive { color: #28a745; font-weight: bold; }
-    .balance-negative { color: #dc3545; font-weight: bold; }
-    .balance-zero { color: #6c757d; font-weight: bold; }
-    
-    .progress-bar-overdue {
-        background-color: #dc3545;
-    }
-    
-    .progress-bar-current {
-        background-color: #28a745;
-    }
-    
-    .pagination {
-        margin: 0;
-    }
-    
-    .page-item.active .page-link {
-        background-color: #007bff;
-        border-color: #007bff;
-    }
-    
-    .page-link {
-        color: #007bff;
-        border: 1px solid #dee2e6;
-    }
-    
-    .page-link:hover {
-        color: #0056b3;
-        background-color: #e9ecef;
-        border-color: #dee2e6;
-    }
-    
-    .page-item.disabled .page-link {
-        color: #6c757d;
-        pointer-events: none;
-        background-color: #fff;
-        border-color: #dee2e6;
-    }
-    
-    .records-per-page-selector {
-        max-width: 100px;
-    }
-    
-    .balance-breakdown {
-        background-color: #f8f9fa;
-        border-radius: 8px;
-        padding: 15px;
-        margin-bottom: 20px;
-    }
-    
-    .export-btn {
-        background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
-        border: none;
-        color: white;
-        font-weight: 600;
-    }
-    
-    .export-btn:hover {
-        background: linear-gradient(135deg, #20c997 0%, #17a2b8 100%);
-        color: white;
-    }
-    
-    .entity-type-pill {
-        cursor: pointer;
-        transition: all 0.2s;
-        border: 1px solid #dee2e6;
-        border-radius: 8px;
-        padding: 10px 5px;
-        text-align: center;
-        background: white;
-    }
-    
-    .entity-type-pill:hover {
-        transform: scale(1.05);
-        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-    }
-    
-    .entity-type-pill.active {
-        border: 2px solid #007bff;
-        box-shadow: 0 0 0 3px rgba(0,123,255,0.25);
-        background-color: #f8f9fa;
-    }
-    
-    .entity-type-icon {
-        font-size: 1.5rem;
-        margin-bottom: 5px;
-    }
-    
-    .entity-type-name {
-        font-weight: 600;
-        font-size: 0.85rem;
-        margin-bottom: 3px;
-    }
-    
-    .entity-type-count {
-        font-size: 0.75rem;
-        color: #6c757d;
-    }
-    
-    .filter-section {
-        background-color: #f8f9fa;
-        border-radius: 8px;
-        padding: 15px;
-        margin-bottom: 20px;
-    }
-    
-    .transaction-inflow {
-        color: #28a745;
-        font-weight: bold;
-    }
-    
-    .transaction-outflow {
-        color: #dc3545;
-        font-weight: bold;
-    }
-</style>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><?php echo $page_title; ?></title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #4F46E5;
+            --primary-light: #818CF8;
+            --primary-dark: #3730A3;
+            --success: #10B981;
+            --danger: #EF4444;
+            --warning: #F59E0B;
+            --gray-50: #F9FAFB;
+            --gray-100: #F3F4F6;
+            --gray-200: #E5E7EB;
+            --gray-300: #D1D5DB;
+            --gray-400: #9CA3AF;
+            --gray-500: #6B7280;
+            --gray-600: #4B5563;
+            --gray-700: #374151;
+            --gray-800: #1F2937;
+            --gray-900: #111827;
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            --radius: 12px;
+            --radius-sm: 8px;
+            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
 
-<div class="container-fluid">
-    <?php if (!empty($success_message)): ?>
-        <div class="alert alert-success alert-dismissible fade show" role="alert">
-            <i class="bi bi-check-circle-fill me-2"></i>
-            <?php echo $success_message; ?>
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        </div>
-    <?php endif; ?>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
 
-    <?php if (!empty($error_message)): ?>
-        <div class="alert alert-danger alert-dismissible fade show" role="alert">
-            <i class="bi bi-exclamation-triangle-fill me-2"></i>
-            <?php echo $error_message; ?>
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        </div>
-    <?php endif; ?>
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--gray-50);
+            color: var(--gray-800);
+            line-height: 1.6;
+        }
 
+        .modern-container {
+            max-width: 1440px;
+            margin: 0 auto;
+            padding: 24px 32px;
+        }
+
+        /* Page Header */
+        .page-header-modern {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 28px;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+
+        .page-header-modern h1 {
+            font-size: 28px;
+            font-weight: 800;
+            color: var(--gray-900);
+            letter-spacing: -0.5px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .page-header-modern h1 i {
+            color: var(--primary);
+        }
+
+        .page-header-modern .subtitle {
+            color: var(--gray-500);
+            font-size: 14px;
+            font-weight: 400;
+            margin-top: 4px;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .btn-modern {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 20px;
+            border-radius: var(--radius-sm);
+            font-weight: 600;
+            font-size: 14px;
+            border: none;
+            transition: var(--transition);
+            cursor: pointer;
+            text-decoration: none;
+        }
+
+        .btn-modern-outline {
+            background: white;
+            color: var(--gray-700);
+            border: 1px solid var(--gray-200);
+        }
+
+        .btn-modern-outline:hover {
+            background: var(--gray-50);
+            border-color: var(--gray-300);
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .btn-modern-primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .btn-modern-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
+        }
+
+        .btn-modern-success {
+            background: var(--success);
+            color: white;
+        }
+
+        .btn-modern-success:hover {
+            background: #059669;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        }
+
+        .btn-modern-danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        .btn-modern-danger:hover {
+            background: #DC2626;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+        }
+
+        /* Entity Type Pills */
+        .entity-pills-wrapper {
+            background: white;
+            border-radius: var(--radius);
+            padding: 16px 20px;
+            margin-bottom: 24px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--gray-200);
+            overflow-x: auto;
+        }
+
+        .entity-pills {
+            display: flex;
+            gap: 8px;
+            flex-wrap: nowrap;
+        }
+
+        .entity-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-radius: 50px;
+            border: 2px solid var(--gray-200);
+            background: white;
+            color: var(--gray-600);
+            font-weight: 500;
+            font-size: 13px;
+            transition: var(--transition);
+            cursor: pointer;
+            text-decoration: none;
+            white-space: nowrap;
+        }
+
+        .entity-pill:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .entity-pill.active {
+            border-color: var(--primary);
+            background: var(--primary);
+            color: white;
+        }
+
+        .entity-pill .pill-icon {
+            font-size: 16px;
+        }
+
+        .entity-pill .pill-count {
+            background: var(--gray-100);
+            padding: 0 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--gray-500);
+        }
+
+        .entity-pill.active .pill-count {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+        }
+
+        /* Stats Cards */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card-modern {
+            background: white;
+            border-radius: var(--radius);
+            padding: 20px 24px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--gray-200);
+            transition: var(--transition);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card-modern:hover {
+            transform: translateY(-4px);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .stat-card-modern .stat-icon {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            font-size: 28px;
+            opacity: 0.1;
+        }
+
+        .stat-card-modern .stat-label {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--gray-500);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .stat-card-modern .stat-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--gray-900);
+            margin: 4px 0 2px 0;
+        }
+
+        .stat-card-modern .stat-sub {
+            font-size: 12px;
+            color: var(--gray-400);
+        }
+
+        .stat-card-modern .stat-progress {
+            margin-top: 8px;
+            height: 4px;
+            background: var(--gray-100);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .stat-card-modern .stat-progress .progress-bar {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 1s ease;
+        }
+
+        .stat-card-primary .stat-icon { color: var(--primary); }
+        .stat-card-success .stat-icon { color: var(--success); }
+        .stat-card-danger .stat-icon { color: var(--danger); }
+        .stat-card-warning .stat-icon { color: var(--warning); }
+
+        /* Filter Section */
+        .filter-section-modern {
+            background: white;
+            border-radius: var(--radius);
+            padding: 20px 24px;
+            margin-bottom: 24px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--gray-200);
+        }
+
+        .filter-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr 1fr;
+            gap: 16px;
+            align-items: end;
+        }
+
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .filter-group label {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--gray-600);
+        }
+
+        .filter-group .form-control {
+            padding: 8px 12px;
+            border: 1px solid var(--gray-200);
+            border-radius: var(--radius-sm);
+            font-size: 14px;
+            transition: var(--transition);
+            background: white;
+            width: 100%;
+        }
+
+        .filter-group .form-control:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+        }
+
+        .filter-group select.form-control {
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236B7280' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            padding-right: 36px;
+        }
+
+        .filter-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        /* Table */
+        .table-wrapper {
+            background: white;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            border: 1px solid var(--gray-200);
+            overflow: hidden;
+        }
+
+        .table-header {
+            padding: 16px 24px;
+            background: var(--gray-50);
+            border-bottom: 1px solid var(--gray-200);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .table-header h6 {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--gray-800);
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .table-header .badge-count {
+            padding: 4px 14px;
+            background: var(--primary);
+            color: white;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .table-responsive {
+            overflow-x: auto;
+        }
+
+        .table-modern {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+
+        .table-modern thead {
+            background: var(--gray-50);
+            border-bottom: 2px solid var(--gray-200);
+        }
+
+        .table-modern thead th {
+            padding: 12px 16px;
+            text-align: left;
+            font-weight: 600;
+            color: var(--gray-600);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .table-modern thead th.text-end {
+            text-align: right;
+        }
+
+        .table-modern tbody tr {
+            border-bottom: 1px solid var(--gray-100);
+            transition: var(--transition);
+        }
+
+        .table-modern tbody tr:hover {
+            background: var(--gray-50);
+        }
+
+        .table-modern tbody tr:last-child {
+            border-bottom: none;
+        }
+
+        .table-modern tbody td {
+            padding: 12px 16px;
+            vertical-align: middle;
+        }
+
+        .table-modern tbody td.text-end {
+            text-align: right;
+        }
+
+        .entity-type-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+
+        .entity-name-link {
+            color: var(--primary);
+            font-weight: 600;
+            text-decoration: none;
+            transition: var(--transition);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .entity-name-link:hover {
+            color: var(--primary-dark);
+            text-decoration: underline;
+        }
+
+        .entity-name-link i {
+            font-size: 12px;
+            opacity: 0.5;
+        }
+
+        .text-debit {
+            color: var(--danger);
+            font-weight: 600;
+        }
+
+        .text-credit {
+            color: var(--success);
+            font-weight: 600;
+        }
+
+        .text-balance-positive {
+            color: var(--success);
+            font-weight: 600;
+        }
+
+        .text-balance-negative {
+            color: var(--danger);
+            font-weight: 600;
+        }
+
+        .text-balance-zero {
+            color: var(--gray-400);
+            font-weight: 600;
+        }
+
+        .aging-badge {
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 10px;
+            font-weight: 600;
+            display: inline-block;
+        }
+
+        .aging-badge.current {
+            background: #D1FAE5;
+            color: #065F46;
+        }
+
+        .aging-badge.overdue-31 {
+            background: #FEF3C7;
+            color: #92400E;
+        }
+
+        .aging-badge.overdue-61 {
+            background: #FDE68A;
+            color: #78350F;
+        }
+
+        .aging-badge.overdue-90 {
+            background: #FEE2E2;
+            color: #991B1B;
+        }
+
+        .aging-progress {
+            display: flex;
+            height: 4px;
+            border-radius: 2px;
+            overflow: hidden;
+            background: var(--gray-100);
+            margin-top: 4px;
+        }
+
+        .aging-progress .segment {
+            height: 100%;
+            transition: width 0.5s ease;
+        }
+
+        .segment-current { background: var(--success); }
+        .segment-31-60 { background: var(--warning); }
+        .segment-61-90 { background: #F97316; }
+        .segment-90-plus { background: var(--danger); }
+
+        .action-buttons {
+            display: flex;
+            gap: 4px;
+        }
+
+        .action-btn {
+            width: 32px;
+            height: 32px;
+            border-radius: var(--radius-sm);
+            border: none;
+            background: transparent;
+            color: var(--gray-500);
+            transition: var(--transition);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+
+        .action-btn:hover {
+            background: var(--gray-100);
+            color: var(--gray-700);
+        }
+
+        .action-btn.view:hover {
+            background: #E0E7FF;
+            color: var(--primary);
+        }
+
+        .action-btn.details:hover {
+            background: #D1FAE5;
+            color: var(--success);
+        }
+
+        /* Pagination */
+        .pagination-modern {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+
+        .pagination-modern .page-link {
+            padding: 6px 12px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--gray-200);
+            background: white;
+            color: var(--gray-600);
+            text-decoration: none;
+            transition: var(--transition);
+            font-size: 14px;
+        }
+
+        .pagination-modern .page-link:hover {
+            background: var(--gray-50);
+            border-color: var(--gray-300);
+        }
+
+        .pagination-modern .page-link.active {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: white;
+        }
+
+        .pagination-modern .page-link.disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .table-footer {
+            padding: 12px 24px;
+            background: var(--gray-50);
+            border-top: 2px solid var(--gray-200);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+        }
+
+        .empty-state i {
+            font-size: 48px;
+            color: var(--gray-300);
+            margin-bottom: 16px;
+        }
+
+        .empty-state h5 {
+            color: var(--gray-600);
+            margin-bottom: 8px;
+        }
+
+        .empty-state p {
+            color: var(--gray-400);
+        }
+
+        /* Animations */
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .animate-in {
+            animation: fadeInUp 0.5s ease forwards;
+        }
+
+        .animate-in-delay-1 { animation-delay: 0.05s; opacity: 0; }
+        .animate-in-delay-2 { animation-delay: 0.1s; opacity: 0; }
+        .animate-in-delay-3 { animation-delay: 0.15s; opacity: 0; }
+        .animate-in-delay-4 { animation-delay: 0.2s; opacity: 0; }
+
+        /* Responsive */
+        @media (max-width: 1200px) {
+            .filter-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        @media (max-width: 992px) {
+            .page-header-modern {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .header-actions {
+                justify-content: stretch;
+            }
+
+            .header-actions .btn-modern {
+                flex: 1;
+                justify-content: center;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .modern-container {
+                padding: 16px;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .filter-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .filter-actions {
+                justify-content: stretch;
+            }
+
+            .filter-actions .btn-modern {
+                flex: 1;
+                justify-content: center;
+            }
+
+            .table-header {
+                flex-direction: column;
+                align-items: stretch;
+                text-align: center;
+            }
+
+            .table-footer {
+                flex-direction: column;
+                align-items: stretch;
+                text-align: center;
+            }
+
+            .pagination-modern {
+                justify-content: center;
+            }
+        }
+
+        @media (max-width: 576px) {
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .entity-pills {
+                flex-wrap: wrap;
+            }
+        }
+
+        /* Scrollbar */
+        .table-responsive::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        .table-responsive::-webkit-scrollbar-track {
+            background: var(--gray-100);
+            border-radius: 3px;
+        }
+
+        .table-responsive::-webkit-scrollbar-thumb {
+            background: var(--gray-300);
+            border-radius: 3px;
+        }
+
+        .table-responsive::-webkit-scrollbar-thumb:hover {
+            background: var(--gray-400);
+        }
+    </style>
+</head>
+<body>
+
+<div class="modern-container">
     <!-- Page Header -->
-    <div class="row mb-4">
-        <div class="col-12">
-            <div class="d-flex justify-content-between align-items-center">
-                <div>
-                    <h1 class="h3 mb-0 text-dark"><i class="bi bi-calculator me-2"></i>Comprehensive Debt & Credit Tracking</h1>
-                    <p class="text-muted mb-0">Track balances across all entities in the system</p>
-                </div>
-                <div class="btn-group">
-                    <button type="button" class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#helpModal">
-                        <i class="bi bi-question-circle me-1"></i>Help
-                    </button>
-                </div>
+    <div class="page-header-modern animate-in">
+        <div>
+            <h1>
+                <i class="bi bi-people"></i>
+                Debtors & Credit Tracking
+            </h1>
+            <div class="subtitle">
+                <i class="bi bi-clock-history"></i>
+                As of <?php echo date('d M Y', strtotime($as_of_date)); ?>
+                <?php if ($start_date && $end_date): ?>
+                    &bull; Period: <?php echo date('d M Y', strtotime($start_date)); ?> - <?php echo date('d M Y', strtotime($end_date)); ?>
+                <?php endif; ?>
+                &bull; <span class="text-primary"><?php echo $total_count; ?></span> entities
+            </div>
+        </div>
+        <div class="header-actions">
+            <button type="button" class="btn-modern btn-modern-outline" data-bs-toggle="modal" data-bs-target="#helpModal">
+                <i class="bi bi-question-circle"></i> Help
+            </button>
+            <a href="?<?php echo http_build_query(array_merge($_GET, ['export' => 'excel', 'page' => 1])); ?>" 
+               class="btn-modern btn-modern-success"
+               onclick="return confirm('Export <?php echo count($all_data); ?> entities to Excel?')">
+                <i class="bi bi-file-excel"></i> Export Excel
+            </a>
+            <a href="?<?php echo http_build_query(array_merge($_GET, ['export' => 'pdf', 'page' => 1])); ?>" 
+               class="btn-modern btn-modern-danger">
+                <i class="bi bi-file-pdf"></i> Export PDF
+            </a>
+        </div>
+    </div>
+
+    <!-- Entity Type Pills -->
+    <div class="entity-pills-wrapper animate-in animate-in-delay-1">
+        <div class="entity-pills">
+            <a href="?<?php echo http_build_query(array_diff_key($_GET, ['entity_type' => '', 'page' => ''])); ?>" 
+               class="entity-pill <?php echo !$entity_type ? 'active' : ''; ?>">
+                <i class="bi bi-grid-3x3-gap-fill pill-icon"></i>
+                All Entities
+                <span class="pill-count"><?php echo $total_count; ?></span>
+            </a>
+            
+            <?php
+            $entity_types = [
+                'client' => ['icon' => 'bi-person-badge', 'label' => 'Clients'],
+                'custodian' => ['icon' => 'bi-shield-check', 'label' => 'Custodians'],
+                'employee' => ['icon' => 'bi-person-workspace', 'label' => 'Employees'],
+                'agent' => ['icon' => 'bi-person-rolodex', 'label' => 'Agents'],
+                'broker' => ['icon' => 'bi-graph-up', 'label' => 'Brokers'],
+                'supplier' => ['icon' => 'bi-truck', 'label' => 'Suppliers'],
+                'chart_account' => ['icon' => 'bi-journal-bookmark', 'label' => 'Chart Accounts'],
+                'bank_account' => ['icon' => 'bi-bank', 'label' => 'Bank Accounts']
+            ];
+            
+            foreach ($entity_types as $type => $info):
+                $count = $summary_stats['by_type'][$type]['count'] ?? 0;
+                if ($count > 0 || $entity_type == $type):
+            ?>
+                <a href="?entity_type=<?php echo $type; ?>&<?php echo http_build_query(array_diff_key($_GET, ['entity_type' => '', 'page' => ''])); ?>" 
+                   class="entity-pill <?php echo $entity_type == $type ? 'active' : ''; ?>">
+                    <i class="bi <?php echo $info['icon']; ?> pill-icon"></i>
+                    <?php echo $info['label']; ?>
+                    <span class="pill-count"><?php echo $count; ?></span>
+                </a>
+            <?php endif; endforeach; ?>
+        </div>
+    </div>
+
+    <!-- Stats Cards -->
+    <div class="stats-grid animate-in animate-in-delay-2">
+        <div class="stat-card-modern stat-card-primary">
+            <i class="bi bi-people stat-icon"></i>
+            <div class="stat-label">Total Entities</div>
+            <div class="stat-value"><?php echo $summary_stats['total_entities']; ?></div>
+            <div class="stat-sub">
+                <span class="text-success"><?php echo $summary_stats['entities_in_credit']; ?> Credit</span> &bull;
+                <span class="text-danger"><?php echo $summary_stats['entities_in_debit']; ?> Debit</span> &bull;
+                <span class="text-muted"><?php echo $summary_stats['entities_settled']; ?> Settled</span>
+            </div>
+        </div>
+
+        <div class="stat-card-modern stat-card-danger">
+            <i class="bi bi-arrow-down-circle stat-icon"></i>
+            <div class="stat-label">Total Debit</div>
+            <div class="stat-value text-danger"><?php echo formatCurrency($summary_stats['total_debit_balance']); ?></div>
+            <div class="stat-sub">Money owed to us</div>
+        </div>
+
+        <div class="stat-card-modern stat-card-success">
+            <i class="bi bi-arrow-up-circle stat-icon"></i>
+            <div class="stat-label">Total Credit</div>
+            <div class="stat-value text-success"><?php echo formatCurrency($summary_stats['total_credit_balance']); ?></div>
+            <div class="stat-sub">Money we owe</div>
+        </div>
+
+        <div class="stat-card-modern stat-card-warning">
+            <i class="bi bi-clock-history stat-icon"></i>
+            <div class="stat-label">Total Overdue</div>
+            <div class="stat-value" style="color: var(--warning);"><?php echo formatCurrency($summary_stats['total_overdue']); ?></div>
+            <div class="stat-sub">
+                <?php echo $summary_stats['total_debit_balance'] > 0 ? 
+                    number_format($summary_stats['total_overdue'] / $summary_stats['total_debit_balance'] * 100, 1) : 0; ?>% of total debit
+            </div>
+            <div class="stat-progress">
+                <div class="progress-bar" style="width: <?php echo $summary_stats['total_debit_balance'] > 0 ? ($summary_stats['total_overdue'] / $summary_stats['total_debit_balance'] * 100) : 0; ?>%; background: var(--warning);"></div>
+            </div>
+        </div>
+
+        <div class="stat-card-modern" style="border-left: 4px solid var(--primary);">
+            <i class="bi bi-calculator stat-icon"></i>
+            <div class="stat-label">Net Position</div>
+            <div class="stat-value <?php echo $net_balance >= 0 ? 'text-success' : 'text-danger'; ?>">
+                <?php echo formatCurrency(abs($net_balance)); ?>
+            </div>
+            <div class="stat-sub">
+                <?php echo $net_balance >= 0 ? 'We owe more to entities' : 'Entities owe more to us'; ?>
             </div>
         </div>
     </div>
 
-    <!-- Entity Type Selection -->
-    <div class="row mb-4">
-        <div class="col-12">
-            <div class="card">
-                <div class="card-header bg-light d-flex justify-content-between align-items-center">
-                    <h6 class="mb-0"><i class="bi bi-filter me-2"></i>Filter by Entity Type</h6>
-                    <small class="text-muted">Click on any entity type to filter</small>
-                </div>
-                <div class="card-body">
-                    <div class="row g-3">
-                        <!-- All Entities -->
-                        <div class="col-6 col-md-4 col-lg-2">
-                            <a href="?entity_type=&<?php echo http_build_query(array_diff_key($_GET, ['entity_type' => '', 'page' => ''])); ?>" 
-                               class="text-decoration-none">
-                                <div class="entity-type-pill <?php echo !$entity_type ? 'active' : ''; ?>">
-                                    <div class="entity-type-icon text-primary">
-                                        <i class="bi bi-people-fill"></i>
-                                    </div>
-                                    <div class="entity-type-name">All Entities</div>
-                                    <div class="entity-type-count"><?php echo $total_count; ?> total</div>
-                                </div>
-                            </a>
-                        </div>
-                        
-                        <!-- Clients -->
-                        <div class="col-6 col-md-4 col-lg-2">
-                            <a href="?entity_type=client&<?php echo http_build_query(array_diff_key($_GET, ['entity_type' => '', 'page' => ''])); ?>" 
-                               class="text-decoration-none">
-                                <div class="entity-type-pill <?php echo $entity_type == 'client' ? 'active' : ''; ?>" 
-                                     style="border-left: 4px solid #007bff;">
-                                    <div class="entity-type-icon text-primary">
-                                        <i class="bi bi-person-badge"></i>
-                                    </div>
-                                    <div class="entity-type-name">Clients</div>
-                                    <div class="entity-type-count"><?php echo $summary_stats['by_type']['client']['count'] ?? 0; ?> clients</div>
-                                </div>
-                            </a>
-                        </div>
-                        
-                        <!-- Custodians -->
-                        <div class="col-6 col-md-4 col-lg-2">
-                            <a href="?entity_type=custodian&<?php echo http_build_query(array_diff_key($_GET, ['entity_type' => '', 'page' => ''])); ?>" 
-                               class="text-decoration-none">
-                                <div class="entity-type-pill <?php echo $entity_type == 'custodian' ? 'active' : ''; ?>" 
-                                     style="border-left: 4px solid #17a2b8;">
-                                    <div class="entity-type-icon text-info">
-                                        <i class="bi bi-shield-check"></i>
-                                    </div>
-                                    <div class="entity-type-name">Custodians</div>
-                                    <div class="entity-type-count"><?php echo $summary_stats['by_type']['custodian']['count'] ?? 0; ?> custodians</div>
-                                </div>
-                            </a>
-                        </div>
-                        
-                        <!-- Employees -->
-                        <div class="col-6 col-md-4 col-lg-2">
-                            <a href="?entity_type=employee&<?php echo http_build_query(array_diff_key($_GET, ['entity_type' => '', 'page' => ''])); ?>" 
-                               class="text-decoration-none">
-                                <div class="entity-type-pill <?php echo $entity_type == 'employee' ? 'active' : ''; ?>" 
-                                     style="border-left: 4px solid #28a745;">
-                                    <div class="entity-type-icon text-success">
-                                        <i class="bi bi-person-workspace"></i>
-                                    </div>
-                                    <div class="entity-type-name">Employees</div>
-                                    <div class="entity-type-count"><?php echo $summary_stats['by_type']['employee']['count'] ?? 0; ?> employees</div>
-                                </div>
-                            </a>
-                        </div>
-                        
-                        <!-- Agents -->
-                        <div class="col-6 col-md-4 col-lg-2">
-                            <a href="?entity_type=agent&<?php echo http_build_query(array_diff_key($_GET, ['entity_type' => '', 'page' => ''])); ?>" 
-                               class="text-decoration-none">
-                                <div class="entity-type-pill <?php echo $entity_type == 'agent' ? 'active' : ''; ?>" 
-                                     style="border-left: 4px solid #ffc107;">
-                                    <div class="entity-type-icon text-warning">
-                                        <i class="bi bi-person-rolodex"></i>
-                                    </div>
-                                    <div class="entity-type-name">Agents</div>
-                                    <div class="entity-type-count"><?php echo $summary_stats['by_type']['agent']['count'] ?? 0; ?> agents</div>
-                                </div>
-                            </a>
-                        </div>
-                        
-                        <!-- Brokers -->
-                        <div class="col-6 col-md-4 col-lg-2">
-                            <a href="?entity_type=broker&<?php echo http_build_query(array_diff_key($_GET, ['entity_type' => '', 'page' => ''])); ?>" 
-                               class="text-decoration-none">
-                                <div class="entity-type-pill <?php echo $entity_type == 'broker' ? 'active' : ''; ?>" 
-                                     style="border-left: 4px solid #fd7e14;">
-                                    <div class="entity-type-icon" style="color: #fd7e14;">
-                                        <i class="bi bi-graph-up"></i>
-                                    </div>
-                                    <div class="entity-type-name">Brokers</div>
-                                    <div class="entity-type-count"><?php echo $summary_stats['by_type']['broker']['count'] ?? 0; ?> brokers</div>
-                                </div>
-                            </a>
-                        </div>
-                        
-                        <!-- Suppliers -->
-                        <div class="col-6 col-md-4 col-lg-2">
-                            <a href="?entity_type=supplier&<?php echo http_build_query(array_diff_key($_GET, ['entity_type' => '', 'page' => ''])); ?>" 
-                               class="text-decoration-none">
-                                <div class="entity-type-pill <?php echo $entity_type == 'supplier' ? 'active' : ''; ?>" 
-                                     style="border-left: 4px solid #e83e8c;">
-                                    <div class="entity-type-icon text-pink">
-                                        <i class="bi bi-truck"></i>
-                                    </div>
-                                    <div class="entity-type-name">Suppliers</div>
-                                    <div class="entity-type-count"><?php echo $summary_stats['by_type']['supplier']['count'] ?? 0; ?> suppliers</div>
-                                </div>
-                            </a>
-                        </div>
-                        
-                        <!-- Chart Accounts -->
-                        <div class="col-6 col-md-4 col-lg-2">
-                            <a href="?entity_type=chart_account&<?php echo http_build_query(array_diff_key($_GET, ['entity_type' => '', 'page' => ''])); ?>" 
-                               class="text-decoration-none">
-                                <div class="entity-type-pill <?php echo $entity_type == 'chart_account' ? 'active' : ''; ?>" 
-                                     style="border-left: 4px solid #6f42c1;">
-                                    <div class="entity-type-icon text-purple">
-                                        <i class="bi bi-journal-bookmark"></i>
-                                    </div>
-                                    <div class="entity-type-name">Chart Accounts</div>
-                                    <div class="entity-type-count"><?php echo $summary_stats['by_type']['chart_account']['count'] ?? 0; ?> accounts</div>
-                                </div>
-                            </a>
-                        </div>
-                        
-                        <!-- Bank Accounts -->
-                        <div class="col-6 col-md-4 col-lg-2">
-                            <a href="?entity_type=bank_account&<?php echo http_build_query(array_diff_key($_GET, ['entity_type' => '', 'page' => ''])); ?>" 
-                               class="text-decoration-none">
-                                <div class="entity-type-pill <?php echo $entity_type == 'bank_account' ? 'active' : ''; ?>" 
-                                     style="border-left: 4px solid #20c997;">
-                                    <div class="entity-type-icon text-teal">
-                                        <i class="bi bi-bank"></i>
-                                    </div>
-                                    <div class="entity-type-name">Bank Accounts</div>
-                                    <div class="entity-type-count"><?php echo $summary_stats['by_type']['bank_account']['count'] ?? 0; ?> accounts</div>
-                                </div>
-                            </a>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Summary Statistics -->
-    <div class="row mb-4">
-        <div class="col-md-2 mb-3">
-            <div class="card stats-card stats-card-total">
-                <div class="card-body">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <div>
-                            <h6 class="text-muted mb-1">Total Entities</h6>
-                            <h3 class="mb-0"><?php echo $summary_stats['total_entities']; ?></h3>
-                        </div>
-                        <div class="bg-primary text-white rounded-circle p-3">
-                            <i class="bi bi-people fs-4"></i>
-                        </div>
-                    </div>
-                    <div class="mt-3">
-                        <small class="text-muted">
-                            <span class="text-success"><?php echo $summary_stats['entities_in_credit']; ?> Credit</span> | 
-                            <span class="text-danger"><?php echo $summary_stats['entities_in_debit']; ?> Debit</span> | 
-                            <span class="text-secondary"><?php echo $summary_stats['entities_settled']; ?> Settled</span>
-                        </small>
-                    </div>
-                </div>
-            </div>
-        </div>
-        
-        <div class="col-md-2 mb-3">
-            <div class="card stats-card stats-card-debit">
-                <div class="card-body">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <div>
-                            <h6 class="text-muted mb-1">Total Debit</h6>
-                            <h3 class="mb-0 text-danger"><?php echo formatCurrency($summary_stats['total_debit_balance']); ?></h3>
-                        </div>
-                        <div class="bg-danger text-white rounded-circle p-3">
-                            <i class="bi bi-arrow-down-circle fs-4"></i>
-                        </div>
-                    </div>
-                    <div class="mt-3">
-                        <small class="text-muted">
-                            <?php echo $entity_type == 'bank_account' ? 'Bank Deficits' : 'Money owed to us'; ?>
-                        </small>
-                    </div>
-                </div>
-            </div>
-        </div>
-        
-        <div class="col-md-2 mb-3">
-            <div class="card stats-card stats-card-credit">
-                <div class="card-body">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <div>
-                            <h6 class="text-muted mb-1">Total Credit</h6>
-                            <h3 class="mb-0 text-success"><?php echo formatCurrency($summary_stats['total_credit_balance']); ?></h3>
-                        </div>
-                        <div class="bg-success text-white rounded-circle p-3">
-                            <i class="bi bi-arrow-up-circle fs-4"></i>
-                        </div>
-                    </div>
-                    <div class="mt-3">
-                        <small class="text-muted">
-                            <?php echo $entity_type == 'bank_account' ? 'Bank Surplus' : 'Money we owe'; ?>
-                        </small>
-                    </div>
-                </div>
-            </div>
-        </div>
-        
-        <div class="col-md-3 mb-3">
-            <div class="card stats-card stats-card-net">
-                <div class="card-body">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <div>
-                            <h6 class="text-muted mb-1">Net Position</h6>
-                            <h3 class="mb-0 <?php echo $net_balance >= 0 ? 'text-success' : 'text-danger'; ?>">
-                                <?php echo formatCurrency(abs($net_balance)); ?>
-                            </h3>
-                        </div>
-                        <div class="<?php echo $net_balance >= 0 ? 'bg-success' : 'bg-danger'; ?> text-white rounded-circle p-3">
-                            <i class="bi bi-calculator fs-4"></i>
-                        </div>
-                    </div>
-                    <div class="mt-3">
-                        <small class="text-muted">
-                            <?php 
-                            if ($entity_type == 'bank_account') {
-                                echo $net_balance >= 0 ? 'Overall Bank Surplus' : 'Overall Bank Deficit';
-                            } else {
-                                echo $net_balance >= 0 ? 'We owe more to entities' : 'Entities owe more to us';
-                            }
-                            ?>
-                        </small>
-                    </div>
-                </div>
-            </div>
-        </div>
-        
-        <div class="col-md-3 mb-3">
-            <div class="card stats-card stats-card-overdue">
-                <div class="card-body">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <div>
-                            <h6 class="text-muted mb-1">Total Overdue</h6>
-                            <h3 class="mb-0 text-warning"><?php echo formatCurrency($summary_stats['total_overdue']); ?></h3>
-                        </div>
-                        <div class="bg-warning text-white rounded-circle p-3">
-                            <i class="bi bi-clock-history fs-4"></i>
-                        </div>
-                    </div>
-                    <div class="mt-3">
-                        <div class="progress" style="height: 6px;">
-                            <div class="progress-bar progress-bar-overdue" 
-                                 style="width: <?php echo $summary_stats['total_debit_balance'] > 0 ? ($summary_stats['total_overdue'] / $summary_stats['total_debit_balance'] * 100) : 0; ?>%">
-                            </div>
-                        </div>
-                        <small class="text-muted">
-                            <?php echo $summary_stats['total_debit_balance'] > 0 ? 
-                                number_format($summary_stats['total_overdue'] / $summary_stats['total_debit_balance'] * 100, 1) : 0; ?>% of total debit
-                        </small>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Filters Section -->
-    <div class="row mb-4">
-        <div class="col-12">
-            <div class="card">
-                <div class="card-header bg-light">
-                    <h6 class="mb-0"><i class="bi bi-funnel me-2"></i>Advanced Filters & Export</h6>
-                </div>
-                <div class="card-body">
-                    <form method="GET" id="filterForm">
-                        <input type="hidden" name="page" value="1">
-                        <?php if ($entity_type): ?>
-                            <input type="hidden" name="entity_type" value="<?php echo htmlspecialchars($entity_type); ?>">
-                        <?php endif; ?>
-                        
-                        <div class="row g-3">
-                            <div class="col-md-3">
-                                <label class="form-label">Date Range</label>
-                                <div class="row g-2 mb-2">
-                                    <div class="col-6">
-                                        <input type="date" class="form-control form-control-sm" name="start_date" 
-                                               value="<?php echo htmlspecialchars($start_date); ?>"
-                                               max="<?php echo date('Y-m-d'); ?>">
-                                    </div>
-                                    <div class="col-6">
-                                        <input type="date" class="form-control form-control-sm" name="end_date" 
-                                               value="<?php echo htmlspecialchars($end_date); ?>"
-                                               max="<?php echo date('Y-m-d'); ?>">
-                                    </div>
-                                </div>
-                                
-                                <label class="form-label">As of Date</label>
-                                <input type="date" class="form-control form-control-sm" name="as_of_date" 
-                                       value="<?php echo htmlspecialchars($as_of_date); ?>"
-                                       max="<?php echo date('Y-m-d'); ?>">
-                            </div>
-                            
-                            <div class="col-md-3">
-                                <div class="mb-3">
-                                    <label class="form-label">Balance Status</label>
-                                    <select class="form-select" name="balance_status">
-                                        <option value="all" <?php echo $balance_status === 'all' ? 'selected' : ''; ?>>All Balances</option>
-                                        <option value="credit" <?php echo $balance_status === 'credit' ? 'selected' : ''; ?>>Credit <?php echo $entity_type == 'bank_account' ? '(Positive)' : '(We Owe)'; ?></option>
-                                        <option value="debit" <?php echo $balance_status === 'debit' ? 'selected' : ''; ?>>Debit <?php echo $entity_type == 'bank_account' ? '(Negative)' : '(Entity Owes Us)'; ?></option>
-                                        <option value="settled" <?php echo $balance_status === 'settled' ? 'selected' : ''; ?>>Settled (Zero Balance)</option>
-                                    </select>
-                                </div>
-                                
-                                <div class="mb-3">
-                                    <label class="form-label">Aging Status</label>
-                                    <select class="form-select" name="aging_filter">
-                                        <option value="all" <?php echo $aging_filter === 'all' ? 'selected' : ''; ?>>All Aging Status</option>
-                                        <option value="current" <?php echo $aging_filter === 'current' ? 'selected' : ''; ?>>Current (0% Overdue)</option>
-                                        <option value="overdue_low" <?php echo $aging_filter === 'overdue_low' ? 'selected' : ''; ?>>Low Overdue (1-10%)</option>
-                                        <option value="overdue_medium" <?php echo $aging_filter === 'overdue_medium' ? 'selected' : ''; ?>>Medium Overdue (11-30%)</option>
-                                        <option value="overdue_high" <?php echo $aging_filter === 'overdue_high' ? 'selected' : ''; ?>>High Overdue (30%+)</option>
-                                    </select>
-                                </div>
-                            </div>
-                            
-                            <div class="col-md-3">
-                                <div class="mb-3">
-                                    <label class="form-label">Records per page</label>
-                                    <select class="form-select records-per-page-selector" name="per_page" onchange="updatePerPage(this.value)">
-                                        <option value="10" <?php echo $records_per_page == 10 ? 'selected' : ''; ?>>10</option>
-                                        <option value="20" <?php echo $records_per_page == 20 ? 'selected' : ''; ?>>20</option>
-                                        <option value="50" <?php echo $records_per_page == 50 ? 'selected' : ''; ?>>50</option>
-                                        <option value="100" <?php echo $records_per_page == 100 ? 'selected' : ''; ?>>100</option>
-                                        <option value="0" <?php echo $records_per_page == 0 ? 'selected' : ''; ?>>All</option>
-                                    </select>
-                                </div>
-                                
-                                <div class="d-grid gap-2">
-                                    <button type="submit" class="btn btn-primary btn-sm">
-                                        <i class="bi bi-filter me-1"></i>Apply Filters
-                                    </button>
-                                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="resetFilters()">
-                                        <i class="bi bi-arrow-clockwise me-1"></i>Reset Filters
-                                    </button>
-                                </div>
-                            </div>
-                            
-                            <div class="col-md-3">
-                                <div class="d-flex flex-column h-100 justify-content-between">
-                                    <div>
-                                        <label class="form-label">Export Options</label>
-                                        <div class="d-grid gap-2">
-                                            <a href="?<?php echo http_build_query(array_merge($_GET, ['export' => 'excel', 'page' => 1])); ?>" 
-                                               class="btn btn-success btn-sm export-btn"
-                                               onclick="return confirm('Export <?php echo count($all_data); ?> entities to Excel?')">
-                                                <i class="bi bi-file-excel me-1"></i>Export to Excel
-                                            </a>
-                                            <a href="?<?php echo http_build_query(array_merge($_GET, ['export' => 'pdf', 'page' => 1])); ?>" 
-                                               class="btn btn-danger btn-sm">
-                                                <i class="bi bi-file-pdf me-1"></i>Export to PDF
-                                            </a>
-                                        </div>
-                                    </div>
-                                    
-                                    <div class="mt-3">
-                                        <small class="text-muted">
-                                            <i class="bi bi-info-circle me-1"></i>
-                                            Excel export includes detailed transaction history
-                                        </small>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </form>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Pagination Info -->
-    <div class="row mb-3">
-        <div class="col-md-6">
-            <div class="d-flex align-items-center">
-                <div class="me-3">
-                    <span class="text-muted">
-                        Showing <?php echo count($all_data); ?> of <?php echo $total_count; ?> entities
-                        <?php if ($entity_type): ?> (<?php echo ucfirst($entity_type); ?>s only)<?php endif; ?>
-                    </span>
-                </div>
-                <div>
-                    <?php if ($total_pages > 1): ?>
-                        <span class="badge bg-info">Page <?php echo $current_page; ?> of <?php echo $total_pages; ?></span>
-                    <?php endif; ?>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-6">
-            <?php if ($total_pages > 1): ?>
-                <nav aria-label="Page navigation">
-                    <ul class="pagination justify-content-end mb-0">
-                        <li class="page-item <?php echo $current_page == 1 ? 'disabled' : ''; ?>">
-                            <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => 1])); ?>" aria-label="First">
-                                <span aria-hidden="true">&laquo;&laquo;</span>
-                            </a>
-                        </li>
-                        
-                        <li class="page-item <?php echo $current_page == 1 ? 'disabled' : ''; ?>">
-                            <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => max(1, $current_page - 1)])); ?>" aria-label="Previous">
-                                <span aria-hidden="true">&laquo;</span>
-                            </a>
-                        </li>
-                        
-                        <?php 
-                        $start_page = max(1, $current_page - 2);
-                        $end_page = min($total_pages, $current_page + 2);
-                        
-                        if ($start_page > 1): ?>
-                            <li class="page-item disabled"><span class="page-link">...</span></li>
-                        <?php endif; ?>
-                        
-                        <?php for ($i = $start_page; $i <= $end_page; $i++): ?>
-                            <li class="page-item <?php echo $i == $current_page ? 'active' : ''; ?>">
-                                <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => $i])); ?>">
-                                    <?php echo $i; ?>
-                                </a>
-                            </li>
-                        <?php endfor; ?>
-                        
-                        <?php if ($end_page < $total_pages): ?>
-                            <li class="page-item disabled"><span class="page-link">...</span></li>
-                        <?php endif; ?>
-                        
-                        <li class="page-item <?php echo $current_page == $total_pages ? 'disabled' : ''; ?>">
-                            <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => min($total_pages, $current_page + 1)])); ?>" aria-label="Next">
-                                <span aria-hidden="true">&raquo;</span>
-                            </a>
-                        </li>
-                        
-                        <li class="page-item <?php echo $current_page == $total_pages ? 'disabled' : ''; ?>">
-                            <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => $total_pages])); ?>" aria-label="Last">
-                                <span aria-hidden="true">&raquo;&raquo;</span>
-                            </a>
-                        </li>
-                    </ul>
-                </nav>
+    <!-- Filters -->
+    <div class="filter-section-modern animate-in animate-in-delay-3">
+        <form method="GET" id="filterForm">
+            <input type="hidden" name="page" value="1">
+            <?php if ($entity_type): ?>
+                <input type="hidden" name="entity_type" value="<?php echo htmlspecialchars($entity_type); ?>">
             <?php endif; ?>
-        </div>
-    </div>
-
-    <!-- Entity Balances Table -->
-    <div class="row">
-        <div class="col-12">
-            <div class="card">
-                <div class="card-header bg-light d-flex justify-content-between align-items-center">
-                    <h6 class="mb-0"><i class="bi bi-table me-2"></i>Entity Balances & Aging Analysis</h6>
-                    <small class="text-muted">
-                        Page <?php echo $current_page; ?> of <?php echo $total_pages; ?> 
-                        (<?php echo count($all_data); ?> entities on this page)
-                    </small>
-                </div>
-                <div class="card-body p-0">
-                    <?php if (empty($all_data)): ?>
-                        <div class="text-center py-5">
-                            <i class="bi bi-inbox" style="font-size: 3rem; color: #6c757d;"></i>
-                            <h5 class="mt-3 text-muted">No entity data found</h5>
-                            <p class="text-muted">Try adjusting your filter criteria</p>
-                        </div>
-                    <?php else: ?>
-                        <div class="table-responsive">
-                            <table class="table table-hover mb-0">
-                                <thead class="table-light">
-                                    <tr>
-                                        <th>Entity Type</th>
-                                        <th>Entity Code</th>
-                                        <th>Entity Name</th>
-                                        <th>Total Receipts (<?php echo $entity_type == 'bank_account' ? 'Inflows' : 'Received'; ?>)</th>
-                                        <th>Total Payments (<?php echo $entity_type == 'bank_account' ? 'Outflows' : 'Paid'; ?>)</th>
-                                        <th>Debit Balance</th>
-                                        <th>Credit Balance</th>
-                                        <th>Net Balance</th>
-                                        <th>Aging Analysis</th>
-                                        <th>% Overdue</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php foreach ($all_data as $entity_data): 
-                                        $entity_info = $entity_data['entity_info'];
-                                        $totals = $entity_data['totals'];
-                                        $aging = $entity_data['aging'];
-                                    ?>
-                                        <tr>
-                                            <td>
-                                                <span class="entity-type-badge badge-<?php echo $entity_info['type']; ?>">
-                                                    <?php echo ucfirst($entity_info['type']); ?>
-                                                </span>
-                                            </td>
-                                            <td>
-                                                <code><?php echo htmlspecialchars($entity_info['code']); ?></code>
-                                            </td>
-                                            <td>
-                                                <a href="entity_ledger.php?type=<?php echo urlencode($entity_info['type']); ?>&id=<?php echo urlencode($entity_info['id']); ?>"
-                                                   class="text-decoration-none"
-                                                   title="View full ledger for <?php echo htmlspecialchars($entity_info['name']); ?>">
-                                                    <strong><?php echo htmlspecialchars($entity_info['name']); ?></strong>
-                                                </a>
-                                                <?php if ($entity_info['type'] == 'client' && isset($entity_info['details']['client_type'])): ?>
-                                                    <br><small class="text-muted"><?php echo htmlspecialchars($entity_info['details']['client_type']); ?></small>
-                                                <?php endif; ?>
-                                                <?php if ($entity_info['type'] == 'bank_account' && isset($entity_info['details']['bank_name'])): ?>
-                                                    <br><small class="text-muted"><?php echo htmlspecialchars($entity_info['details']['bank_name']); ?></small>
-                                                <?php endif; ?>
-                                            </td>
-                                            <td class="text-success fw-bold">
-                                                <?php echo formatCurrency($totals['receipts']); ?>
-                                            </td>
-                                            <td class="text-danger fw-bold">
-                                                <?php echo formatCurrency($totals['payments']); ?>
-                                            </td>
-                                            <td class="text-danger fw-bold">
-                                                <?php echo $totals['debit_balance'] > 0 ? formatCurrency($totals['debit_balance']) : '-'; ?>
-                                            </td>
-                                            <td class="text-success fw-bold">
-                                                <?php echo $totals['credit_balance'] > 0 ? formatCurrency($totals['credit_balance']) : '-'; ?>
-                                            </td>
-                                            <td class="<?php 
-                                                echo $totals['net_balance'] > 0 ? 'balance-positive' : 
-                                                    ($totals['net_balance'] < 0 ? 'balance-negative' : 'balance-zero'); 
-                                            ?> fw-bold">
-                                                <?php echo formatCurrency(abs($totals['net_balance'])); ?>
-                                            </td>
-                                            <td>
-                                                <?php if ($entity_info['type'] !== 'bank_account'): ?>
-                                                <div class="d-flex gap-1 mb-1">
-                                                    <?php if ($aging['buckets']['Current'] > 0): ?>
-                                                        <span class="badge aging-badge aging-current" title="Current (0-30 days)">
-                                                            C: <?php echo number_format($aging['buckets']['Current'] / 1000, 1); ?>K
-                                                        </span>
-                                                    <?php endif; ?>
-                                                    <?php if ($aging['buckets']['31-60 Days'] > 0): ?>
-                                                        <span class="badge aging-badge aging-31-60" title="31-60 Days Overdue">
-                                                            31-60: <?php echo number_format($aging['buckets']['31-60 Days'] / 1000, 1); ?>K
-                                                        </span>
-                                                    <?php endif; ?>
-                                                    <?php if ($aging['buckets']['61-90 Days'] > 0): ?>
-                                                        <span class="badge aging-badge aging-61-90" title="61-90 Days Overdue">
-                                                            61-90: <?php echo number_format($aging['buckets']['61-90 Days'] / 1000, 1); ?>K
-                                                        </span>
-                                                    <?php endif; ?>
-                                                    <?php if ($aging['buckets']['90+ Days'] > 0): ?>
-                                                        <span class="badge aging-badge aging-90plus" title="90+ Days Overdue">
-                                                            90+: <?php echo number_format($aging['buckets']['90+ Days'] / 1000, 1); ?>K
-                                                        </span>
-                                                    <?php endif; ?>
-                                                </div>
-                                                <div class="progress" style="height: 5px;">
-                                                    <?php $total_aging = array_sum($aging['buckets']); ?>
-                                                    <?php if ($total_aging > 0): ?>
-                                                        <div class="progress-bar progress-bar-current" 
-                                                             style="width: <?php echo ($aging['buckets']['Current'] / $total_aging * 100); ?>%">
-                                                        </div>
-                                                        <div class="progress-bar bg-warning" 
-                                                             style="width: <?php echo ($aging['buckets']['31-60 Days'] / $total_aging * 100); ?>%">
-                                                        </div>
-                                                        <div class="progress-bar bg-danger" 
-                                                             style="width: <?php echo (($aging['buckets']['61-90 Days'] + $aging['buckets']['90+ Days']) / $total_aging * 100); ?>%">
-                                                        </div>
-                                                    <?php endif; ?>
-                                                </div>
-                                                <?php else: ?>
-                                                    <span class="text-muted">N/A for Bank Accounts</span>
-                                                <?php endif; ?>
-                                            </td>
-                                            <td>
-                                                <?php if ($entity_info['type'] !== 'bank_account'): ?>
-                                                <span class="<?php echo $aging['overdue_ratio'] > 30 ? 'text-danger fw-bold' : ($aging['overdue_ratio'] > 10 ? 'text-warning fw-bold' : 'text-success'); ?>">
-                                                    <?php echo number_format($aging['overdue_ratio'], 1); ?>%
-                                                </span>
-                                                <?php else: ?>
-                                                    <span class="text-muted">N/A</span>
-                                                <?php endif; ?>
-                                            </td>
-                                            <td>
-                                                <div class="btn-group btn-group-sm">
-                                                    <button type="button" class="btn btn-outline-primary view-transactions" 
-                                                            data-entity-type="<?php echo $entity_info['type']; ?>"
-                                                            data-entity-id="<?php echo $entity_info['id']; ?>"
-                                                            data-entity-name="<?php echo htmlspecialchars($entity_info['name']); ?>">
-                                                        <i class="bi bi-list-ul"></i>
-                                                    </button>
-                                                    <button type="button" class="btn btn-outline-info view-details" 
-                                                            data-entity-type="<?php echo $entity_info['type']; ?>"
-                                                            data-entity-id="<?php echo $entity_info['id']; ?>"
-                                                            data-entity-name="<?php echo htmlspecialchars($entity_info['name']); ?>">
-                                                        <i class="bi bi-eye"></i>
-                                                    </button>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                                <tfoot class="table-light">
-                                    <tr>
-                                        <th colspan="3">PAGE TOTALS:</th>
-                                        <th class="text-success fw-bold"><?php echo formatCurrency($summary_stats['total_receipts']); ?></th>
-                                        <th class="text-danger fw-bold"><?php echo formatCurrency($summary_stats['total_payments']); ?></th>
-                                        <th class="text-danger fw-bold"><?php echo formatCurrency($summary_stats['total_debit_balance']); ?></th>
-                                        <th class="text-success fw-bold"><?php echo formatCurrency($summary_stats['total_credit_balance']); ?></th>
-                                        <th class="<?php echo $net_balance >= 0 ? 'balance-positive' : 'balance-negative'; ?> fw-bold">
-                                            <?php echo formatCurrency(abs($net_balance)); ?>
-                                        </th>
-                                        <th>
-                                            <?php if ($entity_type !== 'bank_account'): ?>
-                                            <small class="text-muted">
-                                                Current: <?php echo formatCurrency($summary_stats['total_current']); ?> | 
-                                                Overdue: <?php echo formatCurrency($summary_stats['total_overdue']); ?>
-                                            </small>
-                                            <?php else: ?>
-                                            <small class="text-muted">Bank Account Analysis</small>
-                                            <?php endif; ?>
-                                        </th>
-                                        <th>
-                                            <?php if ($entity_type !== 'bank_account'): ?>
-                                            <?php echo $summary_stats['total_debit_balance'] > 0 ? 
-                                                number_format($summary_stats['total_overdue'] / $summary_stats['total_debit_balance'] * 100, 1) : 0; ?>%
-                                            <?php else: ?>
-                                            N/A
-                                            <?php endif; ?>
-                                        </th>
-                                        <th></th>
-                                    </tr>
-                                </tfoot>
-                            </table>
-                        </div>
-                    <?php endif; ?>
+            
+            <div class="filter-grid">
+                <div class="filter-group">
+                    <label><i class="bi bi-calendar-range"></i> From Date</label>
+                    <input type="date" class="form-control" name="start_date" 
+                           value="<?php echo htmlspecialchars($start_date); ?>"
+                           max="<?php echo date('Y-m-d'); ?>">
                 </div>
                 
-                <?php if ($total_pages > 1): ?>
-                <div class="card-footer">
-                    <div class="row">
-                        <div class="col-md-6">
-                            <small class="text-muted">
-                                Page <?php echo $current_page; ?> of <?php echo $total_pages; ?>
-                            </small>
-                        </div>
-                        <div class="col-md-6">
-                            <nav aria-label="Page navigation" class="float-end">
-                                <ul class="pagination pagination-sm mb-0">
-                                    <li class="page-item <?php echo $current_page == 1 ? 'disabled' : ''; ?>">
-                                        <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => max(1, $current_page - 1)])); ?>">
-                                            Previous
-                                        </a>
-                                    </li>
-                                    
-                                    <?php for ($i = max(1, $current_page - 1); $i <= min($total_pages, $current_page + 3); $i++): ?>
-                                        <li class="page-item <?php echo $i == $current_page ? 'active' : ''; ?>">
-                                            <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => $i])); ?>">
-                                                <?php echo $i; ?>
-                                            </a>
-                                        </li>
-                                    <?php endfor; ?>
-                                    
-                                    <li class="page-item <?php echo $current_page == $total_pages ? 'disabled' : ''; ?>">
-                                        <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => min($total_pages, $current_page + 1)])); ?>">
-                                            Next
-                                        </a>
-                                    </li>
-                                </ul>
-                            </nav>
-                        </div>
+                <div class="filter-group">
+                    <label><i class="bi bi-calendar-range"></i> To Date</label>
+                    <input type="date" class="form-control" name="end_date" 
+                           value="<?php echo htmlspecialchars($end_date); ?>"
+                           max="<?php echo date('Y-m-d'); ?>">
+                </div>
+                
+                <div class="filter-group">
+                    <label><i class="bi bi-filter"></i> Balance Status</label>
+                    <select class="form-control" name="balance_status">
+                        <option value="all" <?php echo $balance_status === 'all' ? 'selected' : ''; ?>>All Balances</option>
+                        <option value="credit" <?php echo $balance_status === 'credit' ? 'selected' : ''; ?>>Credit (We Owe)</option>
+                        <option value="debit" <?php echo $balance_status === 'debit' ? 'selected' : ''; ?>>Debit (Owes Us)</option>
+                        <option value="settled" <?php echo $balance_status === 'settled' ? 'selected' : ''; ?>>Settled</option>
+                    </select>
+                </div>
+                
+                <div class="filter-group">
+                    <label><i class="bi bi-clock"></i> Aging Status</label>
+                    <select class="form-control" name="aging_filter">
+                        <option value="all" <?php echo $aging_filter === 'all' ? 'selected' : ''; ?>>All Aging</option>
+                        <option value="current" <?php echo $aging_filter === 'current' ? 'selected' : ''; ?>>Current (0% Overdue)</option>
+                        <option value="overdue_low" <?php echo $aging_filter === 'overdue_low' ? 'selected' : ''; ?>>Low Overdue (1-10%)</option>
+                        <option value="overdue_medium" <?php echo $aging_filter === 'overdue_medium' ? 'selected' : ''; ?>>Medium Overdue (11-30%)</option>
+                        <option value="overdue_high" <?php echo $aging_filter === 'overdue_high' ? 'selected' : ''; ?>>High Overdue (30%+)</option>
+                    </select>
+                </div>
+                
+                <div class="filter-group">
+                    <label><i class="bi bi-list-ol"></i> Per Page</label>
+                    <select class="form-control" name="per_page" onchange="updatePerPage(this.value)">
+                        <option value="10" <?php echo $records_per_page == 10 ? 'selected' : ''; ?>>10</option>
+                        <option value="20" <?php echo $records_per_page == 20 ? 'selected' : ''; ?>>20</option>
+                        <option value="50" <?php echo $records_per_page == 50 ? 'selected' : ''; ?>>50</option>
+                        <option value="100" <?php echo $records_per_page == 100 ? 'selected' : ''; ?>>100</option>
+                        <option value="0" <?php echo $records_per_page == 0 ? 'selected' : ''; ?>>All</option>
+                    </select>
+                </div>
+                
+                <div class="filter-group">
+                    <label>&nbsp;</label>
+                    <div class="filter-actions">
+                        <button type="submit" class="btn-modern btn-modern-primary">
+                            <i class="bi bi-funnel"></i> Apply
+                        </button>
+                        <button type="button" class="btn-modern btn-modern-outline" onclick="resetFilters()">
+                            <i class="bi bi-arrow-counterclockwise"></i> Reset
+                        </button>
                     </div>
                 </div>
-                <?php endif; ?>
             </div>
-        </div>
+        </form>
     </div>
-</div>
 
-<!-- Transaction Details Modal -->
-<div class="modal fade" id="transactionModal" tabindex="-1" aria-labelledby="transactionModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-xl">
-        <div class="modal-content">
-            <div class="modal-header bg-primary text-white">
-                <h5 class="modal-title" id="transactionModalLabel">Transaction History</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="row mb-3">
-                    <div class="col-md-6">
-                        <h6 id="entityNameHeader"></h6>
-                        <small class="text-muted" id="entityCodeHeader"></small>
-                    </div>
-                    <div class="col-md-6 text-end">
-                        <div id="runningBalance" class="fw-bold fs-5"></div>
-                        <small class="text-muted">Current Balance</small>
-                    </div>
+    <!-- Table -->
+    <div class="animate-in animate-in-delay-4">
+        <div class="table-wrapper">
+            <div class="table-header">
+                <h6>
+                    <i class="bi bi-table"></i>
+                    Entity Balances & Aging Analysis
+                </h6>
+                <div>
+                    <span class="badge-count">
+                        <i class="bi bi-file-text"></i> <?php echo count($all_data); ?> entities
+                    </span>
+                    <?php if ($total_pages > 1): ?>
+                        <span class="badge-count" style="background: var(--gray-500);">
+                            Page <?php echo $current_page; ?> of <?php echo $total_pages; ?>
+                        </span>
+                    <?php endif; ?>
                 </div>
+            </div>
+            
+            <?php if (empty($all_data)): ?>
+                <div class="empty-state">
+                    <i class="bi bi-inbox"></i>
+                    <h5>No entities found</h5>
+                    <p>Try adjusting your filter criteria or date range</p>
+                </div>
+            <?php else: ?>
                 <div class="table-responsive">
-                    <table class="table table-sm table-hover" id="transactionTable">
-                        <thead class="table-light">
+                    <table class="table-modern">
+                        <thead>
                             <tr>
-                                <th>Date</th>
-                                <th>Reference</th>
-                                <th>Description</th>
-                                <th>Account</th>
-                                <th>Debit (TZS)</th>
-                                <th>Credit (TZS)</th>
-                                <th>Balance (TZS)</th>
+                                <th>Type</th>
+                                <th>Code</th>
+                                <th>Entity Name</th>
+                                <th class="text-end">Receipts</th>
+                                <th class="text-end">Payments</th>
+                                <th class="text-end">Debit</th>
+                                <th class="text-end">Credit</th>
+                                <th class="text-end">Net Balance</th>
+                                <th>Aging</th>
+                                <th>% Overdue</th>
+                                <th class="text-center">Actions</th>
                             </tr>
                         </thead>
-                        <tbody></tbody>
+                        <tbody>
+                            <?php foreach ($all_data as $entity_data): 
+                                $entity_info = $entity_data['entity_info'];
+                                $totals = $entity_data['totals'];
+                                $aging = $entity_data['aging'];
+                                $type_color = getEntityTypeColor($entity_info['type']);
+                                $type_icon = getEntityTypeIcon($entity_info['type']);
+                            ?>
+                                <tr>
+                                    <td>
+                                        <span class="entity-type-badge" style="background: <?php echo $type_color; ?>20; color: <?php echo $type_color; ?>;">
+                                            <i class="bi <?php echo $type_icon; ?>"></i>
+                                            <?php echo ucfirst($entity_info['type']); ?>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <code style="background: var(--gray-100); padding: 2px 6px; border-radius: 4px; font-size: 12px;">
+                                            <?php echo htmlspecialchars($entity_info['code']); ?>
+                                        </code>
+                                    </td>
+                                    <td>
+                                        <a href="entity_ledger.php?type=<?php echo urlencode($entity_info['type']); ?>&id=<?php echo urlencode($entity_info['id']); ?><?php echo isset($_GET['entity_type']) ? '&return_to=' . urlencode(http_build_query(['entity_type' => $_GET['entity_type']])) : ''; ?>" 
+                                           class="entity-name-link">
+                                            <?php echo htmlspecialchars($entity_info['name']); ?>
+                                            <i class="bi bi-box-arrow-up-right"></i>
+                                        </a>
+                                        <?php if ($entity_info['type'] == 'client' && isset($entity_info['details']['client_type'])): ?>
+                                            <br><small style="color: var(--gray-400); font-size: 11px;"><?php echo htmlspecialchars($entity_info['details']['client_type']); ?></small>
+                                        <?php endif; ?>
+                                        <?php if ($entity_info['type'] == 'bank_account' && isset($entity_info['details']['bank_name'])): ?>
+                                            <br><small style="color: var(--gray-400); font-size: 11px;"><?php echo htmlspecialchars($entity_info['details']['bank_name']); ?></small>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="text-end text-credit">
+                                        <?php echo formatCurrency($totals['receipts']); ?>
+                                    </td>
+                                    <td class="text-end text-debit">
+                                        <?php echo formatCurrency($totals['payments']); ?>
+                                    </td>
+                                    <td class="text-end text-debit">
+                                        <?php echo $totals['debit_balance'] > 0 ? formatCurrency($totals['debit_balance']) : '-'; ?>
+                                    </td>
+                                    <td class="text-end text-credit">
+                                        <?php echo $totals['credit_balance'] > 0 ? formatCurrency($totals['credit_balance']) : '-'; ?>
+                                    </td>
+                                    <td class="text-end <?php 
+                                        echo $totals['net_balance'] > 0 ? 'text-balance-positive' : 
+                                            ($totals['net_balance'] < 0 ? 'text-balance-negative' : 'text-balance-zero'); 
+                                    ?>">
+                                        <?php echo formatCurrency(abs($totals['net_balance'])); ?>
+                                    </td>
+                                    <td>
+                                        <?php if ($entity_info['type'] !== 'bank_account'): ?>
+                                            <div style="display: flex; gap: 3px; flex-wrap: wrap;">
+                                                <?php if ($aging['buckets']['Current'] > 0): ?>
+                                                    <span class="aging-badge current">C</span>
+                                                <?php endif; ?>
+                                                <?php if ($aging['buckets']['31-60 Days'] > 0): ?>
+                                                    <span class="aging-badge overdue-31">31-60</span>
+                                                <?php endif; ?>
+                                                <?php if ($aging['buckets']['61-90 Days'] > 0): ?>
+                                                    <span class="aging-badge overdue-61">61-90</span>
+                                                <?php endif; ?>
+                                                <?php if ($aging['buckets']['90+ Days'] > 0): ?>
+                                                    <span class="aging-badge overdue-90">90+</span>
+                                                <?php endif; ?>
+                                            </div>
+                                            <div class="aging-progress">
+                                                <?php $total_aging = array_sum($aging['buckets']); ?>
+                                                <?php if ($total_aging > 0): ?>
+                                                    <div class="segment segment-current" style="width: <?php echo ($aging['buckets']['Current'] / $total_aging * 100); ?>%;"></div>
+                                                    <div class="segment segment-31-60" style="width: <?php echo ($aging['buckets']['31-60 Days'] / $total_aging * 100); ?>%;"></div>
+                                                    <div class="segment segment-61-90" style="width: <?php echo ($aging['buckets']['61-90 Days'] / $total_aging * 100); ?>%;"></div>
+                                                    <div class="segment segment-90-plus" style="width: <?php echo ($aging['buckets']['90+ Days'] / $total_aging * 100); ?>%;"></div>
+                                                <?php endif; ?>
+                                            </div>
+                                        <?php else: ?>
+                                            <span style="color: var(--gray-400); font-size: 12px;">N/A</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <?php if ($entity_info['type'] !== 'bank_account'): ?>
+                                            <span style="font-weight: 600; <?php echo $aging['overdue_ratio'] > 30 ? 'color: var(--danger);' : ($aging['overdue_ratio'] > 10 ? 'color: var(--warning);' : 'color: var(--success);'); ?>">
+                                                <?php echo number_format($aging['overdue_ratio'], 1); ?>%
+                                            </span>
+                                        <?php else: ?>
+                                            <span style="color: var(--gray-400); font-size: 12px;">N/A</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="text-center">
+                                        <div class="action-buttons" style="justify-content: center;">
+                                            <a href="entity_ledger.php?type=<?php echo urlencode($entity_info['type']); ?>&id=<?php echo urlencode($entity_info['id']); ?><?php echo isset($_GET['entity_type']) ? '&return_to=' . urlencode(http_build_query(['entity_type' => $_GET['entity_type']])) : ''; ?>" 
+                                               class="action-btn view" title="View Ledger">
+                                                <i class="bi bi-eye"></i>
+                                            </a>
+                                            <button type="button" class="action-btn details" 
+                                                    onclick="showEntityDetails('<?php echo $entity_info['type']; ?>', '<?php echo $entity_info['id']; ?>', '<?php echo htmlspecialchars($entity_info['name']); ?>')"
+                                                    title="View Details">
+                                                <i class="bi bi-info-circle"></i>
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
                     </table>
                 </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                <a id="exportGlExcelBtn" class="btn btn-success" href="#">
-                    <i class="bi bi-file-excel me-1"></i>Export GL to Excel
-                </a>
-                <button type="button" class="btn btn-primary" onclick="printTransactionHistory()">
-                    <i class="bi bi-printer me-1"></i>Print
-                </button>
-            </div>
+                
+                <div class="table-footer">
+                    <div>
+                        <span style="color: var(--gray-500); font-size: 14px;">
+                            Showing <?php echo count($all_data); ?> of <?php echo $total_count; ?> entities
+                            <?php if ($entity_type): ?> (<?php echo ucfirst($entity_type); ?>s)<?php endif; ?>
+                        </span>
+                    </div>
+                    <?php if ($total_pages > 1): ?>
+                        <nav class="pagination-modern">
+                            <a href="?<?php echo http_build_query(array_merge($_GET, ['page' => max(1, $current_page - 1)])); ?>" 
+                               class="page-link <?php echo $current_page == 1 ? 'disabled' : ''; ?>">
+                                <i class="bi bi-chevron-left"></i>
+                            </a>
+                            
+                            <?php 
+                            $start_page = max(1, $current_page - 2);
+                            $end_page = min($total_pages, $current_page + 2);
+                            
+                            if ($start_page > 1): ?>
+                                <a href="?<?php echo http_build_query(array_merge($_GET, ['page' => 1])); ?>" class="page-link">1</a>
+                                <?php if ($start_page > 2): ?>
+                                    <span class="page-link disabled">…</span>
+                                <?php endif; ?>
+                            <?php endif; ?>
+                            
+                            <?php for ($i = $start_page; $i <= $end_page; $i++): ?>
+                                <a href="?<?php echo http_build_query(array_merge($_GET, ['page' => $i])); ?>" 
+                                   class="page-link <?php echo $i == $current_page ? 'active' : ''; ?>">
+                                    <?php echo $i; ?>
+                                </a>
+                            <?php endfor; ?>
+                            
+                            <?php if ($end_page < $total_pages): ?>
+                                <?php if ($end_page < $total_pages - 1): ?>
+                                    <span class="page-link disabled">…</span>
+                                <?php endif; ?>
+                                <a href="?<?php echo http_build_query(array_merge($_GET, ['page' => $total_pages])); ?>" class="page-link"><?php echo $total_pages; ?></a>
+                            <?php endif; ?>
+                            
+                            <a href="?<?php echo http_build_query(array_merge($_GET, ['page' => min($total_pages, $current_page + 1)])); ?>" 
+                               class="page-link <?php echo $current_page == $total_pages ? 'disabled' : ''; ?>">
+                                <i class="bi bi-chevron-right"></i>
+                            </a>
+                        </nav>
+                    <?php endif; ?>
+                </div>
+            <?php endif; ?>
         </div>
     </div>
 </div>
 
 <!-- Entity Details Modal -->
-<div class="modal fade" id="entityDetailsModal" tabindex="-1" aria-labelledby="entityDetailsModalLabel" aria-hidden="true">
+<div class="modal fade" id="entityDetailsModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header bg-info text-white">
-                <h5 class="modal-title" id="entityDetailsModalLabel">Entity Balance Details</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        <div class="modal-content" style="border-radius: var(--radius);">
+            <div class="modal-header" style="border-bottom: none; padding: 24px 24px 0 24px;">
+                <h5 class="modal-title" id="entityDetailsTitle" style="font-weight: 700;">
+                    <i class="bi bi-info-circle" style="color: var(--primary);"></i>
+                    Entity Details
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <div class="modal-body" id="entityDetailsContent"></div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            <div class="modal-body" id="entityDetailsContent" style="padding: 20px 24px 24px 24px;">
+                <!-- Content loaded dynamically -->
             </div>
         </div>
     </div>
 </div>
 
 <!-- Help Modal -->
-<div class="modal fade" id="helpModal" tabindex="-1" aria-labelledby="helpModalLabel" aria-hidden="true">
+<div class="modal fade" id="helpModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header bg-warning text-dark">
-                <h5 class="modal-title" id="helpModalLabel"><i class="bi bi-question-circle me-2"></i>How to Use This Report</h5>
+        <div class="modal-content" style="border-radius: var(--radius);">
+            <div class="modal-header" style="background: var(--gray-50); border-bottom: 1px solid var(--gray-200);">
+                <h5 class="modal-title" style="font-weight: 700;">
+                    <i class="bi bi-question-circle" style="color: var(--primary);"></i>
+                    How to Use This Report
+                </h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <div class="modal-body">
-                <h6>Understanding Entity Types:</h6>
-                <ul>
-                    <li><strong>Clients:</strong> Company customers with trading accounts</li>
-                    <li><strong>Custodians:</strong> Entities holding company assets</li>
-                    <li><strong>Employees:</strong> Company staff members</li>
-                    <li><strong>Agents:</strong> Sales or service agents</li>
-                    <li><strong>Brokers:</strong> Trading intermediaries</li>
-                    <li><strong>Suppliers:</strong> Goods/service providers</li>
-                    <li><strong>Chart Accounts:</strong> Nominal accounts for expenses/income</li>
-                    <li><strong>Bank Accounts:</strong> Company bank accounts with inflows and outflows</li>
-                </ul>
-                
-                <h6 class="mt-4">Understanding Transactions:</h6>
-                <ul>
-                    <li><strong>For Non-Bank Entities:</strong>
-                        <ul>
-                            <li>Receipts: Money we received (entity owes us)</li>
-                            <li>Payments: Money we paid (we owe entity)</li>
-                            <li>Debit Balance: Entity owes us money</li>
-                            <li>Credit Balance: We owe entity money</li>
+            <div class="modal-body" style="padding: 24px;">
+                <div class="row g-4">
+                    <div class="col-md-6">
+                        <h6 style="font-weight: 700; color: var(--gray-800);">
+                            <i class="bi bi-tag" style="color: var(--primary);"></i> Entity Types
+                        </h6>
+                        <ul style="padding-left: 20px; color: var(--gray-600);">
+                            <li><strong>Clients:</strong> Company customers</li>
+                            <li><strong>Custodians:</strong> Asset holders</li>
+                            <li><strong>Employees:</strong> Staff members</li>
+                            <li><strong>Agents:</strong> Sales/Service agents</li>
+                            <li><strong>Brokers:</strong> Trading intermediaries</li>
+                            <li><strong>Suppliers:</strong> Goods/Service providers</li>
+                            <li><strong>Chart Accounts:</strong> Nominal accounts</li>
+                            <li><strong>Bank Accounts:</strong> Company bank accounts</li>
                         </ul>
-                    </li>
-                    <li><strong>For Bank Accounts:</strong>
-                        <ul>
-                            <li>Receipts: Money coming into bank (inflows)</li>
-                            <li>Payments: Money going out of bank (outflows)</li>
-                            <li>Debit Balance: Bank deficit (negative balance)</li>
-                            <li>Credit Balance: Bank surplus (positive balance)</li>
-                            <li>Net Balance: Current bank balance</li>
+                    </div>
+                    <div class="col-md-6">
+                        <h6 style="font-weight: 700; color: var(--gray-800);">
+                            <i class="bi bi-graph-up" style="color: var(--success);"></i> Understanding Balances
+                        </h6>
+                        <ul style="padding-left: 20px; color: var(--gray-600);">
+                            <li><span class="text-danger">Debit:</span> Entity owes us</li>
+                            <li><span class="text-success">Credit:</span> We owe entity</li>
+                            <li><span class="text-muted">Settled:</span> Zero balance</li>
                         </ul>
-                    </li>
-                </ul>
-                
-                <h6 class="mt-4">Export Features:</h6>
-                <ul>
-                    <li><strong>Excel Export:</strong> Complete data with transaction history including bank account details</li>
-                    <li><strong>PDF Export:</strong> Formatted report for printing</li>
-                    <li><strong>Filtered Export:</strong> Exports only filtered results</li>
-                </ul>
-                
-                <div class="alert alert-info mt-4">
+                        <br>
+                        <h6 style="font-weight: 700; color: var(--gray-800);">
+                            <i class="bi bi-clock" style="color: var(--warning);"></i> Aging Analysis
+                        </h6>
+                        <ul style="padding-left: 20px; color: var(--gray-600);">
+                            <li><span style="color: var(--success);">Current:</span> 0-30 days</li>
+                            <li><span style="color: var(--warning);">31-60:</span> Overdue</li>
+                            <li><span style="color: #F97316;">61-90:</span> Highly overdue</li>
+                            <li><span style="color: var(--danger);">90+:</span> Critical</li>
+                        </ul>
+                    </div>
+                </div>
+                <hr>
+                <div class="alert alert-info" style="border-radius: var(--radius-sm);">
                     <i class="bi bi-lightbulb me-2"></i>
-                    <strong>Tip:</strong> Click on entity type pills at the top to filter by specific entity types.
-                    Click the "Bank Accounts" pill to see all bank account inflows and outflows.
+                    <strong>Tip:</strong> Click on any entity name to view their complete ledger with transaction history, filtering, and export options.
                 </div>
             </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            <div class="modal-footer" style="border-top: 1px solid var(--gray-200);">
+                <button type="button" class="btn-modern btn-modern-outline" data-bs-dismiss="modal">Close</button>
             </div>
         </div>
     </div>
@@ -2080,10 +1780,9 @@ include '../includes/header.php';
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    // Update records per page
+    // Update per page
     window.updatePerPage = function(value) {
         document.querySelector('input[name="page"]').value = 1;
-        
         let perPageInput = document.querySelector('input[name="per_page"]');
         if (!perPageInput) {
             perPageInput = document.createElement('input');
@@ -2092,7 +1791,6 @@ document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('filterForm').appendChild(perPageInput);
         }
         perPageInput.value = value;
-        
         document.getElementById('filterForm').submit();
     };
     
@@ -2101,322 +1799,119 @@ document.addEventListener('DOMContentLoaded', function() {
         window.location.href = window.location.pathname;
     };
     
-    // View transactions
-    document.querySelectorAll('.view-transactions').forEach(button => {
-        button.addEventListener('click', function() {
-            const entityType = this.getAttribute('data-entity-type');
-            const entityId = this.getAttribute('data-entity-id');
-            const entityName = this.getAttribute('data-entity-name');
+    // Show entity details
+    window.showEntityDetails = function(type, id, name) {
+        const entityData = <?php echo json_encode($all_data); ?>.find(e => 
+            e.entity_info.type === type && e.entity_info.id.toString() === id
+        );
+        
+        if (entityData) {
+            const entityInfo = entityData.entity_info;
+            const totals = entityData.totals;
+            const aging = entityData.aging;
             
-            // Find entity data
-            const entityData = <?php echo json_encode($all_data); ?>.find(e => 
-                e.entity_info.type === entityType && e.entity_info.id.toString() === entityId
-            );
+            document.getElementById('entityDetailsTitle').innerHTML = `
+                <i class="bi bi-${type === 'client' ? 'person-badge' : type === 'bank_account' ? 'bank' : 'building'}" style="color: var(--primary);"></i>
+                ${name}
+            `;
             
-            if (entityData) {
-                const entityInfo = entityData.entity_info;
-                const transactions = entityData.transactions;
-                const totals = entityData.totals;
-                
-                document.getElementById('entityNameHeader').textContent = entityInfo.name;
-                document.getElementById('entityCodeHeader').textContent = entityInfo.type.charAt(0).toUpperCase() + entityInfo.type.slice(1) + ' - ' + entityInfo.code;
-                
-                if (entityInfo.type === 'bank_account') {
-                    document.getElementById('runningBalance').textContent = 
-                        'Current Balance: ' + formatCurrency(totals.net_balance);
-                    document.getElementById('runningBalance').className = 
-                        'fw-bold fs-5 ' + (totals.net_balance >= 0 ? 'text-success' : 'text-danger');
-                } else {
-                    document.getElementById('runningBalance').textContent = 
-                        totals.net_balance > 0 ? 
-                            'Credit: ' + formatCurrency(totals.net_balance) : 
-                        totals.net_balance < 0 ? 
-                            'Debit: ' + formatCurrency(Math.abs(totals.net_balance)) : 
-                            'Settled';
-                    document.getElementById('runningBalance').className = 
-                        'fw-bold fs-5 ' + (totals.net_balance > 0 ? 'text-success' : 
-                                          totals.net_balance < 0 ? 'text-danger' : 'text-muted');
-                }
-                
-                const tbody = document.querySelector('#transactionTable tbody');
-                tbody.innerHTML = '';
-                
-                transactions.forEach(transaction => {
-                    const row = document.createElement('tr');
-                    const isDebit = (entityInfo.type === 'bank_account') ? (transaction.amount > 0) : (transaction.amount < 0);
-                    const debit = isDebit ? Math.abs(transaction.amount) : 0;
-                    const credit = !isDebit ? Math.abs(transaction.amount) : 0;
-                    const balanceClass = transaction.running_balance >= 0 ? 'text-success' : 'text-danger';
-                    
-                    row.innerHTML = `
-                        <td>${formatDate(transaction.date)}</td>
-                        <td><code>${transaction.reference}</code></td>
-                        <td>${transaction.description}</td>
-                        <td><code class="small">${transaction.bank_account || '-'}</code></td>
-                        <td class="text-danger fw-bold">${debit > 0 ? formatCurrency(debit, transaction.currency) : '-'}</td>
-                        <td class="text-success fw-bold">${credit > 0 ? formatCurrency(credit, transaction.currency) : '-'}</td>
-                        <td class="${balanceClass} fw-bold">${formatCurrency(Math.abs(transaction.running_balance), transaction.currency)}</td>
+            let details = '';
+            switch(type) {
+                case 'client':
+                    details = `
+                        <tr><td style="font-weight: 500;">Client Type</td><td>${entityInfo.details.client_type || 'N/A'}</td></tr>
+                        <tr><td style="font-weight: 500;">CDS Account</td><td><code>${entityInfo.details.cds_account || 'N/A'}</code></td></tr>
+                        <tr><td style="font-weight: 500;">Phone</td><td>${entityInfo.details.phone || 'N/A'}</td></tr>
+                        <tr><td style="font-weight: 500;">Email</td><td>${entityInfo.details.email || 'N/A'}</td></tr>
                     `;
-                    tbody.appendChild(row);
-                });
-                
-                const exportBtn = document.getElementById('exportGlExcelBtn');
-                exportBtn.href = '?export=single_excel&entity_type=' + entityType + '&entity_id=' + entityId;
-                
-                const modal = new bootstrap.Modal(document.getElementById('transactionModal'));
-                modal.show();
-            }
-        });
-    });
-    
-    // Click on entity name to view transactions
-    document.querySelectorAll('.view-transactions-link').forEach(link => {
-        link.addEventListener('click', function(e) {
-            e.preventDefault();
-            const entityType = this.getAttribute('data-entity-type');
-            const entityId = this.getAttribute('data-entity-id');
-            const entityName = this.getAttribute('data-entity-name');
-            
-            const entityData = <?php echo json_encode($all_data); ?>.find(e => 
-                e.entity_info.type === entityType && e.entity_info.id.toString() === entityId
-            );
-            
-            if (entityData) {
-                const entityInfo = entityData.entity_info;
-                const transactions = entityData.transactions;
-                const totals = entityData.totals;
-                
-                document.getElementById('entityNameHeader').textContent = entityInfo.name;
-                document.getElementById('entityCodeHeader').textContent = entityInfo.type.charAt(0).toUpperCase() + entityInfo.type.slice(1) + ' - ' + entityInfo.code;
-                
-                if (entityInfo.type === 'bank_account') {
-                    document.getElementById('runningBalance').textContent = 
-                        'Current Balance: ' + formatCurrency(totals.net_balance);
-                    document.getElementById('runningBalance').className = 
-                        'fw-bold fs-5 ' + (totals.net_balance >= 0 ? 'text-success' : 'text-danger');
-                } else {
-                    document.getElementById('runningBalance').textContent = 
-                        totals.net_balance > 0 ? 
-                            'Credit: ' + formatCurrency(totals.net_balance) : 
-                        totals.net_balance < 0 ? 
-                            'Debit: ' + formatCurrency(Math.abs(totals.net_balance)) : 
-                            'Settled';
-                    document.getElementById('runningBalance').className = 
-                        'fw-bold fs-5 ' + (totals.net_balance > 0 ? 'text-success' : 
-                                          totals.net_balance < 0 ? 'text-danger' : 'text-muted');
-                }
-                
-                const tbody = document.querySelector('#transactionTable tbody');
-                tbody.innerHTML = '';
-                
-                transactions.forEach(transaction => {
-                    const row = document.createElement('tr');
-                    const isDebit = (entityInfo.type === 'bank_account') ? (transaction.amount > 0) : (transaction.amount < 0);
-                    const debit = isDebit ? Math.abs(transaction.amount) : 0;
-                    const credit = !isDebit ? Math.abs(transaction.amount) : 0;
-                    const balanceClass = transaction.running_balance >= 0 ? 'text-success' : 'text-danger';
-                    
-                    row.innerHTML = `
-                        <td>${formatDate(transaction.date)}</td>
-                        <td><code>${transaction.reference}</code></td>
-                        <td>${transaction.description}</td>
-                        <td><code class="small">${transaction.bank_account || '-'}</code></td>
-                        <td class="text-danger fw-bold">${debit > 0 ? formatCurrency(debit, transaction.currency) : '-'}</td>
-                        <td class="text-success fw-bold">${credit > 0 ? formatCurrency(credit, transaction.currency) : '-'}</td>
-                        <td class="${balanceClass} fw-bold">${formatCurrency(Math.abs(transaction.running_balance), transaction.currency)}</td>
+                    break;
+                case 'bank_account':
+                    details = `
+                        <tr><td style="font-weight: 500;">Bank Name</td><td>${entityInfo.details.bank_name || 'N/A'}</td></tr>
+                        <tr><td style="font-weight: 500;">Account Number</td><td><code>${entityInfo.details.code || 'N/A'}</code></td></tr>
+                        <tr><td style="font-weight: 500;">Currency</td><td>${entityInfo.details.currency || 'Tsh'}</td></tr>
+                        <tr><td style="font-weight: 500;">Current Balance</td><td>${formatCurrency(entityInfo.details.current_balance || 0, entityInfo.details.currency || 'Tsh')}</td></tr>
                     `;
-                    tbody.appendChild(row);
-                });
-                
-                const exportBtn = document.getElementById('exportGlExcelBtn');
-                exportBtn.href = '?export=single_excel&entity_type=' + entityType + '&entity_id=' + entityId;
-                
-                const modal = new bootstrap.Modal(document.getElementById('transactionModal'));
-                modal.show();
+                    break;
+                case 'employee':
+                    details = `
+                        <tr><td style="font-weight: 500;">Role</td><td>${entityInfo.details.role || 'N/A'}</td></tr>
+                        <tr><td style="font-weight: 500;">Phone</td><td>${entityInfo.details.phone || 'N/A'}</td></tr>
+                        <tr><td style="font-weight: 500;">Email</td><td>${entityInfo.details.email || 'N/A'}</td></tr>
+                    `;
+                    break;
+                default:
+                    details = `
+                        <tr><td style="font-weight: 500;">Contact Person</td><td>${entityInfo.details.contact_person || 'N/A'}</td></tr>
+                        <tr><td style="font-weight: 500;">Phone</td><td>${entityInfo.details.phone || 'N/A'}</td></tr>
+                        <tr><td style="font-weight: 500;">Email</td><td>${entityInfo.details.email || 'N/A'}</td></tr>
+                    `;
             }
-        });
-    });
-    
-    // View entity details
-    document.querySelectorAll('.view-details').forEach(button => {
-        button.addEventListener('click', function() {
-            const entityType = this.getAttribute('data-entity-type');
-            const entityId = this.getAttribute('data-entity-id');
-            const entityName = this.getAttribute('data-entity-name');
             
-            const entityData = <?php echo json_encode($all_data); ?>.find(e => 
-                e.entity_info.type === entityType && e.entity_info.id.toString() === entityId
-            );
-            
-            if (entityData) {
-                const entityInfo = entityData.entity_info;
-                const totals = entityData.totals;
-                const aging = entityData.aging;
-                
-                let details = '';
-                let additionalInfo = '';
-                
-                switch(entityInfo.type) {
-                    case 'client':
-                        details = entityInfo.details.client_type || 'N/A';
-                        additionalInfo = `
-                            <tr><th>CDS Account:</th><td>${entityInfo.details.cds_account || 'N/A'}</td></tr>
-                            <tr><th>Phone:</th><td>${entityInfo.details.phone || 'N/A'}</td></tr>
-                            <tr><th>Email:</th><td>${entityInfo.details.email || 'N/A'}</td></tr>
-                        `;
-                        break;
-                    case 'employee':
-                        details = entityInfo.details.role || 'N/A';
-                        additionalInfo = `
-                            <tr><th>Username:</th><td>${entityInfo.details.code || 'N/A'}</td></tr>
-                            <tr><th>Phone:</th><td>${entityInfo.details.phone || 'N/A'}</td></tr>
-                            <tr><th>Email:</th><td>${entityInfo.details.email || 'N/A'}</td></tr>
-                        `;
-                        break;
-                    case 'agent':
-                    case 'supplier':
-                    case 'custodian':
-                    case 'broker':
-                        details = entityInfo.details.contact_person || 'N/A';
-                        additionalInfo = `
-                            <tr><th>Contact Person:</th><td>${entityInfo.details.contact_person || 'N/A'}</td></tr>
-                            <tr><th>Phone:</th><td>${entityInfo.details.phone || 'N/A'}</td></tr>
-                            <tr><th>Email:</th><td>${entityInfo.details.email || 'N/A'}</td></tr>
-                        `;
-                        break;
-                    case 'chart_account':
-                        details = entityInfo.details.account_type || 'N/A';
-                        additionalInfo = `
-                            <tr><th>Account Type:</th><td>${entityInfo.details.account_type || 'N/A'}</td></tr>
-                            <tr><th>Level:</th><td>${entityInfo.details.level || 'N/A'}</td></tr>
-                        `;
-                        break;
-                    case 'bank_account':
-                        details = entityInfo.details.bank_name || 'N/A';
-                        additionalInfo = `
-                            <tr><th>Bank Name:</th><td>${entityInfo.details.bank_name || 'N/A'}</td></tr>
-                            <tr><th>Account Number:</th><td>${entityInfo.details.code || 'N/A'}</td></tr>
-                            <tr><th>Currency:</th><td>${entityInfo.details.currency || 'N/A'}</td></tr>
-                            <tr><th>Current Balance:</th><td>${formatCurrency(entityInfo.details.current_balance || 0, entityInfo.details.currency || 'Tsh')}</td></tr>
-                        `;
-                        break;
-                    default:
-                        details = 'N/A';
-                }
-                
-                let html = `
-                    <div class="container-fluid">
-                        <div class="row mb-4">
-                            <div class="col-md-6">
-                                <h5>${entityInfo.name}</h5>
-                                <table class="table table-sm table-borderless">
-                                    <tr><th>Entity Type:</th><td><span class="entity-type-badge badge-${entityInfo.type}">${entityInfo.type.charAt(0).toUpperCase() + entityInfo.type.slice(1)}</span></td></tr>
-                                    <tr><th>Code:</th><td><code>${entityInfo.code}</code></td></tr>
-                                    <tr><th>Details:</th><td>${details}</td></tr>
-                                    ${additionalInfo}
-                                </table>
+            document.getElementById('entityDetailsContent').innerHTML = `
+                <div class="row">
+                    <div class="col-md-6">
+                        <table class="table table-sm table-borderless" style="font-size: 14px;">
+                            <tr><td style="font-weight: 500;">Entity Type</td><td><span class="entity-type-badge" style="background: ${getTypeColor(type)}20; color: ${getTypeColor(type)};">${type.charAt(0).toUpperCase() + type.slice(1)}</span></td></tr>
+                            <tr><td style="font-weight: 500;">Code</td><td><code>${entityInfo.code}</code></td></tr>
+                            ${details}
+                        </table>
+                    </div>
+                    <div class="col-md-6">
+                        <div style="background: var(--gray-50); border-radius: var(--radius-sm); padding: 16px; margin-bottom: 12px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span style="font-weight: 500; color: var(--gray-600);">Current Balance</span>
+                                <span style="font-size: 24px; font-weight: 700; ${totals.net_balance > 0 ? 'color: var(--success);' : totals.net_balance < 0 ? 'color: var(--danger);' : 'color: var(--gray-400);'}">
+                                    ${formatCurrency(Math.abs(totals.net_balance))}
+                                </span>
                             </div>
-                            <div class="col-md-6">
-                                <div class="card ${totals.net_balance > 0 ? 'border-success' : totals.net_balance < 0 ? 'border-danger' : 'border-secondary'}">
-                                    <div class="card-body text-center">
-                                        <h6 class="card-title">Current Balance</h6>
-                                        <h2 class="${totals.net_balance > 0 ? 'text-success' : totals.net_balance < 0 ? 'text-danger' : 'text-muted'}">
-                                            ${formatCurrency(Math.abs(totals.net_balance))}
-                                        </h2>
-                                        <span class="badge ${totals.net_balance > 0 ? 'bg-success' : totals.net_balance < 0 ? 'bg-danger' : 'bg-secondary'}">
-                                            ${totals.balance_status}
-                                        </span>
-                                    </div>
-                                </div>
+                            <div style="text-align: right;">
+                                <span class="badge ${totals.net_balance > 0 ? 'bg-success' : totals.net_balance < 0 ? 'bg-danger' : 'bg-secondary'}" style="font-size: 12px;">
+                                    ${totals.balance_status}
+                                </span>
                             </div>
                         </div>
-                        
-                        <div class="row">
-                            <div class="col-md-6">
-                                <div class="card">
-                                    <div class="card-header">
-                                        <h6 class="mb-0">Financial Summary</h6>
-                                    </div>
-                                    <div class="card-body">
-                                        <table class="table table-sm">
-                                            <tr>
-                                                <td>Total Receipts:</td>
-                                                <td class="text-end text-success fw-bold">${formatCurrency(totals.receipts)}</td>
-                                            </tr>
-                                            <tr>
-                                                <td>Total Payments:</td>
-                                                <td class="text-end text-danger fw-bold">${formatCurrency(totals.payments)}</td>
-                                            </tr>
-                                            <tr>
-                                                <td>Debit Balance:</td>
-                                                <td class="text-end text-danger fw-bold">${formatCurrency(totals.debit_balance)}</td>
-                                            </tr>
-                                            <tr>
-                                                <td>Credit Balance:</td>
-                                                <td class="text-end text-success fw-bold">${formatCurrency(totals.credit_balance)}</td>
-                                            </tr>
-                                            <tr class="table-light">
-                                                <td><strong>Net Balance:</strong></td>
-                                                <td class="text-end ${totals.net_balance > 0 ? 'text-success' : totals.net_balance < 0 ? 'text-danger' : 'text-muted'} fw-bold">
-                                                    ${formatCurrency(Math.abs(totals.net_balance))}
-                                                </td>
-                                            </tr>
-                                        </table>
-                                    </div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                            <div style="background: var(--gray-50); border-radius: var(--radius-sm); padding: 12px; text-align: center;">
+                                <div style="font-size: 12px; color: var(--gray-500);">Receipts</div>
+                                <div style="font-weight: 700; color: var(--success);">${formatCurrency(totals.receipts)}</div>
+                            </div>
+                            <div style="background: var(--gray-50); border-radius: var(--radius-sm); padding: 12px; text-align: center;">
+                                <div style="font-size: 12px; color: var(--gray-500);">Payments</div>
+                                <div style="font-weight: 700; color: var(--danger);">${formatCurrency(totals.payments)}</div>
+                            </div>
+                        </div>
+                        ${type !== 'bank_account' ? `
+                            <div style="margin-top: 12px; background: var(--gray-50); border-radius: var(--radius-sm); padding: 12px;">
+                                <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 6px;">Aging Breakdown</div>
+                                <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                                    <span class="aging-badge current">Current: ${formatCurrency(aging.buckets.Current)}</span>
+                                    <span class="aging-badge overdue-31">31-60: ${formatCurrency(aging.buckets['31-60 Days'])}</span>
+                                    <span class="aging-badge overdue-61">61-90: ${formatCurrency(aging.buckets['61-90 Days'])}</span>
+                                    <span class="aging-badge overdue-90">90+: ${formatCurrency(aging.buckets['90+ Days'])}</span>
+                                </div>
+                                <div style="margin-top: 6px; font-size: 13px;">
+                                    <span style="font-weight: 500;">Overdue:</span>
+                                    <span style="${aging.overdue_ratio > 30 ? 'color: var(--danger);' : aging.overdue_ratio > 10 ? 'color: var(--warning);' : 'color: var(--success);'}">
+                                        ${aging.overdue_ratio.toFixed(1)}%
+                                    </span>
+                                    of total debit
                                 </div>
                             </div>
-                `;
-                
-                if (entityInfo.type !== 'bank_account') {
-                    html += `
-                            <div class="col-md-6">
-                                <div class="card">
-                                    <div class="card-header">
-                                        <h6 class="mb-0">Aging Analysis</h6>
-                                    </div>
-                                    <div class="card-body">
-                                        <table class="table table-sm">
-                                            <tr>
-                                                <td>Current (0-30 days):</td>
-                                                <td class="text-end">${formatCurrency(aging.buckets.Current)}</td>
-                                                <td class="text-end">${totals.debit_balance > 0 ? (aging.buckets.Current / totals.debit_balance * 100).toFixed(1) : '0.0'}%</td>
-                                            </tr>
-                                            <tr>
-                                                <td>31-60 Days Overdue:</td>
-                                                <td class="text-end">${formatCurrency(aging.buckets['31-60 Days'])}</td>
-                                                <td class="text-end">${totals.debit_balance > 0 ? (aging.buckets['31-60 Days'] / totals.debit_balance * 100).toFixed(1) : '0.0'}%</td>
-                                            </tr>
-                                            <tr>
-                                                <td>61-90 Days Overdue:</td>
-                                                <td class="text-end">${formatCurrency(aging.buckets['61-90 Days'])}</td>
-                                                <td class="text-end">${totals.debit_balance > 0 ? (aging.buckets['61-90 Days'] / totals.debit_balance * 100).toFixed(1) : '0.0'}%</td>
-                                            </tr>
-                                            <tr>
-                                                <td>90+ Days Overdue:</td>
-                                                <td class="text-end">${formatCurrency(aging.buckets['90+ Days'])}</td>
-                                                <td class="text-end">${totals.debit_balance > 0 ? (aging.buckets['90+ Days'] / totals.debit_balance * 100).toFixed(1) : '0.0'}%</td>
-                                            </tr>
-                                            <tr class="table-warning">
-                                                <td><strong>Total Overdue:</strong></td>
-                                                <td class="text-end fw-bold">${formatCurrency(aging.total_overdue)}</td>
-                                                <td class="text-end fw-bold">${aging.overdue_ratio.toFixed(1)}%</td>
-                                            </tr>
-                                        </table>
-                                    </div>
-                                </div>
-                            </div>
-                    `;
-                }
-                
-                html += `</div></div>`;
-                
-                document.getElementById('entityDetailsContent').innerHTML = html;
-                
-                const modal = new bootstrap.Modal(document.getElementById('entityDetailsModal'));
-                modal.show();
-            }
-        });
-    });
+                        ` : ''}
+                    </div>
+                </div>
+                <div style="margin-top: 12px; text-align: right;">
+                    <a href="entity_ledger.php?type=${type}&id=${id}" class="btn-modern btn-modern-primary" style="font-size: 13px;">
+                        <i class="bi bi-eye"></i> View Full Ledger
+                    </a>
+                </div>
+            `;
+            
+            const modal = new bootstrap.Modal(document.getElementById('entityDetailsModal'));
+            modal.show();
+        }
+    };
     
     // Helper functions
     function formatCurrency(amount, currency = 'Tsh') {
@@ -2433,14 +1928,29 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    function formatDate(dateString) {
-        const date = new Date(dateString);
-        return date.toLocaleDateString('en-US', {
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric'
-        });
+    function getTypeColor(type) {
+        const colors = {
+            'client': '#4F46E5',
+            'custodian': '#0891B2',
+            'employee': '#059669',
+            'agent': '#D97706',
+            'broker': '#DC2626',
+            'supplier': '#7C3AED',
+            'chart_account': '#6D28D9',
+            'bank_account': '#0D9488'
+        };
+        return colors[type] || '#6B7280';
     }
+});
+
+// Auto-submit on Enter key in date fields
+document.querySelectorAll('input[type="date"]').forEach(input => {
+    input.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            document.getElementById('filterForm').submit();
+        }
+    });
 });
 </script>
 

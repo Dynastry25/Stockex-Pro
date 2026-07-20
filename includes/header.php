@@ -286,6 +286,12 @@
                             <span>Dealing Sheet</span>
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/order_sheet">
+                            <i class="bi bi-journal-text"></i>
+                            <span>Order Intake</span>
+                        </a>
+                    </li>
                     <?php endif; ?>
 
                     <?php if ($current_user['role'] == 'human_resource' || $current_user['role'] == 'hr' || $current_user['role'] == 'hr_manager' || $current_user['role'] == 'system_admin'): ?>

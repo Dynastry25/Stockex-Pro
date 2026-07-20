@@ -117,25 +117,25 @@ function getCashAccountBalances($db, $start_date, $end_date) {
             coa.account_name,
             coa.account_type,
             (
-                SELECT COALESCE(SUM(gl.debit - gl.credit), 0)
+                SELECT COALESCE(SUM(gl.debit_amount - gl.credit_amount), 0)
                 FROM general_ledger gl
                 WHERE gl.account_code = coa.account_code
                 AND gl.transaction_date < ?
-                AND 1=1
+                AND gl.status = 'active'
             ) as opening_balance,
             (
-                SELECT COALESCE(SUM(gl.debit - gl.credit), 0)
+                SELECT COALESCE(SUM(gl.debit_amount - gl.credit_amount), 0)
                 FROM general_ledger gl
                 WHERE gl.account_code = coa.account_code
                 AND gl.transaction_date BETWEEN ? AND ?
-                AND 1=1
+                AND gl.status = 'active'
             ) as period_change,
             (
-                SELECT COALESCE(SUM(gl.debit - gl.credit), 0)
+                SELECT COALESCE(SUM(gl.debit_amount - gl.credit_amount), 0)
                 FROM general_ledger gl
                 WHERE gl.account_code = coa.account_code
                 AND gl.transaction_date <= ?
-                AND 1=1
+                AND gl.status = 'active'
             ) as closing_balance
         FROM chart_of_accounts coa
         WHERE coa.account_type = 'asset'
@@ -151,11 +151,11 @@ function getCashAccountBalances($db, $start_date, $end_date) {
 function calculateNetIncome($db, $start_date, $end_date) {
     // Get income accounts total (4xxx)
     $income_stmt = $db->prepare("
-        SELECT COALESCE(SUM(gl.credit - gl.debit), 0) as net_income
+        SELECT COALESCE(SUM(gl.credit_amount - gl.debit_amount), 0) as net_income
         FROM general_ledger gl
         JOIN chart_of_accounts coa ON gl.account_code = coa.account_code
         WHERE gl.transaction_date BETWEEN ? AND ?
-        AND 1=1
+        AND gl.status = 'active'
         AND coa.account_type = 'income'
         AND coa.is_active = 1
     ");
@@ -164,11 +164,11 @@ function calculateNetIncome($db, $start_date, $end_date) {
     
     // Get expense accounts total (5xxx)
     $expense_stmt = $db->prepare("
-        SELECT COALESCE(SUM(gl.debit - gl.credit), 0) as total_expenses
+        SELECT COALESCE(SUM(gl.debit_amount - gl.credit_amount), 0) as total_expenses
         FROM general_ledger gl
         JOIN chart_of_accounts coa ON gl.account_code = coa.account_code
         WHERE gl.transaction_date BETWEEN ? AND ?
-        AND 1=1
+        AND gl.status = 'active'
         AND coa.account_type = 'expense'
         AND coa.is_active = 1
     ");
@@ -185,11 +185,11 @@ function getNonCashAdjustments($db, $start_date, $end_date) {
     $stmt = $db->prepare("
         SELECT 
             'Depreciation & Amortization' as description,
-            COALESCE(SUM(gl.debit), 0) as amount
+            COALESCE(SUM(gl.debit_amount), 0) as amount
         FROM general_ledger gl
         JOIN chart_of_accounts coa ON gl.account_code = coa.account_code
         WHERE gl.transaction_date BETWEEN ? AND ?
-        AND 1=1
+        AND gl.status = 'active'
         AND coa.account_code LIKE '53%'
         AND coa.is_active = 1
     ");
@@ -227,20 +227,20 @@ function getWorkingCapitalChanges($db, $start_date, $end_date) {
             SELECT 
                 ? as description,
                 (
-                    SELECT COALESCE(SUM(gl.debit - gl.credit), 0)
+                    SELECT COALESCE(SUM(gl.debit_amount - gl.credit_amount), 0)
                     FROM general_ledger gl
                     JOIN chart_of_accounts coa ON gl.account_code = coa.account_code
                     WHERE gl.transaction_date <= ?
-                    AND 1=1
+                    AND gl.status = 'active'
                     AND coa.account_code LIKE ?
                     AND coa.is_active = 1
                 ) as end_balance,
                 (
-                    SELECT COALESCE(SUM(gl.debit - gl.credit), 0)
+                    SELECT COALESCE(SUM(gl.debit_amount - gl.credit_amount), 0)
                     FROM general_ledger gl
                     JOIN chart_of_accounts coa ON gl.account_code = coa.account_code
                     WHERE gl.transaction_date <= ?
-                    AND 1=1
+                    AND gl.status = 'active'
                     AND coa.account_code LIKE ?
                     AND coa.is_active = 1
                 ) as start_balance
@@ -275,11 +275,11 @@ function getInvestingActivities($db, $start_date, $end_date) {
     $stmt = $db->prepare("
         SELECT 
             'Purchase of Property & Equipment' as description,
-            COALESCE(SUM(gl.debit), 0) as amount
+            COALESCE(SUM(gl.debit_amount), 0) as amount
         FROM general_ledger gl
         JOIN chart_of_accounts coa ON gl.account_code = coa.account_code
         WHERE gl.transaction_date BETWEEN ? AND ?
-        AND 1=1
+        AND gl.status = 'active'
         AND coa.account_code LIKE '16%'
         AND coa.account_code NOT LIKE '165%'
         AND coa.is_active = 1
@@ -299,11 +299,11 @@ function getInvestingActivities($db, $start_date, $end_date) {
     $sale_stmt = $db->prepare("
         SELECT 
             'Proceeds from Sale of Assets' as description,
-            COALESCE(SUM(gl.credit), 0) as amount
+            COALESCE(SUM(gl.credit_amount), 0) as amount
         FROM general_ledger gl
         JOIN chart_of_accounts coa ON gl.account_code = coa.account_code
         WHERE gl.transaction_date BETWEEN ? AND ?
-        AND 1=1
+        AND gl.status = 'active'
         AND coa.account_code LIKE '16%'
         AND (gl.description LIKE '%sale%' OR gl.description LIKE '%disposal%')
         AND coa.is_active = 1
@@ -323,11 +323,11 @@ function getInvestingActivities($db, $start_date, $end_date) {
     $investment_stmt = $db->prepare("
         SELECT 
             'Purchase of Investments' as description,
-            COALESCE(SUM(gl.debit), 0) as amount
+            COALESCE(SUM(gl.debit_amount), 0) as amount
         FROM general_ledger gl
         JOIN chart_of_accounts coa ON gl.account_code = coa.account_code
         WHERE gl.transaction_date BETWEEN ? AND ?
-        AND 1=1
+        AND gl.status = 'active'
         AND coa.account_code LIKE '17%'
         AND coa.is_active = 1
     ");
@@ -352,11 +352,11 @@ function getFinancingActivities($db, $start_date, $end_date) {
     $loan_stmt = $db->prepare("
         SELECT 
             'Proceeds from Loans' as description,
-            COALESCE(SUM(gl.credit), 0) as amount
+            COALESCE(SUM(gl.credit_amount), 0) as amount
         FROM general_ledger gl
         JOIN chart_of_accounts coa ON gl.account_code = coa.account_code
         WHERE gl.transaction_date BETWEEN ? AND ?
-        AND 1=1
+        AND gl.status = 'active'
         AND coa.account_code LIKE '31%'
         AND coa.is_active = 1
     ");
@@ -375,11 +375,11 @@ function getFinancingActivities($db, $start_date, $end_date) {
     $repayment_stmt = $db->prepare("
         SELECT 
             'Repayment of Loans' as description,
-            COALESCE(SUM(gl.debit), 0) as amount
+            COALESCE(SUM(gl.debit_amount), 0) as amount
         FROM general_ledger gl
         JOIN chart_of_accounts coa ON gl.account_code = coa.account_code
         WHERE gl.transaction_date BETWEEN ? AND ?
-        AND 1=1
+        AND gl.status = 'active'
         AND coa.account_code LIKE '31%'
         AND coa.is_active = 1
     ");
@@ -398,11 +398,11 @@ function getFinancingActivities($db, $start_date, $end_date) {
     $dividend_stmt = $db->prepare("
         SELECT 
             'Dividends Paid' as description,
-            COALESCE(SUM(gl.debit), 0) as amount
+            COALESCE(SUM(gl.debit_amount), 0) as amount
         FROM general_ledger gl
         JOIN chart_of_accounts coa ON gl.account_code = coa.account_code
         WHERE gl.transaction_date BETWEEN ? AND ?
-        AND 1=1
+        AND gl.status = 'active'
         AND coa.account_code LIKE '33%'
         AND coa.is_active = 1
     ");
@@ -421,11 +421,11 @@ function getFinancingActivities($db, $start_date, $end_date) {
     $equity_stmt = $db->prepare("
         SELECT 
             'Equity Contributions' as description,
-            COALESCE(SUM(gl.credit), 0) as amount
+            COALESCE(SUM(gl.credit_amount), 0) as amount
         FROM general_ledger gl
         JOIN chart_of_accounts coa ON gl.account_code = coa.account_code
         WHERE gl.transaction_date BETWEEN ? AND ?
-        AND 1=1
+        AND gl.status = 'active'
         AND coa.account_code LIKE '32%'
         AND coa.is_active = 1
     ");

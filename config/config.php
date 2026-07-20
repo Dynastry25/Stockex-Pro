@@ -22,7 +22,6 @@ define('UPLOAD_PATH', 'uploads/');
 define('MAX_FILE_SIZE', 50 * 1024 * 1024); // 50MB in bytes
 
 // --- Available Departments ---
-
 // Define all available departments in the system
 define('AVAILABLE_DEPARTMENTS', [
     'HR Department',

@@ -470,21 +470,21 @@ function getIncomeStatementCategories($db, $start_date, $end_date) {
     $stmt = $db->prepare("
         SELECT 
             gl.account_code,
-            coa.account_name,
+            gl.account_name,
             coa.account_type,
             SUM(
                 CASE 
-                    WHEN coa.account_type = 'income' THEN gl.credit - gl.debit
-                    WHEN coa.account_type = 'expense' THEN gl.debit - gl.credit
+                    WHEN coa.account_type = 'income' THEN gl.credit_amount - gl.debit_amount
+                    WHEN coa.account_type = 'expense' THEN gl.debit_amount - gl.credit_amount
                     ELSE 0
                 END
             ) as net_amount
         FROM general_ledger gl
         JOIN chart_of_accounts coa ON gl.account_code = coa.account_code
         WHERE gl.transaction_date BETWEEN ? AND ?
-        AND coa.is_active = 1
+        AND gl.status = 'active'
         AND coa.account_type IN ('income', 'expense')
-        GROUP BY gl.account_code, coa.account_name, coa.account_type
+        GROUP BY gl.account_code, gl.account_name, coa.account_type
         HAVING net_amount != 0
         ORDER BY gl.account_code
     ");

@@ -15,40 +15,95 @@ header("Referrer-Policy: strict-origin-when-cross-origin");
 
 require_finance_officer();
 
-// Define log file in same directory
-$log_file = __DIR__ . '/csv_upload_debug.log';
+// ============ LOGGING SETUP ============
+// Use system temp directory for log file to avoid permission issues
+$log_dir = sys_get_temp_dir() . '/stockex_logs/';
 
-// Function to write to log file
+// Create log directory if it doesn't exist
+if (!is_dir($log_dir)) {
+    mkdir($log_dir, 0777, true);
+}
+
+// Define log file in temp directory
+$log_file = $log_dir . 'csv_upload_debug.log';
+
+// Alternative: If temp directory doesn't work, try using the uploads directory
+if (!is_writable(dirname($log_file))) {
+    // Try using the uploads directory if it exists
+    $uploads_dir = __DIR__ . '/../uploads/logs/';
+    if (!is_dir($uploads_dir)) {
+        mkdir($uploads_dir, 0777, true);
+    }
+    $log_file = $uploads_dir . 'csv_upload_debug.log';
+}
+
+// If still not writable, disable logging to file and use error_log only
+$use_file_logging = is_writable(dirname($log_file));
+
+// Function to write to log
 function writeLog($message, $level = 'INFO') {
-    global $log_file;
+    global $log_file, $use_file_logging;
     $timestamp = date('Y-m-d H:i:s');
-    $formatted_message = "[$timestamp] [$level] $message\n";
+    $formatted_message = "[$timestamp] [$level] $message";
     
-    // Write to file
-    file_put_contents($log_file, $formatted_message, FILE_APPEND | LOCK_EX);
-    
-    // Also write to PHP error log for backup
+    // Always write to PHP error log as backup
     error_log("CSV_UPLOAD [$level]: $message");
+    
+    // Write to file if possible
+    if ($use_file_logging) {
+        @file_put_contents($log_file, $formatted_message . "\n", FILE_APPEND | LOCK_EX);
+    }
 }
 
 // Function to read log file
 function readLog() {
-    global $log_file;
-    if (file_exists($log_file)) {
+    global $log_file, $use_file_logging;
+    if ($use_file_logging && file_exists($log_file)) {
         return file_get_contents($log_file);
     }
-    return "No log entries yet.";
+    return "Log file not available. Check PHP error log for details.";
 }
 
 // Function to clear log file
 function clearLog() {
-    global $log_file;
-    if (file_exists($log_file)) {
-        file_put_contents($log_file, '');
-        return true;
+    global $log_file, $use_file_logging;
+    if ($use_file_logging && file_exists($log_file)) {
+        return file_put_contents($log_file, '');
     }
     return false;
 }
+
+writeLog("=== CSV Upload Script Started ===");
+
+// CSRF Protection
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+    writeLog("Session started - ID: " . session_id());
+}
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    writeLog("CSRF token generated");
+}
+
+$db = getDBConnection();
+if ($db) {
+    writeLog("Database connection established successfully");
+} else {
+    writeLog("FAILED: Database connection could not be established", "ERROR");
+    die("Database connection failed");
+}
+
+$success_message = '';
+$error_message = '';
+$validation_errors = [];
+$processed_data = [];
+$duplicate_controls = [];
+$all_entries = [];
+$total_amount = 0;
+$valid_count = 0;
+$error_count = 0;
+$show_upload_button = false;
 
 // ============ Function to parse date from CSV ============
 function parseDateFromCSV($date_str) {
@@ -73,6 +128,8 @@ function parseDateFromCSV($date_str) {
         'Y-m-d',    // 2025-10-01
         'M d, Y',   // Oct 1, 2025
         'F d, Y',   // October 1, 2025
+        'd M Y',    // 1 Oct 2025
+        'j M Y',    // 1 Oct 2025 (no leading zero)
     ];
     
     foreach ($formats as $format) {
@@ -123,28 +180,62 @@ function cleanCSVCell($value) {
     return $value;
 }
 
-// ============ Function to auto-create client ============
-function autoCreateClient($db, $name, $cds, $phone, $user_name) {
-    writeLog("Attempting to auto-create client: Name='$name', CDS='$cds', Phone='$phone'", "CLIENT_CREATE");
+// ============ Function to get or create client ============
+function getOrCreateClient($db, $name, $cds, $phone, $user_name) {
+    writeLog("Getting or creating client: Name='$name', CDS='$cds', Phone='$phone'", "CLIENT");
     
     try {
-        // Insert new client
+        // First, try to find existing client by CDS account
+        if (!empty($cds)) {
+            $stmt = $db->prepare("SELECT id, client_name, cds_account FROM clients WHERE cds_account = ? AND is_active = 1 LIMIT 1");
+            $stmt->execute([$cds]);
+            $client = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($client) {
+                writeLog("✅ Found existing client ID: {$client['id']}, Name: {$client['client_name']}, CDS: {$client['cds_account']}", "CLIENT");
+                return $client['id'];
+            }
+        }
+        
+        // Try to find by name if CDS not found
+        if (!empty($name)) {
+            $stmt = $db->prepare("SELECT id, client_name, cds_account FROM clients WHERE client_name LIKE ? AND is_active = 1 LIMIT 1");
+            $stmt->execute(["%$name%"]);
+            $client = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($client) {
+                writeLog("✅ Found existing client by name: ID: {$client['id']}, Name: {$client['client_name']}", "CLIENT");
+                // Update CDS if different
+                if (!empty($cds) && $client['cds_account'] !== $cds) {
+                    $update_stmt = $db->prepare("UPDATE clients SET cds_account = ? WHERE id = ?");
+                    $update_stmt->execute([$cds, $client['id']]);
+                    writeLog("Updated CDS for client {$client['id']} to '$cds'", "CLIENT");
+                }
+                return $client['id'];
+            }
+        }
+        
+        // Create new client
+        writeLog("Creating new client: $name, CDS: $cds", "CLIENT_CREATE");
+        
         $stmt = $db->prepare("
             INSERT INTO clients (
-                cds_account, client_name, phone,
-                client_type, is_active, created_by, created_at, status
+                cds_account, 
+                client_name, 
+                phone,
+                client_type, 
+                is_active, 
+                created_by, 
+                created_at, 
+                status
             ) VALUES (?, ?, ?, 'individual', 1, ?, NOW(), 'active')
         ");
         
-        $params = [$cds, $name, $phone, $user_name];
-        
-        writeLog("Creating new client with params: " . json_encode($params), "CLIENT_CREATE");
-        
-        $result = $stmt->execute($params);
+        $result = $stmt->execute([$cds, $name, $phone, $user_name]);
         
         if ($result) {
             $client_id = $db->lastInsertId();
-            writeLog("✅ Successfully created new client ID: $client_id, Name: $name, CDS: $cds", "CLIENT_CREATE");
+            writeLog("✅ Created new client ID: $client_id, Name: $name, CDS: $cds", "CLIENT_CREATE");
             return $client_id;
         } else {
             $error_info = $stmt->errorInfo();
@@ -153,8 +244,52 @@ function autoCreateClient($db, $name, $cds, $phone, $user_name) {
         }
         
     } catch (Exception $e) {
-        writeLog("❌ Exception creating client: " . $e->getMessage(), "CLIENT_CREATE_ERROR");
+        writeLog("❌ Exception in getOrCreateClient: " . $e->getMessage(), "CLIENT_ERROR");
         return false;
+    }
+}
+
+// ============ Function to get bank account ============
+function getBankAccount($db, $bank_name) {
+    writeLog("Looking for bank account: '$bank_name'", "BANK");
+    
+    try {
+        if (empty($bank_name)) {
+            writeLog("Bank name is empty", "BANK_WARNING");
+            return null;
+        }
+        
+        $clean_bank = trim($bank_name);
+        
+        // Try exact match first
+        $stmt = $db->prepare("SELECT id, bank_name, account_number, code, currency FROM banks_accounts WHERE bank_name = ? AND status = 'active' LIMIT 1");
+        $stmt->execute([$clean_bank]);
+        $bank = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($bank) {
+            writeLog("✅ Found bank: ID: {$bank['id']}, Name: {$bank['bank_name']}", "BANK");
+            return $bank;
+        }
+        
+        // Try fuzzy match
+        $stmt = $db->prepare("SELECT id, bank_name, account_number, code, currency FROM banks_accounts WHERE status = 'active'");
+        $stmt->execute();
+        $banks = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        foreach ($banks as $bank) {
+            if (stripos($bank['bank_name'], $clean_bank) !== false || 
+                stripos($clean_bank, $bank['bank_name']) !== false) {
+                writeLog("✅ Found bank via fuzzy match: ID: {$bank['id']}, Name: {$bank['bank_name']}", "BANK");
+                return $bank;
+            }
+        }
+        
+        writeLog("❌ No bank found for: '$bank_name'", "BANK_ERROR");
+        return null;
+        
+    } catch (Exception $e) {
+        writeLog("❌ Exception in getBankAccount: " . $e->getMessage(), "BANK_ERROR");
+        return null;
     }
 }
 
@@ -192,8 +327,8 @@ function generateReceiptNo($db, $date) {
     $month = date('m', strtotime($date));
     $day = date('d', strtotime($date));
     
-    // Format: RCPYYYYMMDDXXXX
-    $base_no = 'RCP' . $year . $month . $day;
+    // Format: MTPYYYYMMDDXXXX (for MTP payments)
+    $base_no = 'MTP' . $year . $month . $day;
     
     // Get last receipt number for this date
     $stmt = $db->prepare("
@@ -218,7 +353,7 @@ function generateReceiptNo($db, $date) {
 
 // ============ Function to create receipt ============
 function createReceipt($db, $data, $user_name, $user_id) {
-    writeLog("Creating receipt for: " . $data['name'], "RECEIPT_CREATE");
+    writeLog("Creating MTP receipt for client: " . $data['name'], "RECEIPT_CREATE");
     
     try {
         // Generate receipt number if not provided
@@ -226,28 +361,61 @@ function createReceipt($db, $data, $user_name, $user_id) {
             $data['receipt_no'] = generateReceiptNo($db, $data['receipt_date']);
         }
         
+        // Get client info
+        $client_stmt = $db->prepare("SELECT cds_account, client_name FROM clients WHERE id = ?");
+        $client_stmt->execute([$data['client_id']]);
+        $client = $client_stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if (!$client) {
+            throw new Exception("Client not found: " . $data['client_id']);
+        }
+        
+        // Get bank info
+        $bank_stmt = $db->prepare("SELECT bank_name, account_number FROM banks_accounts WHERE id = ?");
+        $bank_stmt->execute([$data['bank_id']]);
+        $bank = $bank_stmt->fetch(PDO::FETCH_ASSOC);
+        
         // Insert receipt
         $stmt = $db->prepare("
             INSERT INTO receipts (
-                receipt_date, payment_mode, account_of, name, name_id,
-                ac_debit, receipt_no, currency, account_no, amount,
-                narration, record_in_financial, source_type, cds_account,
-                status, created_by_username, created_at, bank_name
-            ) VALUES (?, 1, 'C', ?, ?, ?, ?, 'Tsh', ?, ?, 'PAYMENT FROM MTP', 
-                     'yes', 'CDS Account', ?, 'active', ?, NOW(), ?)
+                receipt_date, 
+                payment_mode, 
+                account_of, 
+                name, 
+                name_id,
+                ac_debit, 
+                receipt_no, 
+                currency, 
+                account_no, 
+                amount,
+                narration, 
+                record_in_financial, 
+                source_type, 
+                cds_account,
+                status, 
+                created_by_username, 
+                created_at,
+                bank_name,
+                bank_account_id,
+                source,
+                payment_mode_label
+            ) VALUES (?, 1, 'C', ?, ?, ?, ?, 'Tsh', ?, ?, 
+                     'MTP Payment - Shares Purchase', 'yes', 'CDS Account', ?,
+                     'active', ?, NOW(), ?, ?, 'MTP', 'Mobile Payment')
         ");
         
         $params = [
             $data['receipt_date'],
-            $data['name'],
+            $client['client_name'],
             $data['client_id'],
-            $data['bank_id'],
+            $data['client_id'],
             $data['receipt_no'],
-            $data['cds'],
+            $data['bank_account_no'] ?? $bank['account_number'] ?? 'MTP-PAYMENT',
             $data['amount'],
-            $data['cds'],
+            $client['cds_account'],
             $user_name,
-            $data['bank_name']
+            $bank['bank_name'] ?? $data['bank_name'],
+            $data['bank_id']
         ];
         
         writeLog("Inserting receipt with params: " . json_encode($params), "RECEIPT_CREATE");
@@ -260,6 +428,11 @@ function createReceipt($db, $data, $user_name, $user_id) {
             
             // Create journal entries for the receipt
             createJournalEntries($db, $receipt_id, $data, $user_name, $user_id);
+            
+            // Update bank balance
+            if (!empty($data['bank_id'])) {
+                updateBankBalance($db, $data['bank_id'], $data['amount']);
+            }
             
             return $receipt_id;
         } else {
@@ -280,61 +453,97 @@ function createJournalEntries($db, $receipt_id, $data, $user_name, $user_id) {
     
     try {
         // Get bank account details
-        $stmt = $db->prepare("SELECT code, bank_name, account_number FROM banks_accounts WHERE id = ?");
+        $stmt = $db->prepare("SELECT id, code, bank_name, account_number FROM banks_accounts WHERE id = ?");
         $stmt->execute([$data['bank_id']]);
-        $bank = $stmt->fetch();
+        $bank = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if (!$bank) {
-            throw new Exception("Bank account not found");
+            throw new Exception("Bank account not found: " . $data['bank_id']);
         }
         
         // Get fiscal year and period
         $fiscal_year = date('Y', strtotime($data['receipt_date']));
         $fiscal_period = date('m', strtotime($data['receipt_date']));
         
-        // Get the 1112 Cash at Bank account from chart_of_accounts
+        // Get the Cash at Bank account (1112)
         $stmt = $db->prepare("SELECT account_code, account_name FROM chart_of_accounts WHERE account_code = '1112' AND is_active = 1 LIMIT 1");
         $stmt->execute();
-        $cash_at_bank_account = $stmt->fetch();
+        $cash_at_bank = $stmt->fetch(PDO::FETCH_ASSOC);
         
-        if (!$cash_at_bank_account) {
+        if (!$cash_at_bank) {
             // Fallback if 1112 doesn't exist
-            $cash_at_bank_account = [
+            $cash_at_bank = [
                 'account_code' => '1112',
                 'account_name' => 'Cash at Bank'
             ];
             writeLog("Using default 1112 Cash at Bank account", "JOURNAL_CREATE");
         }
         
-        // Determine control account based on receipt type (Clients - account_of 'C')
-        $control_account_code = '73101'; // CLIENTS CONTROL A/C
+        // Get Client Control Account (73101)
+        $stmt = $db->prepare("SELECT account_code, account_name FROM chart_of_accounts WHERE account_code = '73101' AND is_active = 1 LIMIT 1");
+        $stmt->execute();
+        $client_control = $stmt->fetch(PDO::FETCH_ASSOC);
         
-        // 1. Debit 1112 Cash at Bank Account
+        if (!$client_control) {
+            // Fallback if 73101 doesn't exist
+            $client_control = [
+                'account_code' => '73101',
+                'account_name' => 'Clients Control A/C'
+            ];
+            writeLog("Using default 73101 Clients Control A/C account", "JOURNAL_CREATE");
+        }
+        
+        // Get client details
+        $stmt = $db->prepare("SELECT client_name, cds_account FROM clients WHERE id = ?");
+        $stmt->execute([$data['client_id']]);
+        $client = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        // 1. DEBIT: Cash at Bank (1112)
         $debit_journal_no = generateJournalNo($db);
         writeLog("Creating debit journal entry (1112 Cash at Bank): $debit_journal_no", "JOURNAL_CREATE");
         
         $debit_stmt = $db->prepare("
             INSERT INTO journal_entries (
-                journal_no, transaction_date, reference_no, reference_type, 
-                description, account_code, account_name, debit_amount, 
-                credit_amount, currency, entity_id, entity_name, entity_type,
-                bank_account_id, bank_name, bank_account_number,
-                fiscal_year, fiscal_period, posted_by, posted_at,
-                status, created_by, created_by_username
-            ) VALUES (?, ?, ?, 'receipt', 'Payment received from client', 
+                journal_no, 
+                transaction_date, 
+                reference_no, 
+                reference_type, 
+                description, 
+                account_code, 
+                account_name, 
+                debit_amount, 
+                credit_amount, 
+                currency, 
+                entity_id, 
+                entity_name, 
+                entity_type,
+                bank_account_id, 
+                bank_name, 
+                bank_account_number,
+                fiscal_year, 
+                fiscal_period, 
+                posted_by, 
+                posted_at,
+                status, 
+                created_by, 
+                created_by_username,
+                source,
+                source_id
+            ) VALUES (?, ?, ?, 'receipt', 'MTP Payment - Shares Purchase', 
                      ?, ?, ?, 0, 'Tsh', ?, ?, 'client',
-                     ?, ?, ?, ?, ?, ?, NOW(), 'posted', ?, ?)
+                     ?, ?, ?, ?, ?, ?, NOW(), 'posted', ?, ?,
+                     'MTP', ?)
         ");
         
         $debit_result = $debit_stmt->execute([
             $debit_journal_no,
             $data['receipt_date'],
             $data['receipt_no'],
-            $cash_at_bank_account['account_code'],
-            $cash_at_bank_account['account_name'],
+            $cash_at_bank['account_code'],
+            $cash_at_bank['account_name'],
             $data['amount'],
             $data['client_id'],
-            $data['name'],
+            $client['client_name'] ?? $data['name'],
             $data['bank_id'],
             $bank['bank_name'],
             $bank['account_number'],
@@ -342,7 +551,8 @@ function createJournalEntries($db, $receipt_id, $data, $user_name, $user_id) {
             $fiscal_period,
             $user_id,
             $user_id,
-            $user_name
+            $user_name,
+            $receipt_id
         ]);
         
         if (!$debit_result) {
@@ -351,32 +561,52 @@ function createJournalEntries($db, $receipt_id, $data, $user_name, $user_id) {
             return false;
         }
         
-        // 2. Credit Clients Control Account (73101)
+        // 2. CREDIT: Clients Control Account (73101)
         $credit_journal_no = generateJournalNo($db);
-        writeLog("Creating credit journal entry (Clients Control A/C): $credit_journal_no", "JOURNAL_CREATE");
+        writeLog("Creating credit journal entry (73101 Clients Control A/C): $credit_journal_no", "JOURNAL_CREATE");
         
         $credit_stmt = $db->prepare("
             INSERT INTO journal_entries (
-                journal_no, transaction_date, reference_no, reference_type, 
-                description, account_code, account_name, debit_amount, 
-                credit_amount, currency, entity_id, entity_name, entity_type,
-                bank_account_id, bank_name, bank_account_number,
-                fiscal_year, fiscal_period, posted_by, posted_at,
-                status, created_by, created_by_username
-            ) VALUES (?, ?, ?, 'receipt', 'Payment received from client', 
+                journal_no, 
+                transaction_date, 
+                reference_no, 
+                reference_type, 
+                description, 
+                account_code, 
+                account_name, 
+                debit_amount, 
+                credit_amount, 
+                currency, 
+                entity_id, 
+                entity_name, 
+                entity_type,
+                bank_account_id, 
+                bank_name, 
+                bank_account_number,
+                fiscal_year, 
+                fiscal_period, 
+                posted_by, 
+                posted_at,
+                status, 
+                created_by, 
+                created_by_username,
+                source,
+                source_id
+            ) VALUES (?, ?, ?, 'receipt', 'MTP Payment - Shares Purchase', 
                      ?, ?, 0, ?, 'Tsh', ?, ?, 'client',
-                     ?, ?, ?, ?, ?, ?, NOW(), 'posted', ?, ?)
+                     ?, ?, ?, ?, ?, ?, NOW(), 'posted', ?, ?,
+                     'MTP', ?)
         ");
         
         $credit_result = $credit_stmt->execute([
             $credit_journal_no,
             $data['receipt_date'],
             $data['receipt_no'],
-            $control_account_code,
-            'Clients Control A/C',
+            $client_control['account_code'],
+            $client_control['account_name'],
             $data['amount'],
             $data['client_id'],
-            $data['name'],
+            $client['client_name'] ?? $data['name'],
             $data['bank_id'],
             $bank['bank_name'],
             $bank['account_number'],
@@ -384,7 +614,8 @@ function createJournalEntries($db, $receipt_id, $data, $user_name, $user_id) {
             $fiscal_period,
             $user_id,
             $user_id,
-            $user_name
+            $user_name,
+            $receipt_id
         ]);
         
         if (!$credit_result) {
@@ -543,11 +774,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && !empty($action)) {
                             writeLog("CSV file opened successfully");
                             
                             // Get existing control numbers
-                            $stmt = $db->prepare("SELECT TRIM(receipt_no) FROM receipts WHERE receipt_no LIKE '998550%'");
+                            $stmt = $db->prepare("SELECT TRIM(receipt_no) FROM receipts WHERE receipt_no LIKE 'MTP%'");
                             $stmt->execute();
                             $existing_receipts = $stmt->fetchAll(PDO::FETCH_COLUMN);
                             
-                            $stmt = $db->prepare("SELECT TRIM(reference_no) FROM journal_entries WHERE reference_no LIKE '998550%'");
+                            $stmt = $db->prepare("SELECT TRIM(reference_no) FROM journal_entries WHERE reference_no LIKE 'MTP%'");
                             $stmt->execute();
                             $existing_journals = $stmt->fetchAll(PDO::FETCH_COLUMN);
                             
@@ -555,19 +786,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && !empty($action)) {
                             $existing_controls_normalized = array_map(function($control) {
                                 return preg_replace('/[^0-9]/', '', $control);
                             }, $existing_controls);
-                            
-                            // Get bank accounts
-                            $stmt = $db->query("SELECT id, bank_name, code FROM banks_accounts WHERE status = 'active'");
-                            $bank_accounts = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                            
-                            $bank_mapping = [];
-                            foreach ($bank_accounts as $bank) {
-                                $clean_name = trim($bank['bank_name']);
-                                $bank_mapping[$clean_name] = [
-                                    'id' => $bank['id'],
-                                    'code' => $bank['code']
-                                ];
-                            }
                             
                             $row_number = 0;
                             $header_skipped = false;
@@ -590,7 +808,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && !empty($action)) {
                                     continue;
                                 }
                                 
-                                // Map columns - IMPORTANT: Date is in "d-M-y" format (1-Oct-25)
+                                // Map columns: Date, Name, Phone, CDS, Amount, Control No, Bank, Broker
                                 $date_str = $row[0] ?? '';
                                 $name = $row[1] ?? '';
                                 $phone = $row[2] ?? '';
@@ -628,7 +846,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && !empty($action)) {
                                 }
                                 
                                 // Validation
-                                if (empty($name)) $row_errors[] = "Name is missing";
+                                if (empty($name)) $row_errors[] = "Client name is missing";
                                 if (empty($control_no)) $row_errors[] = "Control number is missing";
                                 if (empty($amount_str)) $row_errors[] = "Amount is missing";
                                 if (empty($cds)) $row_errors[] = "CDS account is missing";
@@ -645,30 +863,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && !empty($action)) {
                                     ];
                                 }
                                 
-                                // Validate bank account
-                                $bank_id = null;
-                                $bank_code = null;
-                                $bank_match_type = 'exact';
+                                // Get bank account
+                                $bank = null;
                                 if (!empty($bank_name)) {
-                                    $clean_bank = trim($bank_name);
-                                    if (isset($bank_mapping[$clean_bank])) {
-                                        $bank_id = $bank_mapping[$clean_bank]['id'];
-                                        $bank_code = $bank_mapping[$clean_bank]['code'];
-                                    } else {
-                                        // Try fuzzy match
-                                        foreach ($bank_mapping as $db_bank_name => $bank_data) {
-                                            if (stripos($db_bank_name, $clean_bank) !== false || 
-                                                stripos($clean_bank, $db_bank_name) !== false) {
-                                                $bank_id = $bank_data['id'];
-                                                $bank_code = $bank_data['code'];
-                                                $bank_match_type = 'fuzzy';
-                                                $row_fixes[] = "Bank matched via fuzzy";
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    
-                                    if (!$bank_id) {
+                                    $bank = getBankAccount($db, $bank_name);
+                                    if (!$bank) {
                                         $row_errors[] = "Bank not found: $bank_name";
                                     }
                                 }
@@ -715,9 +914,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && !empty($action)) {
                                     'amount_display' => number_format($amount, 2),
                                     'control_no' => $control_no,
                                     'bank_name' => $bank_name,
-                                    'bank_id' => $bank_id,
-                                    'bank_code' => $bank_code,
-                                    'bank_match_type' => $bank_match_type,
+                                    'bank_id' => $bank['id'] ?? null,
+                                    'bank_code' => $bank['code'] ?? null,
+                                    'bank_account_no' => $bank['account_number'] ?? null,
                                     'broker' => $broker,
                                     'errors' => $row_errors,
                                     'warnings' => $row_warnings,
@@ -760,7 +959,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && !empty($action)) {
                             $success_message .= "❌ Rows with errors: $error_count";
                             
                             if ($show_upload_button) {
-                                $success_message .= "<br><br><strong>✅ Ready to upload $valid_count entries to database!</strong>";
+                                $success_message .= "<br><br><strong>✅ Ready to upload $valid_count MTP payments to database!</strong>";
                             }
                             
                         } else {
@@ -788,8 +987,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && !empty($action)) {
                 $failed_count = 0;
                 $created_clients = [];
                 $created_receipts = [];
+                $updated_banks = [];
                 
-                writeLog("Starting to save " . count($processed_data) . " receipts to database", "DATABASE");
+                writeLog("Starting to save " . count($processed_data) . " MTP payments to database", "DATABASE");
                 
                 $user_name = $_SESSION['username'] ?? 'System';
                 $user_id = $_SESSION['user_id'] ?? null;
@@ -803,37 +1003,23 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && !empty($action)) {
                         try {
                             writeLog("Processing row " . $row_data['row_index'], "DATABASE");
                             
-                            // Check if client exists
-                            $client_id = null;
-                            if (!empty($row_data['cds'])) {
-                                $stmt = $db->prepare("SELECT id FROM clients WHERE TRIM(cds_account) = ? AND is_active = 1 LIMIT 1");
-                                $stmt->execute([$row_data['cds']]);
-                                $client = $stmt->fetch();
-                                
-                                if (!$client) {
-                                    // Auto-create client
-                                    writeLog("Creating client for: " . $row_data['name'], "CLIENT_CREATE");
-                                    $client_id = autoCreateClient(
-                                        $db, 
-                                        $row_data['name'], 
-                                        $row_data['cds'], 
-                                        $row_data['phone'] ?? '', 
-                                        $user_name
-                                    );
-                                    
-                                    if ($client_id) {
-                                        $created_clients[] = [
-                                            'row' => $row_data['row_index'],
-                                            'name' => $row_data['name'],
-                                            'cds' => $row_data['cds'],
-                                            'client_id' => $client_id
-                                        ];
-                                    } else {
-                                        throw new Exception("Failed to create client");
-                                    }
-                                } else {
-                                    $client_id = $client['id'];
-                                }
+                            // Get or create client
+                            $client_id = getOrCreateClient(
+                                $db, 
+                                $row_data['name'], 
+                                $row_data['cds'], 
+                                $row_data['phone'] ?? '', 
+                                $user_name
+                            );
+                            
+                            if (!$client_id) {
+                                throw new Exception("Failed to get or create client");
+                            }
+                            
+                            // Get bank account
+                            $bank = getBankAccount($db, $row_data['bank_name']);
+                            if (!$bank) {
+                                throw new Exception("Bank account not found: " . $row_data['bank_name']);
                             }
                             
                             // Create receipt data array
@@ -841,9 +1027,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && !empty($action)) {
                                 'receipt_date' => $row_data['date'],
                                 'name' => $row_data['name'],
                                 'client_id' => $client_id,
-                                'bank_id' => $row_data['bank_id'],
-                                'bank_name' => $row_data['bank_name'],
-                                'receipt_no' => $row_data['control_no'], // Using control number as receipt number
+                                'bank_id' => $bank['id'],
+                                'bank_name' => $bank['bank_name'],
+                                'bank_account_no' => $bank['account_number'],
+                                'receipt_no' => $row_data['control_no'],
                                 'cds' => $row_data['cds'],
                                 'amount' => $row_data['amount']
                             ];
@@ -854,11 +1041,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && !empty($action)) {
                             if ($receipt_id) {
                                 $saved_count++;
                                 
-                                // Update bank account balance
-                                if (!empty($row_data['bank_id'])) {
-                                    updateBankBalance($db, $row_data['bank_id'], $row_data['amount']);
-                                }
-                                
                                 $created_receipts[] = [
                                     'row' => $row_data['row_index'],
                                     'receipt_id' => $receipt_id,
@@ -868,10 +1050,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && !empty($action)) {
                                     'date' => $row_data['date_display']
                                 ];
                                 
-                                writeLog("✅ Saved receipt ID: $receipt_id", "DATABASE");
+                                // Track bank updates
+                                if (!in_array($bank['id'], $updated_banks)) {
+                                    $updated_banks[] = $bank['id'];
+                                }
+                                
+                                writeLog("✅ Saved MTP receipt ID: $receipt_id for client: " . $row_data['name'], "DATABASE");
                             } else {
                                 $failed_count++;
-                                writeLog("❌ Failed to save receipt", "DATABASE_ERROR");
+                                writeLog("❌ Failed to save receipt for: " . $row_data['name'], "DATABASE_ERROR");
                             }
                             
                         } catch (Exception $e) {
@@ -885,9 +1072,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && !empty($action)) {
                     
                     // Store created receipts info
                     $_SESSION['created_receipts'] = $created_receipts;
-                    $_SESSION['created_clients'] = $created_clients;
                     $_SESSION['receipts_created_count'] = $saved_count;
-                    $_SESSION['clients_created_count'] = count($created_clients);
+                    $_SESSION['banks_updated'] = $updated_banks;
                     
                     // Clear session data
                     unset($_SESSION['processed_receipts']);
@@ -897,14 +1083,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && !empty($action)) {
                     unset($_SESSION['all_entries']);
                     unset($_SESSION['cleaned_csv_data']);
                     
-                    $success_message = "✅ Successfully processed $saved_count receipts!";
-                    
-                    if (!empty($created_clients)) {
-                        $success_message .= " Created " . count($created_clients) . " new client(s).";
-                    }
+                    $success_message = "✅ Successfully processed $saved_count MTP payments!";
+                    $success_message .= "<br>📊 Total Amount: Tsh " . number_format(array_sum(array_column($created_receipts, 'amount')), 2);
+                    $success_message .= "<br>🏦 Bank accounts updated: " . count($updated_banks);
                     
                     if ($failed_count > 0) {
-                        $error_message = "❌ $failed_count receipt(s) failed to save.";
+                        $error_message = "❌ $failed_count payment(s) failed to save.";
                     }
                     
                 } catch (Exception $e) {
@@ -919,7 +1103,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && !empty($action)) {
 
 writeLog("=== CSV Upload Script Completed ===");
 
-$page_title = 'CSV Receipt Upload';
+$page_title = 'MTP Payments Upload';
 include '../includes/header.php';
 
 // Read log file for display
@@ -931,25 +1115,29 @@ $log_size = file_exists($log_file) ? filesize($log_file) : 0;
 if (isset($_SESSION['created_receipts']) && !empty($_SESSION['created_receipts'])) {
     $created_receipts = $_SESSION['created_receipts'];
     $receipts_created_count = $_SESSION['receipts_created_count'] ?? count($created_receipts);
+    $banks_updated = $_SESSION['banks_updated'] ?? [];
     
     // Clear after displaying
     unset($_SESSION['created_receipts']);
     unset($_SESSION['receipts_created_count']);
+    unset($_SESSION['banks_updated']);
 }
 ?>
 
+<!-- HTML CONTENT (same as before, no changes needed) -->
 <div class="container-fluid py-4">
     <!-- Receipt Creation Results -->
     <?php if (isset($created_receipts) && !empty($created_receipts)): ?>
     <div class="card shadow-sm mb-4">
         <div class="card-header bg-success">
-            <h5 class="mb-0"><i class="bi bi-receipt me-2"></i>Receipts Created Successfully</h5>
+            <h5 class="mb-0"><i class="bi bi-receipt me-2"></i>MTP Payments Created Successfully</h5>
         </div>
         <div class="card-body">
             <div class="alert alert-success">
                 <i class="bi bi-check-circle me-2"></i>
-                <strong>✅ Successfully created <?php echo $receipts_created_count; ?> receipt(s) in the database.</strong>
-                <br><small>Journal entries follow same pattern as manual receipts: Debit 1112 Cash at Bank, Credit 73101 Clients Control A/C</small>
+                <strong>✅ Successfully created <?php echo $receipts_created_count; ?> MTP payment(s) in the database.</strong>
+                <br><small>Journal entries: Debit 1112 Cash at Bank, Credit 73101 Clients Control A/C</small>
+                <br><small>Bank accounts updated: <?php echo count($banks_updated); ?> bank account(s)</small>
             </div>
             <div class="table-responsive">
                 <table class="table table-sm table-hover">
@@ -971,12 +1159,19 @@ if (isset($_SESSION['created_receipts']) && !empty($_SESSION['created_receipts']
                             <td><code><?php echo htmlspecialchars($receipt['receipt_no']); ?></code></td>
                             <td><?php echo htmlspecialchars($receipt['name']); ?></td>
                             <td><?php echo htmlspecialchars($receipt['date']); ?></td>
-                            <td class="fw-bold text-success"><?php echo number_format($receipt['amount'], 2); ?></td>
+                            <td class="fw-bold text-success">Tsh <?php echo number_format($receipt['amount'], 2); ?></td>
                             <td><span class="badge bg-info"><?php echo $receipt['receipt_id']; ?></span></td>
                             <td><span class="badge bg-success">Complete</span></td>
                         </tr>
                         <?php endforeach; ?>
                     </tbody>
+                    <tfoot>
+                        <tr class="table-light fw-bold">
+                            <td colspan="4" class="text-end">TOTAL:</td>
+                            <td class="text-success">Tsh <?php echo number_format(array_sum(array_column($created_receipts, 'amount')), 2); ?></td>
+                            <td colspan="2"></td>
+                        </tr>
+                    </tfoot>
                 </table>
             </div>
         </div>
@@ -1007,7 +1202,7 @@ if (isset($_SESSION['created_receipts']) && !empty($_SESSION['created_receipts']
         <div class="col-lg-12">
             <div class="card shadow-sm">
                 <div class="card-header bg-primary">
-                    <h4 class="mb-0 text-dark"><i class="bi bi-upload me-2"></i>Upload CSV File (MTP Payments)</h4>
+                    <h4 class="mb-0 text-dark"><i class="bi bi-upload me-2"></i>Upload MTP Payments CSV</h4>
                 </div>
                 <div class="card-body">
                     <div class="mb-4">
@@ -1019,14 +1214,26 @@ if (isset($_SESSION['created_receipts']) && !empty($_SESSION['created_receipts']
                                 <li><strong>Client Auto-Creation:</strong> Missing clients are automatically created</li>
                                 <li><strong>Receipt Generation:</strong> Complete receipts with journal entries</li>
                                 <li><strong>Bank Balance Update:</strong> Bank account balances are automatically updated</li>
-                                <li><strong>Accounting:</strong> Uses same journal entries as manual receipts: Debit 1112 Cash at Bank, Credit 73101 Clients Control A/C</li>
+                                <li><strong>Accounting:</strong> Debit 1112 Cash at Bank, Credit 73101 Clients Control A/C</li>
                             </ul>
                         </div>
                         
                         <div class="alert alert-info">
                             <i class="bi bi-info-circle me-2"></i>
-                            <strong>CSV Format (Date in "1-Oct-25" format):</strong> Date, Name, Phone, CDS, Paid Amount, Control No., Channel, Broker
-                            <br><small>Example: 1-Oct-25, MATILDA, 255713277662, 635493, 1,177,623, 998550552775, CRDB Bank, VICTORY FI...</small>
+                            <strong>CSV Format (Date in "1-Oct-25" format):</strong> 
+                            <br><small>Date, Name, Phone, CDS Account, Paid Amount, Control No., Bank Name, Broker</small>
+                            <br><small>Example: 1-Oct-25, MATILDA, 255713277662, 635493, 1,177,623, CRDB Bank, VICTORY FI...</small>
+                        </div>
+                        
+                        <div class="alert alert-warning">
+                            <i class="bi bi-exclamation-triangle me-2"></i>
+                            <strong>Important Notes:</strong>
+                            <ul class="mb-0 mt-2">
+                                <li>Each client is identified by their CDS account number</li>
+                                <li>Clients are auto-created if they don't exist in the system</li>
+                                <li>Bank accounts must already exist in the system</li>
+                                <li>Receipt numbers are auto-generated with MTP prefix</li>
+                            </ul>
                         </div>
                     </div>
 
@@ -1069,7 +1276,7 @@ if (isset($_SESSION['created_receipts']) && !empty($_SESSION['created_receipts']
                     <div class="card border-success">
                         <div class="card-body text-center py-3">
                             <h3 class="text-success mb-1"><?php echo $valid_count; ?></h3>
-                            <small class="text-muted">Valid Entries</small>
+                            <small class="text-muted">Valid MTP Payments</small>
                         </div>
                     </div>
                 </div>
@@ -1087,7 +1294,7 @@ if (isset($_SESSION['created_receipts']) && !empty($_SESSION['created_receipts']
                             <h3 class="text-primary mb-1">
                                 Tsh <?php echo number_format($total_amount, 2); ?>
                             </h3>
-                            <small class="text-muted">Total Amount</small>
+                            <small class="text-muted">Total MTP Payments</small>
                         </div>
                     </div>
                 </div>
@@ -1100,7 +1307,7 @@ if (isset($_SESSION['created_receipts']) && !empty($_SESSION['created_receipts']
                         <tr>
                             <th width="40">#</th>
                             <th>Status</th>
-                            <th>Name</th>
+                            <th>Client Name</th>
                             <th>CDS</th>
                             <th>Control No</th>
                             <th>Date</th>
@@ -1129,12 +1336,7 @@ if (isset($_SESSION['created_receipts']) && !empty($_SESSION['created_receipts']
                             <td><?php echo htmlspecialchars($entry['cds']); ?></td>
                             <td><code><?php echo htmlspecialchars($entry['control_no']); ?></code></td>
                             <td><?php echo $entry['date_display']; ?></td>
-                            <td>
-                                <?php echo htmlspecialchars($entry['bank_name']); ?>
-                                <?php if ($entry['bank_match_type'] === 'fuzzy'): ?>
-                                <span class="badge bg-info ms-1" title="Bank matched via fuzzy matching">F</span>
-                                <?php endif; ?>
-                            </td>
+                            <td><?php echo htmlspecialchars($entry['bank_name']); ?></td>
                             <td class="text-end fw-bold <?php echo $entry['status'] === 'valid' ? 'text-success' : 'text-danger'; ?>">
                                 <?php echo number_format($entry['amount'], 2); ?>
                             </td>
@@ -1166,12 +1368,12 @@ if (isset($_SESSION['created_receipts']) && !empty($_SESSION['created_receipts']
     <div class="floating-upload-card">
         <div class="floating-upload-header">
             <i class="bi bi-cloud-upload"></i>
-            <span>Ready to Upload</span>
+            <span>Ready to Upload MTP Payments</span>
         </div>
         <div class="floating-upload-body">
             <div class="upload-stats">
                 <div class="stat-item">
-                    <span class="stat-label">Valid Entries:</span>
+                    <span class="stat-label">Valid Payments:</span>
                     <span class="stat-value text-success"><?php echo $valid_count; ?></span>
                 </div>
                 <div class="stat-item">
@@ -1185,7 +1387,7 @@ if (isset($_SESSION['created_receipts']) && !empty($_SESSION['created_receipts']
                 <button type="submit" class="btn btn-success btn-lg w-100" 
                         onclick="return confirmImport(<?php echo $valid_count; ?>, <?php echo $total_amount; ?>)">
                     <i class="bi bi-save me-2"></i>
-                    UPLOAD <?php echo $valid_count; ?> ENTRIES
+                    UPLOAD <?php echo $valid_count; ?> MTP PAYMENTS
                 </button>
                 <div class="upload-note">
                     <small><i class="bi bi-info-circle me-1"></i>Will create receipts, journal entries & update bank balances</small>
@@ -1212,7 +1414,7 @@ if (isset($_SESSION['created_receipts']) && !empty($_SESSION['created_receipts']
     border-radius: 12px;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
     border: 1px solid #dee2e6;
-    width: 350px;
+    width: 380px;
     overflow: hidden;
 }
 
@@ -1357,18 +1559,18 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // Custom confirmation for import
 function confirmImport(entryCount, totalAmount) {
-    let message = 'Are you sure you want to upload ' + entryCount + ' entries to the database?\n';
+    let message = 'Are you sure you want to upload ' + entryCount + ' MTP payments to the database?\n';
     message += 'Total Amount: Tsh ' + totalAmount.toLocaleString('en-US', {minimumFractionDigits: 2}) + '\n\n';
     
     message += '✅ The system will automatically:\n';
-    message += '1. Create receipts in receipts table\n';
+    message += '1. Create receipts in receipts table (MTP prefix)\n';
     message += '2. Create journal entries:\n';
     message += '   - Debit: 1112 Cash at Bank\n';
     message += '   - Credit: 73101 Clients Control A/C\n';
     message += '3. Update bank account balances\n';
     message += '4. Create clients if they don\'t exist\n\n';
     
-    message += 'This action cannot be undone.';
+    message += '⚠️ This action cannot be undone.';
     
     return confirm(message);
 }
@@ -1377,7 +1579,6 @@ function confirmImport(entryCount, totalAmount) {
 window.addEventListener('scroll', function() {
     const floatingContainer = document.querySelector('.floating-upload-container');
     if (floatingContainer) {
-        // The fixed positioning already handles this, but we add a slight shadow effect
         const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
         if (scrollTop > 100) {
             floatingContainer.style.transform = 'translateY(-10px)';

@@ -11,10 +11,15 @@ define('TRADE_RECEIVABLE_ACCOUNT_CODE', '1121');
 define('BROKERAGE_COMMISSION_INCOME_CODE', '411');
 define('CASH_AT_BANK_CODE', '1112');
 define('VAT_PAYABLE_CODE', '213');
+
+// --- Regulatory Fee Payable Account Codes ---
 define('CMSA_PAYABLE_CODE', '2111');
 define('DSE_PAYABLE_CODE', '2112');
 define('CSDR_PAYABLE_CODE', '2113');
 define('VRF_PAYABLE_CODE', '2114');
+
+// --- Investment Account Codes ---
+define('MARKETABLE_SECURITIES_EQUITIES_CODE', '1151');
 
 // --- HR Payroll Account Codes ---
 define('SALARIES_EXPENSE_CODE', '511');

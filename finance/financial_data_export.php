@@ -10,7 +10,7 @@ header("X-XSS-Protection: 1; mode=block");
 require_finance_officer();
 
 $db = getDBConnection();
-$db->exec("SET NAMES utf8mb4 COLLATE utf8mb4_0900_ai_ci");
+$db->exec("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci");
 
 function validateDate($date, $format = 'Y-m-d') {
     $d = DateTime::createFromFormat($format, $date);

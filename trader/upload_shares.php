@@ -1,4 +1,7 @@
 <?php
+// Disable time limit for large uploads
+set_time_limit(0);
+
 // Enable error reporting for debugging
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
@@ -50,7 +53,7 @@ $regulatory_assignments_created = 0;
 $csd_references_used = 0;
 $duplicates_skipped = 0;
 $duplicate_references = [];
-$client_trades_skipped = 0; // NEW: Track skipped client trades
+$client_trades_skipped = 0; // Track skipped client trades
 
 // Get company details
 function getCompanyDetails($db) {
@@ -93,32 +96,22 @@ function safe_int_format($value) {
     return number_format((int)$numeric_value);
 }
 
-function getDefaultAccountId($account_code) {
-    $default_mapping = [
-        '1001' => 1, '1008' => 2, '1009' => 3, '1010' => 4, '1011' => 5,
-        '1012' => 6, '1013' => 7, '1014' => 8, '1015' => 9, '1016' => 10,
-        '2001' => 11, '2002' => 12, '3007' => 13, '3008' => 14, '3009' => 15,
-        '3010' => 16, '3011' => 17, '3012' => 18, '3013' => 19, '3014' => 20,
-        '4001' => 21, '4002' => 22, '4003' => 23, '4004' => 24, '4005' => 25,
-        '5001' => 26, '5002' => 27, '5003' => 28, '6001' => 29, '6002' => 30,
-        '411' => 31, '213' => 32, '2111' => 33, '2112' => 34, '2113' => 35, '2114' => 36,
-        '1151' => 37, '1152' => 38, '4101' => 39, '3001' => 40, '3002' => 41,
-        '3003' => 42, '3004' => 43, '3005' => 44, '3006' => 45,
-    ];
-    return $default_mapping[$account_code] ?? 1;
-}
-
 function getAccountIdByCode($db, $account_code) {
     try {
         $stmt = $db->prepare("SELECT id, account_code, account_name FROM chart_of_accounts WHERE account_code = ? AND is_active = 1");
         $stmt->execute([$account_code]);
         $account = $stmt->fetch(PDO::FETCH_ASSOC);
+        
         if (!$account) {
-            return getDefaultAccountId($account_code);
+            error_log("Account not found for code: $account_code");
+            return null;
         }
+        
         return $account['id'];
+        
     } catch (Exception $e) {
-        return getDefaultAccountId($account_code);
+        error_log("Error getting account ID for code $account_code: " . $e->getMessage());
+        return null;
     }
 }
 
@@ -352,7 +345,13 @@ function mapCSVRowToDatabase($row) {
     // Get Exchange Reference
     $exchange_reference = $trimmed_row['Exchange Reference'] ?? '';
     
-    error_log("Mapped data - Security: {$security_id}, Client: {$client_name}, CDS: {$client_cds}, Trade Date: {$trade_date}, Exchange Ref: {$exchange_reference}");
+    // =====================================================
+    // NEW: Get Additional Reference
+    // This column can contain: a number, empty, or "MTP"
+    // =====================================================
+    $additional_reference = $trimmed_row['Additional Reference'] ?? '';
+    
+    error_log("Mapped data - Security: {$security_id}, Client: {$client_name}, CDS: {$client_cds}, Trade Date: {$trade_date}, Exchange Ref: {$exchange_reference}, Additional Ref: {$additional_reference}");
     
     return [
         'security_id' => $security_id,
@@ -372,6 +371,7 @@ function mapCSVRowToDatabase($row) {
         'broker_name' => $trimmed_row['Broker'] ?? '',
         'counterparty_broker' => $trimmed_row['Counterparty'] ?? '',
         'exchange_reference' => $exchange_reference,
+        'additional_reference' => $additional_reference, // NEW: Additional Reference
         'origin' => $trimmed_row['Origin'] ?? '',
         'time_executed' => $trimmed_row['Time'] ?? '',
         'asset_class' => strtolower(trim($trimmed_row['Asset Class'] ?? '')),
@@ -830,7 +830,7 @@ function recordTradeReceivableEntry($db, $trade_reference, $consideration, $trad
 }
 
 // Record regulatory fee assignment
-function recordRegulatoryFeeAssignment($db, $trade_reference, $fees, $client_name, $trade_date, $security_id, $security_name, $consideration, $trade_side, $created_by) {
+function recordRegulatoryFeeAssignment($db, $trade_reference, $fees, $client_name, $trade_date, $security_id, $security_name, $consideration, $trade_side, $created_by, $additional_reference = '') {
     try {
         $check_stmt = $db->prepare("SELECT COUNT(*) as count FROM regulatory_fee_assignments WHERE trade_reference = ?");
         $check_stmt->execute([$trade_reference]);
@@ -842,8 +842,8 @@ function recordRegulatoryFeeAssignment($db, $trade_reference, $fees, $client_nam
             INSERT INTO regulatory_fee_assignments 
             (trade_reference, client_name, security_id, security_name, trade_date, 
              dse_fee, cmsa_fee, csd_fee, vrf_fee, total_fees, consideration, trade_side,
-             status, created_by, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NOW(), NOW())
+             additional_reference, status, created_by, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NOW(), NOW())
         ");
         
         $dse_fee = $fees['dse'] ?? 0;
@@ -856,7 +856,7 @@ function recordRegulatoryFeeAssignment($db, $trade_reference, $fees, $client_nam
             $trade_reference, substr($client_name, 0, 255), substr($security_id, 0, 50),
             substr($security_name, 0, 200), $trade_date, round($dse_fee, 2), round($cmsa_fee, 2),
             round($csd_fee, 2), round($vrf_fee, 2), round($total_fees, 2), round($consideration, 2),
-            $trade_side, $created_by
+            $trade_side, substr($additional_reference, 0, 100), $created_by
         ]);
         
     } catch (Exception $e) {
@@ -910,8 +910,8 @@ function recordCustodianTrade($db, $trade_data) {
             (trade_reference, custodian_code, custodian_name, asset_class, security_id, security_name,
              client_cds_account, client_name, trade_side, quantity, price, consideration,
              trade_date, settlement_date, brokerage_fees, other_fees, total_fees, created_at,
-             exchange_reference)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)
+             exchange_reference, additional_reference)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?)
         ");
         
         return $stmt->execute([
@@ -921,7 +921,7 @@ function recordCustodianTrade($db, $trade_data) {
             $trade_data['quantity'], $trade_data['price'], $trade_data['consideration'],
             $trade_data['trade_date'], $trade_data['settlement_date'],
             $trade_data['brokerage_fees'], $trade_data['other_fees'], $trade_data['total_fees'],
-            $trade_data['exchange_reference']
+            $trade_data['exchange_reference'], $trade_data['additional_reference']
         ]);
         
     } catch (Exception $e) {
@@ -949,8 +949,8 @@ function recordETFTrade($db, $trade_data) {
             INSERT INTO etf_trades 
             (trade_reference, etf_id, etf_name, isin, client_cds_account, client_name, 
              trade_side, quantity, price, consideration, trade_date, settlement_date, 
-             currency, sca_code, status, exchange_reference) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             currency, sca_code, status, exchange_reference, additional_reference) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
         
         return $stmt->execute([
@@ -959,7 +959,7 @@ function recordETFTrade($db, $trade_data) {
             $trade_data['trade_side'], $trade_data['quantity'], $trade_data['price'],
             $trade_data['consideration'], $trade_data['trade_date'], $trade_data['settlement_date'],
             $trade_data['currency'], $trade_data['sca_code'], 'active',
-            $trade_data['exchange_reference']
+            $trade_data['exchange_reference'], $trade_data['additional_reference']
         ]);
         
     } catch (Exception $e) {
@@ -1179,7 +1179,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $csd_references_used = 0;
                                 $duplicates_skipped = 0;
                                 $duplicate_references = [];
-                                $client_trades_skipped = 0; // NEW: Track skipped client trades
+                                $client_trades_skipped = 0;
                                 
                                 foreach ($preview_data as $preview_row) {
                                     // Check if this is a duplicate
@@ -1193,6 +1193,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     $mapped_data = $preview_row['mapped_data'];
                                     $trade_reference = $preview_row['trade_reference'];
                                     $exchange_reference = $mapped_data['exchange_reference'];
+                                    $additional_reference = $mapped_data['additional_reference'] ?? ''; // NEW: Get Additional Reference
                                     
                                     $is_csd_reference = (getCSDReferenceForTrade($db, $mapped_data['client_cds'], 
                                         $mapped_data['security_id'], $mapped_data['trade_date'], 
@@ -1217,7 +1218,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     $consideration = !empty($mapped_data['consideration']) ? (float)$mapped_data['consideration'] : ($quantity * $price);
                                     $settlement_date = $mapped_data['settlement_date'];
                                     
-                                    error_log("Trade {$trade_reference}: Exchange Ref: {$exchange_reference}, Trade Date: {$trade_date}, Settlement Date: {$settlement_date}");
+                                    error_log("Trade {$trade_reference}: Exchange Ref: {$exchange_reference}, Additional Ref: {$additional_reference}, Trade Date: {$trade_date}, Settlement Date: {$settlement_date}");
                                     
                                     if (!empty($client_cds) && !empty($client_name)) {
                                         checkAndInsertClient($db, $client_cds, $client_name, $current_user['username'] ?? 'system');
@@ -1257,8 +1258,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                                 trade_side, quantity, price, consideration, trade_date, settlement_date,
                                                 currency, sca_code, status, uploaded_by, capacity, broker_name, 
                                                 counterparty_broker, brokerage_fee_type, final_brokerage_fee,
-                                                exchange_reference, time_executed, origin
-                                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                                exchange_reference, additional_reference, time_executed, origin
+                                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                         ");
                                         
                                         $trade_insert_stmt->execute([
@@ -1270,12 +1271,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                             'active', $current_user['id'], $mapped_data['capacity'] ?? 'principal',
                                             substr($mapped_data['broker_name'] ?? '', 0, 100), substr($mapped_data['counterparty_broker'] ?? '', 0, 100),
                                             $brokerage_fee_type, round($final_brokerage_fee_amount, 2),
-                                            $exchange_reference,
+                                            $exchange_reference, substr($additional_reference, 0, 100),
                                             $mapped_data['time_executed'] ?? null,
                                             $mapped_data['origin'] ?? null
                                         ]);
                                         
-                                        error_log("Successfully inserted trade: {$trade_reference} - Exchange Ref: {$exchange_reference} - Trade Date: {$trade_date}");
+                                        error_log("Successfully inserted trade: {$trade_reference} - Exchange Ref: {$exchange_reference} - Additional Ref: {$additional_reference} - Trade Date: {$trade_date}");
                                     } else {
                                         error_log("Trade with Exchange Reference '{$exchange_reference}' already exists. Skipping.");
                                         $duplicates_skipped++;
@@ -1299,7 +1300,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                             'settlement_date' => $settlement_date, 
                                             'currency' => 'TZS', 
                                             'sca_code' => substr($sca_code, 0, 20),
-                                            'exchange_reference' => $exchange_reference
+                                            'exchange_reference' => $exchange_reference,
+                                            'additional_reference' => $additional_reference
                                         ];
                                         if (recordETFTrade($db, $etf_trade_data)) $etf_trades_recorded++;
                                     }
@@ -1328,7 +1330,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         
                                         if (recordRegulatoryFeeAssignment($db, $trade_reference, $fees, $client_name, $trade_date, 
                                             $security_id, $mapped_data['stock_name'], $consideration, $trade_side, 
-                                            $current_user['username'] ?? 'system')) {
+                                            $current_user['username'] ?? 'system', $additional_reference)) {
                                             $regulatory_assignments_created++;
                                         }
                                         
@@ -1363,7 +1365,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                                     'brokerage_fees' => $custodian_fees['brokerage_fees'],
                                                     'other_fees' => $custodian_fees['other_fees'], 
                                                     'total_fees' => $custodian_fees['total_fees'],
-                                                    'exchange_reference' => $exchange_reference
+                                                    'exchange_reference' => $exchange_reference,
+                                                    'additional_reference' => $additional_reference
                                                 ];
                                                 if (recordCustodianTrade($db, $custodian_trade_data)) $custodian_trades_recorded++;
                                             }
@@ -1383,7 +1386,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     if ($company_investments_recorded > 0) $success_message .= ". <strong>{$company_investments_recorded} company trades recorded to Marketable Securities (1151)</strong>";
                                     if ($regulatory_assignments_created > 0) $success_message .= ". <strong>{$regulatory_assignments_created} regulatory fee assignments created</strong>";
                                     
-                                    // NEW: Show client trades skipped message
+                                    // Show client trades skipped message
                                     if ($client_trades_skipped > 0) {
                                         $success_message .= "<br><div class='alert alert-info mt-2'><i class='bi bi-info-circle'></i> <strong>{$client_trades_skipped} client trades were SKIPPED</strong> (will be entered manually via receipts).";
                                         $success_message .= "<br><small>Only company trades are recorded to Marketable Securities (1151). Client trades require manual receipt entry.</small></div>";
@@ -1454,12 +1457,7 @@ include '../includes/header.php';
                 <strong>Code:</strong> <?php echo htmlspecialchars($company_code); ?>
             </small></p>
             
-            <p class="text-warning small">
-                <i class="bi bi-exclamation-triangle"></i> <strong>Duplicate Detection:</strong> If you upload a file with trades that already exist (matching Exchange Reference), they will be <strong>SKIPPED</strong> and you will be alerted with the count and list of skipped references.
-            </p>
-            <p class="text-info small">
-                <i class="bi bi-info-circle"></i> <strong>Accounting Changes:</strong> <strong>ONLY Company trades</strong> post to <strong>Marketable Securities - Equities (1151)</strong>. Client trades are <strong>SKIPPED</strong> for manual receipt entry. <strong>No Cash at Bank entries</strong> are created for trades or fees.
-            </p>
+       
         </div>
     </div>
 
@@ -1489,7 +1487,8 @@ include '../includes/header.php';
                         <input type="file" class="form-control" id="share_file" name="share_file" accept=".csv, .txt" required>
                         <div class="form-text">
                             <strong>IMPORTANT:</strong> Only rows with <strong>"Asset Class = Equity"</strong> or <strong>"Asset Class = Exchange Traded Funds"</strong> will be processed<br>
-                            <strong>ACCOUNT UPDATE:</strong> <strong>ONLY Company trades</strong> post to <strong>Marketable Securities - Equities (1151)</strong>. Client trades are <strong>SKIPPED</strong> for manual receipt entry.
+                            <strong>ACCOUNT UPDATE:</strong> <strong>ONLY Company trades</strong> post to <strong>Marketable Securities - Equities (1151)</strong>. Client trades are <strong>SKIPPED</strong> for manual receipt entry.<br>
+                            <strong>NEW:</strong> <strong>Additional Reference</strong> column is now supported - values can be a number, empty, or "MTP".
                         </div>
                     </div>
                     <button type="submit" class="btn btn-primary" id="uploadButton">
@@ -1528,7 +1527,8 @@ include '../includes/header.php';
                         <thead class="table-light">
                             <tr><th>Line</th><th>Security</th><th>Name</th><th>SCA Code</th><th>Trade Type</th>
                             <th>Asset Type</th><th>CSD Account</th><th>Buy\Sell</th><th>Quantity</th><th>Price</th>
-                            <th>Consideration</th><th>Trade Date</th><th>Settlement Date</th><th>Exchange Ref</th><th>Status</th></tr>
+                            <th>Consideration</th><th>Trade Date</th><th>Settlement Date</th><th>Exchange Ref</th>
+                            <th>Additional Ref</th><th>Status</th></tr>
                         </thead>
                         <tbody>
                             <?php foreach ($preview_data as $preview_row): 
@@ -1552,6 +1552,7 @@ include '../includes/header.php';
                                 <td><strong><?php echo htmlspecialchars($mapped_data['trade_date']); ?></strong></td>
                                 <td><?php echo htmlspecialchars($mapped_data['settlement_date']); ?></td>
                                 <td><code class="small"><?php echo htmlspecialchars($mapped_data['exchange_reference'] ?: 'N/A'); ?></code></td>
+                                <td><code class="small"><?php echo htmlspecialchars($mapped_data['additional_reference'] ?: 'N/A'); ?></code></td>
                                 <td>
                                     <?php if ($is_dup): ?>
                                         <span class="badge bg-warning">Duplicate</span>
@@ -1563,7 +1564,7 @@ include '../includes/header.php';
                                 </td>
                             </tr>
                             <?php if ($preview_row['has_errors']): ?>
-                            <tr class="table-warning"><td colspan="15" class="small"><strong>Error:</strong> <?php echo htmlspecialchars(implode('; ', $preview_row['errors'])); ?></td></tr>
+                            <tr class="table-warning"><td colspan="16" class="small"><strong>Error:</strong> <?php echo htmlspecialchars(implode('; ', $preview_row['errors'])); ?></td></tr>
                             <?php endif; ?>
                             <?php endforeach; ?>
                         </tbody>
@@ -1587,6 +1588,13 @@ include '../includes/header.php';
                             <li><strong>Settlement Date</strong> extracted from 'Settlement Date' column</li>
                             <li>Supported formats: <strong>YYYY/MM/DD</strong> (e.g., 2026/01/05), <code>MM/DD/YYYY</code>, <code>YYYY-MM-DD</code>, <code>YYYYMMDD</code></li>
                             <li>If dates missing, falls back to today (Trade Date) or T+2 (Settlement Date)</li>
+                        </ul>
+                        <small class="text-muted"><strong>NEW: Additional Reference Column</strong></small>
+                        <ul class="mb-0">
+                            <li>Can contain a <strong>number</strong> (e.g., 12345)</li>
+                            <li>Can be <strong>empty</strong> (no value)</li>
+                            <li>Can contain the word <strong>"MTP"</strong> (Mobile Trading Platform payments)</li>
+                            <li>Stored in database for reference and tracking</li>
                         </ul>
                     </div>
                     <div class="col-md-6">
@@ -1614,12 +1622,14 @@ include '../includes/header.php';
                 </div>
                 <div class="mt-2 alert alert-info">
                     <small><strong>Example CSV format that works:</strong></small>
-                    <pre class="mt-2 mb-0 small"><code>Security    Asset Class    Trade Date    Settlement Date    Quantity    Price    Buy\Sell    Exchange Reference
-CRDB        Equity         2026/01/05    2026/01/06         1000        5000     Buy         EXCH-001
-VERTEX-ETF  Exchange Traded Funds 2026/01/06    2026/01/07         2100        400      Buy         EXCH-002</code></pre>
+                    <pre class="mt-2 mb-0 small"><code>Security    Asset Class    Trade Date    Settlement Date    Quantity    Price    Buy\Sell    Exchange Reference    Additional Reference
+CRDB        Equity         2026/01/05    2026/01/06         1000        5000     Buy         EXCH-001              12345
+VERTEX-ETF  Exchange Traded Funds 2026/01/06    2026/01/07         2100        400      Buy         EXCH-002              MTP
+TBL         Equity         2026/01/07    2026/01/08         500         2000     Sell        EXCH-003              </code></pre>
                     <small class="text-success"><strong>Note:</strong> Exchange Reference must be unique for each trade to prevent duplicates.</small>
                     <small class="text-warning"><strong>Duplicate Alert:</strong> If a trade with the same Exchange Reference already exists, it will be <strong>SKIPPED</strong> and you will be notified.</small>
                     <small class="text-info"><strong>Account Update:</strong> <strong>ONLY Company trades</strong> post to <strong>Marketable Securities - Equities (1151)</strong>. Client trades are <strong>SKIPPED</strong> for manual receipt entry. No Cash at Bank entries.</small>
+                    <small class="text-primary"><strong>Additional Reference:</strong> Supports numbers, empty values, or "MTP" for Mobile Trading Platform payments.</small>
                 </div>
             </div>
         </div>

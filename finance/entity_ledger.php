@@ -1,15 +1,18 @@
 <?php
 require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
+require_once '../tcpdf/tcpdf.php';
 
+// Security headers
 header("X-Frame-Options: DENY");
 header("X-Content-Type-Options: nosniff");
 header("X-XSS-Protection: 1; mode=block");
 header("Referrer-Policy: strict-origin-when-cross-origin");
-header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; font-src 'self' https://cdn.jsdelivr.net");
+header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' https://cdn.jsdelivr.net https://fonts.gstatic.com");
 
 require_finance_officer();
 
+// CSRF Protection
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -19,436 +22,1845 @@ if (empty($_SESSION['csrf_token'])) {
 }
 
 $db = getDBConnection();
+$error_message = '';
 
+// Get entity parameters
 $entity_type = isset($_GET['type']) ? $_GET['type'] : null;
 $entity_id = isset($_GET['id']) ? $_GET['id'] : null;
-$per_page = isset($_GET['per_page']) ? max(1, min(500, (int)$_GET['per_page'])) : 50;
-$page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
-$offset = ($page - 1) * $per_page;
 
 if (!$entity_type || !$entity_id) {
-    header("Location: debtors.php");
+    header('Location: debtors.php?error=Invalid entity parameters');
     exit;
+}
+
+// Helper functions
+function validateDate($date, $format = 'Y-m-d') {
+    $d = DateTime::createFromFormat($format, $date);
+    return $d && $d->format($format) === $date;
+}
+
+function sanitizeInput($data) {
+    if (is_array($data)) {
+        return array_map('sanitizeInput', $data);
+    }
+    return htmlspecialchars(trim($data), ENT_QUOTES, 'UTF-8');
+}
+
+function formatCurrency($amount, $currency = 'Tsh') {
+    $symbols = [
+        'Tsh' => 'TZS ',
+        'USD' => '$',
+        'Ksh' => 'KSh ',
+        'UGsh' => 'UGX '
+    ];
+    $symbol = $symbols[$currency] ?? 'TZS ';
+    return $symbol . number_format($amount, 2);
 }
 
 function getLedgerCode($entity_type) {
     $mapping = [
-        'client' => 'C', 'custodian' => 'D', 'employee' => 'E',
-        'agent' => 'A', 'broker' => 'B', 'supplier' => 'S',
-        'chart_account' => 'O', 'bank_account' => 'B'
+        'client' => 'C',
+        'custodian' => 'D',
+        'employee' => 'E',
+        'agent' => 'A',
+        'broker' => 'B',
+        'supplier' => 'S',
+        'chart_account' => 'O',
+        'bank_account' => 'B'
     ];
     return $mapping[$entity_type] ?? 'O';
 }
 
-function getEntityInfo($db, $entity_type, $entity_id) {
+// Get entity details
+function getEntityDetails($db, $entity_type, $entity_id) {
     try {
         switch ($entity_type) {
             case 'client':
-                $stmt = $db->prepare("SELECT id, client_name AS name, cds_account AS code, client_type, phone, email FROM clients WHERE id = ?");
+                $stmt = $db->prepare("SELECT id, client_name as name, cds_account as code, phone, email, client_type, status, is_active, created_at FROM clients WHERE id = ?");
                 $stmt->execute([$entity_id]);
-                return $stmt->fetch();
+                $entity = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($entity) {
+                    $entity['type_label'] = 'Client';
+                    $entity['code_label'] = 'CDS Account';
+                    $entity['icon'] = 'bi-person-badge';
+                    $entity['color'] = '#4F46E5';
+                }
+                return $entity;
+                
             case 'custodian':
-                $stmt = $db->prepare("SELECT id, custodian_name AS name, custodian_code AS code, contact_person, phone, email FROM custodians WHERE id = ?");
+                $stmt = $db->prepare("SELECT id, custodian_name as name, custodian_code as code, contact_person, phone, email, status, is_active, created_at FROM custodians WHERE id = ?");
                 $stmt->execute([$entity_id]);
-                return $stmt->fetch();
+                $entity = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($entity) {
+                    $entity['type_label'] = 'Custodian';
+                    $entity['code_label'] = 'Custodian Code';
+                    $entity['icon'] = 'bi-shield-check';
+                    $entity['color'] = '#0891B2';
+                }
+                return $entity;
+                
             case 'employee':
-                $stmt = $db->prepare("SELECT id, full_name AS name, username AS code, email, phone, role FROM users WHERE id = ?");
+                $stmt = $db->prepare("SELECT id, full_name as name, username as code, email, phone, role, status, is_active, created_at FROM users WHERE id = ?");
                 $stmt->execute([$entity_id]);
-                return $stmt->fetch();
+                $entity = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($entity) {
+                    $entity['type_label'] = 'Employee';
+                    $entity['code_label'] = 'Username';
+                    $entity['icon'] = 'bi-person-workspace';
+                    $entity['color'] = '#059669';
+                }
+                return $entity;
+                
             case 'agent':
-                $stmt = $db->prepare("SELECT id, name, agent_code AS code, contact_person, phone, email FROM agents WHERE id = ?");
+                $stmt = $db->prepare("SELECT id, name, agent_code as code, contact_person, phone, email, status, is_active, created_at FROM agents WHERE id = ?");
                 $stmt->execute([$entity_id]);
-                return $stmt->fetch();
+                $entity = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($entity) {
+                    $entity['type_label'] = 'Agent';
+                    $entity['code_label'] = 'Agent Code';
+                    $entity['icon'] = 'bi-person-rolodex';
+                    $entity['color'] = '#D97706';
+                }
+                return $entity;
+                
             case 'broker':
-                $stmt = $db->prepare("SELECT id, broker_name AS name, broker_code AS code, contact_person, phone, email FROM brokers WHERE id = ?");
+                $stmt = $db->prepare("SELECT id, broker_name as name, broker_code as code, contact_person, phone, email, status, is_active, created_at FROM brokers WHERE id = ?");
                 $stmt->execute([$entity_id]);
-                return $stmt->fetch();
+                $entity = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($entity) {
+                    $entity['type_label'] = 'Broker';
+                    $entity['code_label'] = 'Broker Code';
+                    $entity['icon'] = 'bi-graph-up';
+                    $entity['color'] = '#DC2626';
+                }
+                return $entity;
+                
             case 'supplier':
-                $stmt = $db->prepare("SELECT id, name, supplier_code AS code, contact_person, phone, email FROM suppliers WHERE id = ?");
+                $stmt = $db->prepare("SELECT id, name, supplier_code as code, contact_person, phone, email, status, is_active, created_at FROM suppliers WHERE id = ?");
                 $stmt->execute([$entity_id]);
-                return $stmt->fetch();
+                $entity = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($entity) {
+                    $entity['type_label'] = 'Supplier';
+                    $entity['code_label'] = 'Supplier Code';
+                    $entity['icon'] = 'bi-truck';
+                    $entity['color'] = '#7C3AED';
+                }
+                return $entity;
+                
             case 'chart_account':
-                $stmt = $db->prepare("SELECT account_code AS id, account_name AS name, account_code AS code, account_type, level FROM chart_of_accounts WHERE account_code = ?");
+                $stmt = $db->prepare("SELECT account_code as id, account_name as name, account_code as code, account_type, level, is_active, created_at FROM chart_of_accounts WHERE account_code = ?");
                 $stmt->execute([$entity_id]);
-                return $stmt->fetch();
+                $entity = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($entity) {
+                    $entity['type_label'] = 'Chart Account';
+                    $entity['code_label'] = 'Account Code';
+                    $entity['icon'] = 'bi-journal-bookmark';
+                    $entity['color'] = '#6D28D9';
+                }
+                return $entity;
+                
             case 'bank_account':
-                $stmt = $db->prepare("SELECT id, account_name AS name, account_number AS code, bank_name, currency, current_balance FROM banks_accounts WHERE id = ?");
+                $stmt = $db->prepare("SELECT id, account_name as name, account_number as code, bank_name, currency, current_balance, status, is_active, created_at FROM banks_accounts WHERE id = ?");
                 $stmt->execute([$entity_id]);
-                return $stmt->fetch();
+                $entity = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($entity) {
+                    $entity['type_label'] = 'Bank Account';
+                    $entity['code_label'] = 'Account Number';
+                    $entity['icon'] = 'bi-bank';
+                    $entity['color'] = '#0D9488';
+                }
+                return $entity;
+                
+            default:
+                return null;
         }
     } catch (Exception $e) {
-        error_log("Error getting entity info: " . $e->getMessage());
+        error_log("Error getting entity details: " . $e->getMessage());
+        return null;
     }
-    return false;
 }
 
-function buildTransactionQueries($db, $entity_type, $entity_id) {
+// Get all transactions for an entity
+function getEntityTransactions($db, $entity_type, $entity_id, $start_date = null, $end_date = null, $search = '') {
+    $transactions = [];
     $ledger_code = getLedgerCode($entity_type);
-    $is_bank = ($entity_type === 'bank_account');
-    $params = [];
-    $union_parts = [];
-
-    // For chart_account and bank_account types, skip payments/receipts — GL entries
-    // already cover them (every payment/receipt with record_in_financial='yes' now creates
-    // GL entries). Including both would produce duplicate rows and incorrect signs,
-    // and cause cross-table collation errors in UNION.
-    $use_payments_receipts = !in_array($entity_type, ['chart_account', 'bank_account'], true);
-
-    if ($use_payments_receipts) {
-        // Receipts: for bank_account amount is +inflow, for others amount is -receipt
-        if ($is_bank) {
-            $receipt_signed = 'r.amount';
+    
+    // ============================================================
+    // For CLIENTS: Get receipts, payments, and GL entries
+    // ============================================================
+    if ($entity_type === 'client') {
+        // Get client details to get name
+        $stmt = $db->prepare("SELECT client_name, cds_account FROM clients WHERE id = ?");
+        $stmt->execute([$entity_id]);
+        $client = $stmt->fetch(PDO::FETCH_ASSOC);
+        $client_name = $client['client_name'] ?? '';
+        $cds_account = $client['cds_account'] ?? '';
+        
+        // 1. GET RECEIPTS for this client (Credit - money received)
+        $receipt_query = "SELECT 
+                            r.receipt_date as transaction_date, 
+                            'receipt' as transaction_type,
+                            r.receipt_no as reference, 
+                            r.narration as description,
+                            r.amount as debit_amount, 
+                            0 as credit_amount, 
+                            r.currency,
+                            r.account_no as account,
+                            'receipts' as source_table, 
+                            r.id as source_id,
+                            r.created_at, 
+                            r.created_by,
+                            'Receipt' as source_label
+                         FROM receipts r
+                         WHERE r.name_id = ?
+                         AND r.account_of = 'C'
+                         AND r.record_in_financial = 'yes'
+                         AND r.status != 'cancelled'";
+        $params = [$entity_id];
+        
+        if ($start_date && $end_date) {
+            $receipt_query .= " AND r.receipt_date BETWEEN ? AND ?";
+            $params[] = $start_date;
+            $params[] = $end_date;
+        }
+        
+        if (!empty($search)) {
+            $receipt_query .= " AND (r.receipt_no LIKE ? OR r.narration LIKE ?)";
+            $search_param = "%$search%";
+            $params[] = $search_param;
+            $params[] = $search_param;
+        }
+        
+        $receipt_stmt = $db->prepare($receipt_query);
+        $receipt_stmt->execute($params);
+        $receipts = $receipt_stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        foreach ($receipts as $r) {
+            $r['amount_type'] = 'credit';
+            $r['debit'] = 0;
+            $r['credit'] = (float)$r['debit_amount'];
+            $r['amount'] = (float)$r['debit_amount'];
+            $r['account_name'] = 'Receipt';
+            $transactions[] = $r;
+        }
+        
+        // 2. GET PAYMENTS for this client (Debit - money paid)
+        $payment_query = "SELECT 
+                            p.payment_date as transaction_date, 
+                            'payment' as transaction_type,
+                            p.payment_no as reference, 
+                            p.narration as description,
+                            0 as debit_amount, 
+                            p.amount as credit_amount, 
+                            p.currency,
+                            p.account_no as account,
+                            'payments' as source_table, 
+                            p.id as source_id,
+                            p.created_at, 
+                            p.created_by,
+                            'Payment' as source_label
+                         FROM payments p
+                         WHERE p.name_id = ?
+                         AND p.paid_to = 'C'
+                         AND p.record_in_financial = 'yes'
+                         AND p.status != 'cancelled'";
+        $params = [$entity_id];
+        
+        if ($start_date && $end_date) {
+            $payment_query .= " AND p.payment_date BETWEEN ? AND ?";
+            $params[] = $start_date;
+            $params[] = $end_date;
+        }
+        
+        if (!empty($search)) {
+            $payment_query .= " AND (p.payment_no LIKE ? OR p.narration LIKE ?)";
+            $search_param = "%$search%";
+            $params[] = $search_param;
+            $params[] = $search_param;
+        }
+        
+        $payment_stmt = $db->prepare($payment_query);
+        $payment_stmt->execute($params);
+        $payments = $payment_stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        foreach ($payments as $p) {
+            $p['amount_type'] = 'debit';
+            $p['debit'] = (float)$p['credit_amount'];
+            $p['credit'] = 0;
+            $p['amount'] = (float)$p['credit_amount'];
+            $p['account_name'] = 'Payment';
+            $transactions[] = $p;
+        }
+        
+        // 3. GET GL ENTRIES for this client (from trades and other sources)
+        $gl_query = "SELECT 
+                        gl.transaction_date, 
+                        'gl_entry' as transaction_type,
+                        gl.reference_no as reference, 
+                        gl.description,
+                        gl.debit_amount, 
+                        gl.credit_amount, 
+                        'TZS' as currency,
+                        gl.account_code as account,
+                        'general_ledger' as source_table, 
+                        gl.id as source_id,
+                        gl.created_at, 
+                        gl.created_by,
+                        'GL Entry' as source_label
+                     FROM general_ledger gl
+                     WHERE (gl.entity_name = ? OR gl.reference_no IN (SELECT trade_reference FROM trades WHERE client_name = ? OR client_cds_account = ?))
+                     AND gl.status = 'active'";
+        $gl_params = [$client_name, $client_name, $cds_account];
+        
+        if ($start_date && $end_date) {
+            $gl_query .= " AND gl.transaction_date BETWEEN ? AND ?";
+            $gl_params[] = $start_date;
+            $gl_params[] = $end_date;
+        }
+        
+        if (!empty($search)) {
+            $gl_query .= " AND (gl.reference_no LIKE ? OR gl.description LIKE ?)";
+            $search_param = "%$search%";
+            $gl_params[] = $search_param;
+            $gl_params[] = $search_param;
+        }
+        
+        $gl_query .= " ORDER BY gl.transaction_date DESC, gl.id DESC";
+        
+        try {
+            $gl_stmt = $db->prepare($gl_query);
+            $gl_stmt->execute($gl_params);
+            $gl_entries = $gl_stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            foreach ($gl_entries as $gl) {
+                if ((float)$gl['debit_amount'] > 0) {
+                    $gl['amount'] = (float)$gl['debit_amount'];
+                    $gl['amount_type'] = 'debit';
+                    $gl['debit'] = (float)$gl['debit_amount'];
+                    $gl['credit'] = 0;
+                } elseif ((float)$gl['credit_amount'] > 0) {
+                    $gl['amount'] = (float)$gl['credit_amount'];
+                    $gl['amount_type'] = 'credit';
+                    $gl['debit'] = 0;
+                    $gl['credit'] = (float)$gl['credit_amount'];
+                } else {
+                    $gl['amount'] = 0;
+                    $gl['amount_type'] = 'none';
+                    $gl['debit'] = 0;
+                    $gl['credit'] = 0;
+                }
+                
+                // Map account name
+                try {
+                    $acc_stmt = $db->prepare("SELECT account_name FROM chart_of_accounts WHERE account_code = ?");
+                    $acc_stmt->execute([$gl['account']]);
+                    $acc = $acc_stmt->fetch(PDO::FETCH_ASSOC);
+                    $gl['account_name'] = $acc ? $acc['account_name'] : $gl['account'];
+                } catch (Exception $e) {
+                    $gl['account_name'] = $gl['account'];
+                }
+                
+                $transactions[] = $gl;
+            }
+        } catch (Exception $e) {
+            error_log("Error getting GL entries for client: " . $e->getMessage());
+        }
+        
+    } else {
+        // ============================================================
+        // For OTHER ENTITIES: Get GL entries only
+        // ============================================================
+        $gl_query = "";
+        $gl_params = [];
+        
+        if ($entity_type === 'chart_account') {
+            $gl_query = "SELECT 
+                            gl.transaction_date, 
+                            'gl_entry' as transaction_type,
+                            gl.reference_no as reference, 
+                            gl.description,
+                            gl.debit_amount, 
+                            gl.credit_amount, 
+                            'TZS' as currency,
+                            gl.account_code as account,
+                            'general_ledger' as source_table, 
+                            gl.id as source_id,
+                            gl.created_at, 
+                            gl.created_by,
+                            'GL Entry' as source_label
+                         FROM general_ledger gl
+                         WHERE gl.account_code = ?
+                         AND gl.status = 'active'";
+            $gl_params = [$entity_id];
+            
+        } elseif ($entity_type === 'bank_account') {
+            $gl_query = "SELECT 
+                            gl.transaction_date, 
+                            'gl_entry' as transaction_type,
+                            gl.reference_no as reference, 
+                            gl.description,
+                            gl.debit_amount, 
+                            gl.credit_amount, 
+                            'TZS' as currency,
+                            gl.account_code as account,
+                            'general_ledger' as source_table, 
+                            gl.id as source_id,
+                            gl.created_at, 
+                            gl.created_by,
+                            'GL Entry' as source_label
+                         FROM general_ledger gl
+                         WHERE gl.entity_name = ? 
+                         AND gl.status = 'active'";
+            $gl_params = [$entity_id];
+            
         } else {
-            $receipt_signed = '-r.amount';
+            // For other entities (agent, broker, custodian, employee, supplier)
+            $gl_query = "SELECT 
+                            gl.transaction_date, 
+                            'gl_entry' as transaction_type,
+                            gl.reference_no as reference, 
+                            gl.description,
+                            gl.debit_amount, 
+                            gl.credit_amount, 
+                            'TZS' as currency,
+                            gl.account_code as account,
+                            'general_ledger' as source_table, 
+                            gl.id as source_id,
+                            gl.created_at, 
+                            gl.created_by,
+                            'GL Entry' as source_label
+                         FROM general_ledger gl
+                         WHERE gl.entity_id = ?
+                         AND gl.status = 'active'";
+            $gl_params = [$entity_id];
         }
-        $union_parts[] = "(SELECT r.receipt_date AS tx_date, 'receipt' AS source, COALESCE(r.narration, 'Money received') AS description, r.receipt_no AS reference, $receipt_signed AS signed_amount, r.amount AS raw_amount, r.currency, r.account_no AS bank_account FROM receipts r WHERE (r.account_of = ? OR (r.account_of = 'O' AND r.source_type = ?)) AND r.name_id = ? AND r.record_in_financial = 'yes')";
-        $params = array_merge($params, [$ledger_code, $entity_type, $entity_id]);
-
-        // Payments: for bank_account amount is -outflow, for others amount is +payment
-        if ($is_bank) {
-            $payment_signed = '-p.amount';
+        
+        // Add date filters
+        if ($start_date && $end_date) {
+            $gl_query .= " AND gl.transaction_date BETWEEN ? AND ?";
+            $gl_params[] = $start_date;
+            $gl_params[] = $end_date;
+        }
+        
+        // Add search filter
+        if (!empty($search)) {
+            $gl_query .= " AND (gl.reference_no LIKE ? OR gl.description LIKE ?)";
+            $search_param = "%$search%";
+            $gl_params[] = $search_param;
+            $gl_params[] = $search_param;
+        }
+        
+        $gl_query .= " ORDER BY gl.transaction_date DESC, gl.id DESC";
+        
+        try {
+            $gl_stmt = $db->prepare($gl_query);
+            $gl_stmt->execute($gl_params);
+            $gl_entries = $gl_stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            foreach ($gl_entries as $gl) {
+                if ((float)$gl['debit_amount'] > 0) {
+                    $gl['amount'] = (float)$gl['debit_amount'];
+                    $gl['amount_type'] = 'debit';
+                    $gl['debit'] = (float)$gl['debit_amount'];
+                    $gl['credit'] = 0;
+                } elseif ((float)$gl['credit_amount'] > 0) {
+                    $gl['amount'] = (float)$gl['credit_amount'];
+                    $gl['amount_type'] = 'credit';
+                    $gl['debit'] = 0;
+                    $gl['credit'] = (float)$gl['credit_amount'];
+                } else {
+                    $gl['amount'] = 0;
+                    $gl['amount_type'] = 'none';
+                    $gl['debit'] = 0;
+                    $gl['credit'] = 0;
+                }
+                
+                // Map account name
+                try {
+                    $acc_stmt = $db->prepare("SELECT account_name FROM chart_of_accounts WHERE account_code = ?");
+                    $acc_stmt->execute([$gl['account']]);
+                    $acc = $acc_stmt->fetch(PDO::FETCH_ASSOC);
+                    $gl['account_name'] = $acc ? $acc['account_name'] : $gl['account'];
+                } catch (Exception $e) {
+                    $gl['account_name'] = $gl['account'];
+                }
+                
+                $transactions[] = $gl;
+            }
+        } catch (Exception $e) {
+            error_log("Error getting GL entries: " . $e->getMessage());
+        }
+        
+        // Include payroll entries for employees
+        if ($entity_type === 'employee') {
+            try {
+                $payroll_query = "SELECT 
+                                    transaction_date, 
+                                    'gl_entry' as transaction_type,
+                                    reference_no as reference, 
+                                    description,
+                                    debit_amount, 
+                                    credit_amount, 
+                                    'TZS' as currency,
+                                    account_code as account,
+                                    'general_ledger' as source_table, 
+                                    id as source_id,
+                                    created_at, 
+                                    created_by,
+                                    'Payroll' as source_label
+                                 FROM general_ledger 
+                                 WHERE reference_type IN ('payroll', 'salary_payment')
+                                 AND entity_id = ?
+                                 AND status = 'active'";
+                
+                $payroll_params = [$entity_id];
+                
+                if ($start_date && $end_date) {
+                    $payroll_query .= " AND transaction_date BETWEEN ? AND ?";
+                    $payroll_params[] = $start_date;
+                    $payroll_params[] = $end_date;
+                }
+                
+                if (!empty($search)) {
+                    $payroll_query .= " AND (reference_no LIKE ? OR description LIKE ?)";
+                    $search_param = "%$search%";
+                    $payroll_params[] = $search_param;
+                    $payroll_params[] = $search_param;
+                }
+                
+                $payroll_query .= " ORDER BY transaction_date DESC, id DESC";
+                
+                $payroll_stmt = $db->prepare($payroll_query);
+                $payroll_stmt->execute($payroll_params);
+                $payroll_entries = $payroll_stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                foreach ($payroll_entries as $pe) {
+                    if ((float)$pe['debit_amount'] > 0) {
+                        $pe['amount'] = (float)$pe['debit_amount'];
+                        $pe['amount_type'] = 'debit';
+                        $pe['debit'] = (float)$pe['debit_amount'];
+                        $pe['credit'] = 0;
+                    } elseif ((float)$pe['credit_amount'] > 0) {
+                        $pe['amount'] = (float)$pe['credit_amount'];
+                        $pe['amount_type'] = 'credit';
+                        $pe['debit'] = 0;
+                        $pe['credit'] = (float)$pe['credit_amount'];
+                    } else {
+                        $pe['amount'] = 0;
+                        $pe['amount_type'] = 'none';
+                        $pe['debit'] = 0;
+                        $pe['credit'] = 0;
+                    }
+                    
+                    try {
+                        $acc_stmt = $db->prepare("SELECT account_name FROM chart_of_accounts WHERE account_code = ?");
+                        $acc_stmt->execute([$pe['account']]);
+                        $acc = $acc_stmt->fetch(PDO::FETCH_ASSOC);
+                        $pe['account_name'] = $acc ? $acc['account_name'] : $pe['account'];
+                    } catch (Exception $e) {
+                        $pe['account_name'] = $pe['account'];
+                    }
+                    
+                    $transactions[] = $pe;
+                }
+            } catch (Exception $e) {
+                error_log("Error getting payroll entries: " . $e->getMessage());
+            }
+        }
+    }
+    
+    // Sort transactions by date (newest first)
+    usort($transactions, function($a, $b) {
+        $date_a = strtotime($a['transaction_date'] ?? '1970-01-01');
+        $date_b = strtotime($b['transaction_date'] ?? '1970-01-01');
+        if ($date_a == $date_b) {
+            return strcmp($b['reference'] ?? '', $a['reference'] ?? '');
+        }
+        return $date_b - $date_a;
+    });
+    
+    // Remove duplicate transactions by reference + account + amount
+    $unique_transactions = [];
+    $seen_keys = [];
+    
+    foreach ($transactions as $t) {
+        $key = ($t['reference'] ?? '') . '|' . ($t['account'] ?? '') . '|' . ($t['debit'] ?? 0) . '|' . ($t['credit'] ?? 0);
+        if (!in_array($key, $seen_keys)) {
+            $seen_keys[] = $key;
+            $unique_transactions[] = $t;
+        }
+    }
+    
+    $transactions = $unique_transactions;
+    
+    // Calculate running balance (oldest to newest)
+    $running_balance = 0;
+    $debit_total = 0;
+    $credit_total = 0;
+    
+    // Reverse for balance calculation (oldest first)
+    $reversed = array_reverse($transactions);
+    
+    foreach ($reversed as &$transaction) {
+        $is_debit = false;
+        $is_credit = false;
+        
+        if (isset($transaction['debit']) && $transaction['debit'] > 0) {
+            $is_debit = true;
+            $debit_total += $transaction['debit'];
+        } elseif (isset($transaction['credit']) && $transaction['credit'] > 0) {
+            $is_credit = true;
+            $credit_total += $transaction['credit'];
+        }
+        
+        // For bank accounts: debit = money out, credit = money in
+        // For other entities: debit = we owe, credit = they owe us
+        if ($entity_type === 'bank_account') {
+            if ($is_debit) {
+                $running_balance -= $transaction['debit'];
+                $transaction['balance_impact'] = -$transaction['debit'];
+            } elseif ($is_credit) {
+                $running_balance += $transaction['credit'];
+                $transaction['balance_impact'] = $transaction['credit'];
+            } else {
+                $transaction['balance_impact'] = 0;
+            }
         } else {
-            $payment_signed = 'p.amount';
+            if ($is_debit) {
+                $running_balance += $transaction['debit'];
+                $transaction['balance_impact'] = $transaction['debit'];
+            } elseif ($is_credit) {
+                $running_balance -= $transaction['credit'];
+                $transaction['balance_impact'] = -$transaction['credit'];
+            } else {
+                $transaction['balance_impact'] = 0;
+            }
         }
-        $union_parts[] = "(SELECT p.payment_date AS tx_date, 'payment' AS source, COALESCE(p.narration, 'Money paid') AS description, p.payment_no AS reference, $payment_signed AS signed_amount, p.amount AS raw_amount, p.currency, p.account_no AS bank_account FROM payments p WHERE (p.paid_to = ? OR (p.paid_to = 'O' AND p.source_type = ?)) AND p.name_id = ? AND p.record_in_financial = 'yes')";
-        $params = array_merge($params, [$ledger_code, $entity_type, $entity_id]);
+        
+        $transaction['running_balance'] = $running_balance;
     }
-
-    // GL entries
-    $gl_params = [];
-    $gl_where = '';
-
-    if ($entity_type === 'chart_account') {
-        $gl_where = "gl.account_code = ?";
-        $gl_params = [$entity_id];
-    } elseif ($entity_type === 'bank_account') {
-        $gl_where = "gl.account_code COLLATE utf8mb4_unicode_ci = (SELECT code FROM banks_accounts WHERE id = ? AND status = 'active')";
-        $gl_params = [$entity_id];
-    } elseif ($entity_type === 'client') {
-        $stmt = $db->prepare("SELECT trade_reference FROM trades WHERE client_cds_account = (SELECT cds_account FROM clients WHERE id = ?) OR client_name = (SELECT client_name FROM clients WHERE id = ?)");
-        $stmt->execute([$entity_id, $entity_id]);
-        $trade_refs = $stmt->fetchAll(PDO::FETCH_COLUMN);
-        if (!empty($trade_refs)) {
-            $placeholders = implode(',', array_fill(0, count($trade_refs), '?'));
-            $gl_where = "gl.reference_no IN ($placeholders)";
-            $gl_params = $trade_refs;
-        }
-    }
-
-    if (!empty($gl_where)) {
-        if ($is_bank) {
-            $gl_signed = "CASE WHEN gl.debit_amount > 0 THEN gl.debit_amount ELSE -gl.credit_amount END";
-        } else {
-            $gl_signed = "CASE WHEN gl.debit_amount > 0 THEN -gl.debit_amount ELSE gl.credit_amount END";
-        }
-        $union_parts[] = "(SELECT gl.transaction_date AS tx_date, 'gl_entry' AS source, gl.description, gl.reference_no AS reference, $gl_signed AS signed_amount, CASE WHEN gl.debit_amount > 0 THEN gl.debit_amount ELSE gl.credit_amount END AS raw_amount, 'TZS' AS currency, gl.account_code AS bank_account FROM general_ledger gl WHERE $gl_where)";
-        $params = array_merge($params, $gl_params);
-    }
-
-    return [$union_parts, $params];
+    
+    // Reverse back to newest first for display
+    $transactions = array_reverse($reversed);
+    
+    return [
+        'transactions' => $transactions,
+        'debit_total' => $debit_total,
+        'credit_total' => $credit_total,
+        'balance' => $running_balance
+    ];
 }
 
-$entity_info = getEntityInfo($db, $entity_type, $entity_id);
+// Get filter parameters
+$start_date = isset($_GET['start_date']) ? $_GET['start_date'] : null;
+$end_date = isset($_GET['end_date']) ? $_GET['end_date'] : null;
+$search = isset($_GET['search']) ? $_GET['search'] : '';
+$as_of_date = isset($_GET['as_of_date']) ? $_GET['as_of_date'] : date('Y-m-d');
 
-if (!$entity_info) {
-    header("Location: debtors.php");
+// Validate dates
+if ($start_date && !validateDate($start_date)) $start_date = null;
+if ($end_date && !validateDate($end_date)) $end_date = null;
+if (!validateDate($as_of_date)) $as_of_date = date('Y-m-d');
+
+// Get entity details
+$entity = getEntityDetails($db, $entity_type, $entity_id);
+
+if (!$entity) {
+    header('Location: debtors.php?error=Entity not found');
     exit;
 }
 
-$entity_name = $entity_info['name'];
-$entity_code = !empty($entity_info['code']) ? $entity_info['code'] : $entity_id;
+// Get transactions
+$ledger_data = getEntityTransactions($db, $entity_type, $entity_id, $start_date, $end_date, $search);
+$transactions = $ledger_data['transactions'];
+$debit_total = $ledger_data['debit_total'];
+$credit_total = $ledger_data['credit_total'];
+$balance = $ledger_data['balance'];
 
-list($union_parts, $query_params) = buildTransactionQueries($db, $entity_type, $entity_id);
-
-if (empty($union_parts)) {
-    $page_title = 'Entity Ledger - ' . $entity_name;
-    include '../includes/header.php';
-    ?>
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <div>
-            <h1 class="h3 mb-0 text-dark"><?php echo htmlspecialchars($entity_name); ?></h1>
-            <p class="text-muted mb-0">No transaction data available for this entity</p>
-        </div>
-        <a href="debtors.php<?php echo $entity_type ? '?entity_type=' . urlencode($entity_type) : ''; ?>" class="btn btn-outline-secondary">
-            <i class="bi bi-arrow-left me-1"></i>Back to Debtors
-        </a>
-    </div>
-    <?php
-    include '../includes/footer.php';
+// Handle PDF Export
+if (isset($_GET['export']) && $_GET['export'] == 'pdf') {
+    $pdf = new TCPDF('L', PDF_UNIT, 'A4', true, 'UTF-8', false);
+    $pdf->SetCreator(PDF_CREATOR);
+    $pdf->SetAuthor('Financial System');
+    $pdf->SetTitle('Ledger - ' . $entity['name']);
+    $pdf->SetHeaderData('', 0, 'General Ledger', $entity['name']);
+    $pdf->setHeaderFont(Array(PDF_FONT_NAME_MAIN, '', PDF_FONT_SIZE_MAIN));
+    $pdf->setFooterFont(Array(PDF_FONT_NAME_DATA, '', PDF_FONT_SIZE_DATA));
+    $pdf->SetDefaultMonospacedFont(PDF_FONT_MONOSPACED);
+    $pdf->SetMargins(15, 25, 15);
+    $pdf->SetHeaderMargin(10);
+    $pdf->SetFooterMargin(10);
+    $pdf->SetAutoPageBreak(TRUE, 15);
+    $pdf->AddPage();
+    
+    // Title
+    $pdf->SetFont('helvetica', 'B', 18);
+    $pdf->Cell(0, 12, 'GENERAL LEDGER', 0, 1, 'C');
+    $pdf->SetFont('helvetica', 'B', 14);
+    $pdf->Cell(0, 10, $entity['name'] . ' (' . $entity['type_label'] . ')', 0, 1, 'C');
+    $pdf->SetFont('helvetica', '', 10);
+    $pdf->Cell(0, 6, 'Code: ' . $entity['code'], 0, 1);
+    $pdf->Cell(0, 6, 'As of: ' . date('d/m/Y', strtotime($as_of_date)), 0, 1);
+    if ($start_date && $end_date) {
+        $pdf->Cell(0, 6, 'Period: ' . date('d/m/Y', strtotime($start_date)) . ' to ' . date('d/m/Y', strtotime($end_date)), 0, 1);
+    }
+    $pdf->Ln(8);
+    
+    // Balance Summary
+    $pdf->SetFont('helvetica', 'B', 12);
+    $pdf->Cell(0, 8, 'BALANCE SUMMARY', 0, 1);
+    $pdf->SetFont('helvetica', '', 10);
+    
+    $balance_class = $balance > 0 ? 'Credit' : ($balance < 0 ? 'Debit' : 'Settled');
+    $balance_abs = abs($balance);
+    
+    $summary_html = '<table border="1" cellpadding="5" cellspacing="0" style="width:100%;">
+        <tr>
+            <td style="width:50%;"><strong>Total Debit Transactions</strong></td>
+            <td style="width:50%;text-align:right;">' . number_format($debit_total, 2) . '</td>
+        </tr>
+        <tr>
+            <td><strong>Total Credit Transactions</strong></td>
+            <td style="text-align:right;">' . number_format($credit_total, 2) . '</td>
+        </tr>
+        <tr style="background-color:#f2f2f2;">
+            <td><strong>Balance (' . $balance_class . ')</strong></td>
+            <td style="text-align:right;' . ($balance > 0 ? 'color:#00b050;' : ($balance < 0 ? 'color:#c00000;' : '')) . '"><strong>' . number_format($balance_abs, 2) . '</strong></td>
+        </tr>
+    </table>';
+    
+    $pdf->writeHTML($summary_html, true, false, true, false, '');
+    $pdf->Ln(8);
+    
+    // Transactions Table
+    $pdf->SetFont('helvetica', 'B', 12);
+    $pdf->Cell(0, 8, 'TRANSACTION HISTORY', 0, 1);
+    $pdf->SetFont('helvetica', '', 9);
+    
+    $html = '<table border="1" cellpadding="4" cellspacing="0" style="width:100%;">
+        <thead>
+            <tr style="background-color:#f2f2f2; font-weight:bold;">
+                <th style="width:8%;">Date</th>
+                <th style="width:10%;">Reference</th>
+                <th style="width:20%;">Description</th>
+                <th style="width:10%;">Account</th>
+                <th style="width:10%;">Source</th>
+                <th style="width:10%;text-align:right;">Debit</th>
+                <th style="width:10%;text-align:right;">Credit</th>
+                <th style="width:12%;text-align:right;">Balance</th>
+            </tr>
+        </thead>
+        <tbody>';
+    
+    $display_transactions = array_slice($transactions, 0, 100);
+    
+    foreach ($display_transactions as $t) {
+        $date = isset($t['transaction_date']) ? date('d/m/Y', strtotime($t['transaction_date'])) : '';
+        $ref = $t['reference'] ?? '';
+        $desc = $t['description'] ?? '';
+        $account = $t['account'] ?? '';
+        $source = $t['source_label'] ?? 'GL Entry';
+        
+        $debit = isset($t['debit']) && $t['debit'] > 0 ? number_format($t['debit'], 2) : '';
+        $credit = isset($t['credit']) && $t['credit'] > 0 ? number_format($t['credit'], 2) : '';
+        $balance_val = isset($t['running_balance']) ? number_format($t['running_balance'], 2) : '';
+        $balance_color = $t['running_balance'] > 0 ? 'color:#00b050;' : ($t['running_balance'] < 0 ? 'color:#c00000;' : '');
+        
+        $html .= '<tr>
+            <td>' . $date . '</td>
+            <td>' . htmlspecialchars($ref) . '</td>
+            <td>' . htmlspecialchars($desc) . '</td>
+            <td>' . htmlspecialchars($account) . '</td>
+            <td>' . $source . '</td>
+            <td style="text-align:right;color:#c00000;">' . $debit . '</td>
+            <td style="text-align:right;color:#00b050;">' . $credit . '</td>
+            <td style="text-align:right;' . $balance_color . '">' . $balance_val . '</td>
+        </tr>';
+    }
+    
+    if (count($transactions) > 100) {
+        $html .= '<tr><td colspan="8" style="text-align:center;font-style:italic;">... and ' . (count($transactions) - 100) . ' more transactions</td></tr>';
+    }
+    
+    $html .= '</tbody></table>';
+    
+    $pdf->writeHTML($html, true, false, true, false, '');
+    
+    $filename = 'ledger_' . $entity['code'] . '_' . date('Ymd_His') . '.pdf';
+    $pdf->Output($filename, 'I');
     exit;
 }
 
-$combined_sql = implode(" UNION ALL ", $union_parts);
-
-// Total count
-$count_sql = "SELECT COUNT(*) AS total FROM ($combined_sql) AS combined";
-$count_stmt = $db->prepare($count_sql);
-$count_stmt->execute($query_params);
-$total_transactions = (int)$count_stmt->fetchColumn();
-$total_pages = max(1, (int)ceil($total_transactions / $per_page));
-if ($page > $total_pages) $page = $total_pages;
-
-// Opening balance (sum of all transactions before this page)
-$opening_balance = 0;
-if ($offset > 0) {
-    $ob_sql = "SELECT COALESCE(SUM(combined.signed_amount), 0) AS balance FROM ($combined_sql) AS combined ORDER BY combined.tx_date ASC LIMIT $offset";
-    $ob_stmt = $db->prepare($ob_sql);
-    $ob_stmt->execute($query_params);
-    $opening_balance = (float)$ob_stmt->fetchColumn();
-} else {
-    $opening_balance = 0;
+// Handle Excel Export
+if (isset($_GET['export']) && $_GET['export'] == 'excel') {
+    header('Content-Type: application/vnd.ms-excel');
+    header('Content-Disposition: attachment; filename="ledger_' . $entity['code'] . '_' . date('Ymd_His') . '.xls"');
+    header('Pragma: no-cache');
+    header('Expires: 0');
+    
+    echo "\xEF\xBB\xBF";
+    echo '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
+    echo '<head><meta charset="UTF-8">';
+    echo '<style>
+        td { mso-number-format:\@; }
+        .number { mso-number-format:"#,##0.00"; }
+        .header { font-weight: bold; background-color: #f2f2f2; }
+        .debit { color: #c00000; font-weight: bold; }
+        .credit { color: #00b050; font-weight: bold; }
+        .total { font-weight: bold; background-color: #e6f3ff; }
+    </style></head><body>';
+    
+    echo '<table border="1" cellpadding="3" cellspacing="0">';
+    echo '<tr><td colspan="8" class="header" style="text-align: center; font-size: 14px;">GENERAL LEDGER</td></tr>';
+    echo '<tr><td colspan="8"><strong>Entity:</strong> ' . htmlspecialchars($entity['name']) . ' (' . $entity['type_label'] . ')</td></tr>';
+    echo '<tr><td colspan="8"><strong>Code:</strong> ' . htmlspecialchars($entity['code']) . '</td></tr>';
+    echo '<tr><td colspan="8"><strong>Generated:</strong> ' . date('d/m/Y H:i:s') . '</td></tr>';
+    echo '<tr><td colspan="8"><strong>Balance:</strong> ' . ($balance > 0 ? 'Credit' : ($balance < 0 ? 'Debit' : 'Settled')) . ' ' . number_format(abs($balance), 2) . '</td></tr>';
+    echo '<tr><td colspan="8"></td></tr>';
+    
+    echo '<tr class="header">';
+    echo '<td>Date</td>';
+    echo '<td>Reference</td>';
+    echo '<td>Description</td>';
+    echo '<td>Account</td>';
+    echo '<td>Source</td>';
+    echo '<td>Debit</td>';
+    echo '<td>Credit</td>';
+    echo '<td>Balance</td>';
+    echo '</tr>';
+    
+    foreach ($transactions as $t) {
+        $date = isset($t['transaction_date']) ? date('d/m/Y', strtotime($t['transaction_date'])) : '';
+        $ref = $t['reference'] ?? '';
+        $desc = $t['description'] ?? '';
+        $account = $t['account'] ?? '';
+        $source = $t['source_label'] ?? 'GL Entry';
+        $debit = isset($t['debit']) && $t['debit'] > 0 ? number_format($t['debit'], 2) : '';
+        $credit = isset($t['credit']) && $t['credit'] > 0 ? number_format($t['credit'], 2) : '';
+        $balance_val = isset($t['running_balance']) ? number_format($t['running_balance'], 2) : '';
+        
+        echo '<tr>';
+        echo '<td>' . $date . '</td>';
+        echo '<td>' . htmlspecialchars($ref) . '</td>';
+        echo '<td>' . htmlspecialchars($desc) . '</td>';
+        echo '<td>' . htmlspecialchars($account) . '</td>';
+        echo '<td>' . $source . '</td>';
+        echo '<td class="number debit">' . $debit . '</td>';
+        echo '<td class="number credit">' . $credit . '</td>';
+        echo '<td class="number">' . $balance_val . '</td>';
+        echo '</tr>';
+    }
+    
+    echo '<tr class="total">';
+    echo '<td colspan="5">TOTALS:</td>';
+    echo '<td class="number debit">' . number_format($debit_total, 2) . '</td>';
+    echo '<td class="number credit">' . number_format($credit_total, 2) . '</td>';
+    echo '<td class="number">' . number_format($balance, 2) . '</td>';
+    echo '</tr>';
+    
+    echo '</table></body></html>';
+    exit;
 }
 
-// Page transactions
-$data_sql = "SELECT * FROM ($combined_sql) AS combined ORDER BY combined.tx_date ASC LIMIT $per_page OFFSET $offset";
-$data_stmt = $db->prepare($data_sql);
-$data_stmt->execute($query_params);
-$transactions = $data_stmt->fetchAll();
-
-// Calculate totals for summary
-$summary_sql = "SELECT COUNT(*) AS tx_count, COALESCE(SUM(CASE WHEN combined.signed_amount > 0 THEN combined.signed_amount ELSE 0 END), 0) AS total_inflows, COALESCE(SUM(CASE WHEN combined.signed_amount < 0 THEN ABS(combined.signed_amount) ELSE 0 END), 0) AS total_outflows, COALESCE(SUM(combined.signed_amount), 0) AS net_balance FROM ($combined_sql) AS combined";
-$summary_stmt = $db->prepare($summary_sql);
-$summary_stmt->execute($query_params);
-$summary = $summary_stmt->fetch();
-
-$page_title = 'Ledger: ' . $entity_name;
+$page_title = 'General Ledger - ' . $entity['name'];
 include '../includes/header.php';
 ?>
 
-<style>
-    .ledger-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border-radius: 10px;
-        padding: 20px;
-        margin-bottom: 20px;
-    }
-    .ledger-header h1 { color: white; }
-    .ledger-header .text-muted { color: rgba(255,255,255,0.7) !important; }
-    .summary-card { border-radius: 10px; border: none; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
-    .tx-inflow { color: #28a745; font-weight: 600; }
-    .tx-outflow { color: #dc3545; font-weight: 600; }
-    .running-balance { font-weight: 700; }
-    .entity-type-badge {
-        font-size: 0.7rem;
-        padding: 0.2rem 0.4rem;
-        border-radius: 4px;
-    }
-    .badge-client { background-color: #007bff; color: white; }
-    .badge-custodian { background-color: #17a2b8; color: white; }
-    .badge-employee { background-color: #28a745; color: white; }
-    .badge-agent { background-color: #ffc107; color: #212529; }
-    .badge-broker { background-color: #fd7e14; color: white; }
-    .badge-supplier { background-color: #e83e8c; color: white; }
-    .badge-chart_account { background-color: #6f42c1; color: white; }
-    .badge-bank_account { background-color: #20c997; color: white; }
-    .page-link { color: #667eea; }
-    .page-item.active .page-link { background-color: #667eea; border-color: #667eea; }
-    .source-receipt { color: #28a745; }
-    .source-payment { color: #dc3545; }
-    .source-gl_entry { color: #6f42c1; }
-</style>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><?php echo $page_title; ?></title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #4F46E5;
+            --primary-light: #818CF8;
+            --primary-dark: #3730A3;
+            --success: #10B981;
+            --danger: #EF4444;
+            --warning: #F59E0B;
+            --gray-50: #F9FAFB;
+            --gray-100: #F3F4F6;
+            --gray-200: #E5E7EB;
+            --gray-300: #D1D5DB;
+            --gray-400: #9CA3AF;
+            --gray-500: #6B7280;
+            --gray-600: #4B5563;
+            --gray-700: #374151;
+            --gray-800: #1F2937;
+            --gray-900: #111827;
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            --radius: 12px;
+            --radius-sm: 8px;
+            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
 
-<div class="container-fluid px-0">
-    <!-- Header -->
-    <div class="ledger-header">
-        <div class="d-flex justify-content-between align-items-start">
-            <div>
-                <div class="mb-2">
-                    <span class="entity-type-badge badge-<?php echo $entity_type; ?>">
-                        <?php echo ucfirst($entity_type); ?>
-                    </span>
-                    <code class="ms-2 text-white bg-dark bg-opacity-25 px-2 py-1 rounded"><?php echo htmlspecialchars($entity_code); ?></code>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--gray-50);
+            color: var(--gray-800);
+            line-height: 1.6;
+        }
+
+        .modern-container {
+            max-width: 1440px;
+            margin: 0 auto;
+            padding: 24px 32px;
+        }
+
+        /* Back Button */
+        .back-btn-modern {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 20px;
+            background: white;
+            border: 1px solid var(--gray-200);
+            border-radius: var(--radius-sm);
+            color: var(--gray-600);
+            font-weight: 500;
+            font-size: 14px;
+            transition: var(--transition);
+            text-decoration: none;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .back-btn-modern:hover {
+            background: var(--gray-50);
+            border-color: var(--gray-300);
+            color: var(--gray-800);
+            transform: translateX(-2px);
+            box-shadow: var(--shadow-md);
+            text-decoration: none;
+        }
+
+        /* Entity Header Card */
+        .entity-header-modern {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            border-radius: var(--radius);
+            padding: 32px 40px;
+            margin-bottom: 28px;
+            box-shadow: 0 8px 32px rgba(79, 70, 229, 0.25);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .entity-header-modern::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -20%;
+            width: 400px;
+            height: 400px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+
+        .entity-header-modern::after {
+            content: '';
+            position: absolute;
+            bottom: -60%;
+            left: -10%;
+            width: 300px;
+            height: 300px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+
+        .entity-header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: relative;
+            z-index: 1;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+
+        .entity-info-left {
+            display: flex;
+            align-items: center;
+            gap: 24px;
+        }
+
+        .entity-icon-wrapper {
+            width: 72px;
+            height: 72px;
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            color: white;
+            backdrop-filter: blur(10px);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .entity-name-section h1 {
+            color: white;
+            font-size: 28px;
+            font-weight: 700;
+            margin: 0 0 4px 0;
+            letter-spacing: -0.5px;
+        }
+
+        .entity-meta {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .meta-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 14px;
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 20px;
+            color: white;
+            font-size: 13px;
+            font-weight: 500;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .meta-badge i {
+            font-size: 14px;
+        }
+
+        .status-badge {
+            padding: 4px 16px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-badge.active {
+            background: rgba(16, 185, 129, 0.3);
+            color: #6EE7B7;
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+
+        .status-badge.inactive {
+            background: rgba(239, 68, 68, 0.3);
+            color: #FCA5A5;
+            border: 1px solid rgba(239, 68, 68, 0.2);
+        }
+
+        .balance-cards {
+            display: flex;
+            gap: 16px;
+        }
+
+        .balance-card-modern {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: var(--radius-sm);
+            padding: 16px 24px;
+            min-width: 120px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: var(--transition);
+        }
+
+        .balance-card-modern:hover {
+            background: rgba(255, 255, 255, 0.15);
+            transform: translateY(-2px);
+        }
+
+        .balance-card-modern .label {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 12px;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .balance-card-modern .amount {
+            font-size: 22px;
+            font-weight: 700;
+            color: white;
+            margin-top: 2px;
+        }
+
+        .balance-card-modern .amount.positive {
+            color: #6EE7B7;
+        }
+
+        .balance-card-modern .amount.negative {
+            color: #FCA5A5;
+        }
+
+        .balance-card-modern .sub-label {
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 11px;
+            margin-top: 2px;
+        }
+
+        /* Filter Section */
+        .filter-section-modern {
+            background: white;
+            border-radius: var(--radius);
+            padding: 20px 24px;
+            margin-bottom: 24px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--gray-200);
+        }
+
+        .filter-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr 1fr;
+            gap: 16px;
+            align-items: end;
+        }
+
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .filter-group label {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--gray-600);
+        }
+
+        .filter-group .form-control {
+            padding: 8px 12px;
+            border: 1px solid var(--gray-200);
+            border-radius: var(--radius-sm);
+            font-size: 14px;
+            transition: var(--transition);
+            background: white;
+        }
+
+        .filter-group .form-control:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+        }
+
+        .filter-group .input-group {
+            display: flex;
+            align-items: stretch;
+        }
+
+        .filter-group .input-group .form-control {
+            border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+            flex: 1;
+        }
+
+        .filter-group .input-group .btn {
+            border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+            padding: 8px 16px;
+            background: var(--gray-100);
+            border: 1px solid var(--gray-200);
+            border-left: none;
+            color: var(--gray-600);
+            transition: var(--transition);
+        }
+
+        .filter-group .input-group .btn:hover {
+            background: var(--gray-200);
+        }
+
+        .filter-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .btn-modern {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 20px;
+            border-radius: var(--radius-sm);
+            font-weight: 600;
+            font-size: 14px;
+            border: none;
+            transition: var(--transition);
+            cursor: pointer;
+            text-decoration: none;
+        }
+
+        .btn-modern-primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .btn-modern-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
+        }
+
+        .btn-modern-secondary {
+            background: var(--gray-100);
+            color: var(--gray-700);
+        }
+
+        .btn-modern-secondary:hover {
+            background: var(--gray-200);
+        }
+
+        .btn-modern-success {
+            background: var(--success);
+            color: white;
+        }
+
+        .btn-modern-success:hover {
+            background: #059669;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        }
+
+        .btn-modern-danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        .btn-modern-danger:hover {
+            background: #DC2626;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+        }
+
+        /* Transactions Table */
+        .table-wrapper {
+            background: white;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            border: 1px solid var(--gray-200);
+            overflow: hidden;
+        }
+
+        .table-header {
+            padding: 16px 24px;
+            background: var(--gray-50);
+            border-bottom: 1px solid var(--gray-200);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .table-header h6 {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--gray-800);
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .table-header .badge-count {
+            padding: 4px 14px;
+            background: var(--primary);
+            color: white;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .table-responsive {
+            overflow-x: auto;
+        }
+
+        .table-modern {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+
+        .table-modern thead {
+            background: var(--gray-50);
+            border-bottom: 2px solid var(--gray-200);
+        }
+
+        .table-modern thead th {
+            padding: 12px 16px;
+            text-align: left;
+            font-weight: 600;
+            color: var(--gray-600);
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .table-modern thead th.text-end {
+            text-align: right;
+        }
+
+        .table-modern tbody tr {
+            border-bottom: 1px solid var(--gray-100);
+            transition: var(--transition);
+        }
+
+        .table-modern tbody tr:hover {
+            background: var(--gray-50);
+        }
+
+        .table-modern tbody tr:last-child {
+            border-bottom: none;
+        }
+
+        .table-modern tbody td {
+            padding: 12px 16px;
+            vertical-align: middle;
+        }
+
+        .table-modern tbody td.text-end {
+            text-align: right;
+        }
+
+        .source-badge {
+            padding: 3px 12px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+
+        .source-badge.receipt {
+            background: #D1FAE5;
+            color: #065F46;
+        }
+
+        .source-badge.payment {
+            background: #FEE2E2;
+            color: #991B1B;
+        }
+
+        .source-badge.gl_entry {
+            background: #E0E7FF;
+            color: #3730A3;
+        }
+
+        .text-debit {
+            color: var(--danger);
+            font-weight: 600;
+        }
+
+        .text-credit {
+            color: var(--success);
+            font-weight: 600;
+        }
+
+        .text-balance-positive {
+            color: var(--success);
+            font-weight: 600;
+        }
+
+        .text-balance-negative {
+            color: var(--danger);
+            font-weight: 600;
+        }
+
+        .text-balance-zero {
+            color: var(--gray-400);
+            font-weight: 600;
+        }
+
+        .table-footer {
+            padding: 12px 24px;
+            background: var(--gray-50);
+            border-top: 2px solid var(--gray-200);
+            font-weight: 600;
+        }
+
+        .table-footer .totals-row {
+            display: flex;
+            justify-content: flex-end;
+            gap: 32px;
+        }
+
+        .table-footer .totals-row .total-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .table-footer .totals-row .total-item .label {
+            color: var(--gray-600);
+            font-weight: 500;
+        }
+
+        .table-footer .totals-row .total-item .value {
+            font-weight: 700;
+            font-size: 15px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+        }
+
+        .empty-state i {
+            font-size: 48px;
+            color: var(--gray-300);
+            margin-bottom: 16px;
+        }
+
+        .empty-state h5 {
+            color: var(--gray-600);
+            margin-bottom: 8px;
+        }
+
+        .empty-state p {
+            color: var(--gray-400);
+        }
+
+        /* Animations */
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .animate-in {
+            animation: fadeInUp 0.5s ease forwards;
+        }
+
+        .animate-in-delay-1 {
+            animation-delay: 0.1s;
+            opacity: 0;
+        }
+
+        .animate-in-delay-2 {
+            animation-delay: 0.2s;
+            opacity: 0;
+        }
+
+        .animate-in-delay-3 {
+            animation-delay: 0.3s;
+            opacity: 0;
+        }
+
+        /* Responsive */
+        @media (max-width: 1200px) {
+            .filter-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        @media (max-width: 992px) {
+            .entity-header-content {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .balance-cards {
+                justify-content: stretch;
+            }
+
+            .balance-card-modern {
+                flex: 1;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .modern-container {
+                padding: 16px;
+            }
+
+            .entity-header-modern {
+                padding: 24px;
+            }
+
+            .entity-info-left {
+                flex-direction: column;
+                text-align: center;
+            }
+
+            .entity-icon-wrapper {
+                width: 56px;
+                height: 56px;
+                font-size: 24px;
+            }
+
+            .entity-name-section h1 {
+                font-size: 22px;
+            }
+
+            .balance-cards {
+                flex-direction: column;
+            }
+
+            .filter-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .filter-actions {
+                justify-content: stretch;
+            }
+
+            .filter-actions .btn-modern {
+                flex: 1;
+                justify-content: center;
+            }
+
+            .table-header {
+                flex-direction: column;
+                gap: 8px;
+                align-items: stretch;
+                text-align: center;
+            }
+
+            .table-footer .totals-row {
+                flex-direction: column;
+                gap: 8px;
+                align-items: stretch;
+            }
+
+            .table-footer .totals-row .total-item {
+                justify-content: space-between;
+            }
+        }
+
+        @media print {
+            .back-btn-modern,
+            .filter-section-modern {
+                display: none !important;
+            }
+
+            .entity-header-modern {
+                background: #4F46E5 !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
+
+            .table-wrapper {
+                box-shadow: none !important;
+                border: 1px solid #ddd !important;
+            }
+        }
+
+        /* Scrollbar Styling */
+        .table-responsive::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        .table-responsive::-webkit-scrollbar-track {
+            background: var(--gray-100);
+            border-radius: 4px;
+        }
+
+        .table-responsive::-webkit-scrollbar-thumb {
+            background: var(--gray-300);
+            border-radius: 4px;
+        }
+
+        .table-responsive::-webkit-scrollbar-thumb:hover {
+            background: var(--gray-400);
+        }
+    </style>
+</head>
+<body>
+
+<div class="modern-container">
+    <?php if (!empty($error_message)): ?>
+        <div class="alert alert-danger alert-dismissible fade show" role="alert" style="border-radius: var(--radius-sm);">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i>
+            <?php echo $error_message; ?>
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    <?php endif; ?>
+
+    <!-- Back Button -->
+    <div class="animate-in">
+        <a href="debtors.php<?php echo isset($_GET['return_to']) ? '?' . htmlspecialchars($_GET['return_to']) : ''; ?>" 
+           class="back-btn-modern">
+            <i class="bi bi-arrow-left"></i>
+            Back to Debtors Report
+        </a>
+    </div>
+
+    <br>
+
+    <!-- Entity Header -->
+    <div class="entity-header-modern animate-in animate-in-delay-1">
+        <div class="entity-header-content">
+            <div class="entity-info-left">
+                <div class="entity-icon-wrapper">
+                    <i class="bi <?php echo $entity['icon'] ?? 'bi-building'; ?>"></i>
                 </div>
-                <h1 class="h3 mb-1"><?php echo htmlspecialchars($entity_name); ?></h1>
-                <p class="mb-0 text-white-50">
-                    <?php echo number_format($total_transactions); ?> transactions | 
-                    Page <?php echo $page; ?> of <?php echo $total_pages; ?>
-                </p>
+                <div class="entity-name-section">
+                    <h1><?php echo htmlspecialchars($entity['name']); ?></h1>
+                    <div class="entity-meta">
+                        <span class="meta-badge">
+                            <i class="bi bi-tag"></i>
+                            <?php echo $entity['type_label']; ?>
+                        </span>
+                        <span class="meta-badge">
+                            <i class="bi bi-hash"></i>
+                            <?php echo htmlspecialchars($entity['code_label']); ?>: <?php echo htmlspecialchars($entity['code']); ?>
+                        </span>
+                        <?php if (isset($entity['status'])): ?>
+                            <span class="status-badge <?php echo ($entity['status'] == 'active' && $entity['is_active'] == 1) ? 'active' : 'inactive'; ?>">
+                                <?php echo ($entity['status'] == 'active' && $entity['is_active'] == 1) ? 'Active' : 'Inactive'; ?>
+                            </span>
+                        <?php endif; ?>
+                        <?php if (isset($entity['created_at'])): ?>
+                            <span class="meta-badge">
+                                <i class="bi bi-calendar3"></i>
+                                Since <?php echo date('M Y', strtotime($entity['created_at'])); ?>
+                            </span>
+                        <?php endif; ?>
+                    </div>
+                </div>
             </div>
-            <div>
-                <a href="debtors.php<?php echo $entity_type ? '?entity_type=' . urlencode($entity_type) : ''; ?>" class="btn btn-light btn-sm">
-                    <i class="bi bi-arrow-left me-1"></i>Back
-                </a>
+            <div class="balance-cards">
+                <div class="balance-card-modern">
+                    <div class="label">Balance</div>
+                    <div class="amount <?php echo $balance > 0 ? 'positive' : ($balance < 0 ? 'negative' : ''); ?>">
+                        <?php echo formatCurrency(abs($balance)); ?>
+                    </div>
+                    <div class="sub-label">
+                        <?php echo $balance > 0 ? 'Credit' : ($balance < 0 ? 'Debit' : 'Settled'); ?>
+                    </div>
+                </div>
+                <div class="balance-card-modern">
+                    <div class="label">Total Debit</div>
+                    <div class="amount negative">
+                        <?php echo formatCurrency($debit_total); ?>
+                    </div>
+                </div>
+                <div class="balance-card-modern">
+                    <div class="label">Total Credit</div>
+                    <div class="amount positive">
+                        <?php echo formatCurrency($credit_total); ?>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
 
-    <!-- Summary Cards -->
-    <div class="row g-3 mb-4">
-        <div class="col-md-3">
-            <div class="card summary-card">
-                <div class="card-body">
-                    <h6 class="text-muted mb-1">Total Inflows (Credit)</h6>
-                    <h4 class="tx-inflow mb-0">TZS <?php echo number_format($summary['total_inflows'], 2); ?></h4>
+    <!-- Filters Section -->
+    <div class="filter-section-modern animate-in animate-in-delay-2">
+        <form method="GET" id="filterForm">
+            <input type="hidden" name="type" value="<?php echo htmlspecialchars($entity_type); ?>">
+            <input type="hidden" name="id" value="<?php echo htmlspecialchars($entity_id); ?>">
+            <?php if (isset($_GET['return_to'])): ?>
+                <input type="hidden" name="return_to" value="<?php echo htmlspecialchars($_GET['return_to']); ?>">
+            <?php endif; ?>
+            
+            <div class="filter-grid">
+                <div class="filter-group">
+                    <label>From Date</label>
+                    <input type="date" class="form-control" name="start_date" 
+                           value="<?php echo htmlspecialchars($start_date); ?>"
+                           max="<?php echo date('Y-m-d'); ?>">
+                </div>
+                
+                <div class="filter-group">
+                    <label>To Date</label>
+                    <input type="date" class="form-control" name="end_date" 
+                           value="<?php echo htmlspecialchars($end_date); ?>"
+                           max="<?php echo date('Y-m-d'); ?>">
+                </div>
+                
+                <div class="filter-group">
+                    <label>Search</label>
+                    <div class="input-group">
+                        <input type="text" class="form-control" name="search" 
+                               placeholder="Reference or description..."
+                               value="<?php echo htmlspecialchars($search); ?>">
+                        <button class="btn" type="submit">
+                            <i class="bi bi-search"></i>
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="filter-group">
+                    <label>Actions</label>
+                    <div class="filter-actions">
+                        <button type="submit" class="btn-modern btn-modern-primary">
+                            <i class="bi bi-funnel"></i> Filter
+                        </button>
+                        <button type="button" class="btn-modern btn-modern-secondary" onclick="resetFilters()">
+                            <i class="bi bi-arrow-counterclockwise"></i> Reset
+                        </button>
+                        <a href="?<?php echo http_build_query(array_merge($_GET, ['export' => 'pdf'])); ?>" 
+                           class="btn-modern btn-modern-danger" target="_blank">
+                            <i class="bi bi-file-pdf"></i> PDF
+                        </a>
+                        <a href="?<?php echo http_build_query(array_merge($_GET, ['export' => 'excel'])); ?>" 
+                           class="btn-modern btn-modern-success">
+                            <i class="bi bi-file-excel"></i> Excel
+                        </a>
+                    </div>
                 </div>
             </div>
-        </div>
-        <div class="col-md-3">
-            <div class="card summary-card">
-                <div class="card-body">
-                    <h6 class="text-muted mb-1">Total Outflows (Debit)</h6>
-                    <h4 class="tx-outflow mb-0">TZS <?php echo number_format($summary['total_outflows'], 2); ?></h4>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-3">
-            <div class="card summary-card">
-                <div class="card-body">
-                    <h6 class="text-muted mb-1">Net Balance</h6>
-                    <?php $net_balance = (float)$summary['net_balance']; ?>
-                    <h4 class="mb-0 <?php echo $net_balance >= 0 ? 'tx-inflow' : 'tx-outflow'; ?>">
-                        TZS <?php echo number_format(abs($net_balance), 2); ?>
-                    </h4>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-3">
-            <div class="card summary-card">
-                <div class="card-body">
-                    <h6 class="text-muted mb-1">Status</h6>
-                    <?php if ($net_balance > 0): ?>
-                        <h4 class="tx-inflow mb-0">In Credit</h4>
-                        <small class="text-muted">Entity is owed</small>
-                    <?php elseif ($net_balance < 0): ?>
-                        <h4 class="tx-outflow mb-0">In Debit</h4>
-                        <small class="text-muted">Entity owes us</small>
-                    <?php else: ?>
-                        <h4 class="text-muted mb-0">Settled</h4>
-                        <small class="text-muted">Zero balance</small>
-                    <?php endif; ?>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Per Page Selector -->
-    <div class="d-flex justify-content-between align-items-center mb-3">
-        <div>
-            <small class="text-muted">
-                Showing 
-                <?php echo count($transactions); ?> of 
-                <?php echo $total_transactions; ?> transactions
-                (opening balance: TZS <?php echo number_format($opening_balance, 2); ?>)
-            </small>
-        </div>
-        <div class="d-flex align-items-center">
-            <label class="form-label me-2 mb-0"><small>Per page:</small></label>
-            <select class="form-select form-select-sm" style="width: auto;" onchange="window.location.href='?type=<?php echo urlencode($entity_type); ?>&id=<?php echo urlencode($entity_id); ?>&per_page='+this.value">
-                <option value="25" <?php echo $per_page == 25 ? 'selected' : ''; ?>>25</option>
-                <option value="50" <?php echo $per_page == 50 ? 'selected' : ''; ?>>50</option>
-                <option value="100" <?php echo $per_page == 100 ? 'selected' : ''; ?>>100</option>
-                <option value="200" <?php echo $per_page == 200 ? 'selected' : ''; ?>>200</option>
-                <option value="500" <?php echo $per_page == 500 ? 'selected' : ''; ?>>500</option>
-            </select>
-        </div>
+        </form>
     </div>
 
     <!-- Transactions Table -->
-    <div class="card">
-        <div class="card-body p-0">
+    <div class="animate-in animate-in-delay-3">
+        <div class="table-wrapper">
+            <div class="table-header">
+                <h6>
+                    <i class="bi bi-list-ul"></i>
+                    Transaction History
+                    <?php if ($entity_type === 'client'): ?>
+                        <small style="font-weight:400;color:var(--gray-400);font-size:12px;">
+                            (Receipts, Payments & GL Entries)
+                        </small>
+                    <?php else: ?>
+                        <small style="font-weight:400;color:var(--gray-400);font-size:12px;">
+                            (GL Entries Only)
+                        </small>
+                    <?php endif; ?>
+                </h6>
+                <div>
+                    <span class="badge-count">
+                        <i class="bi bi-file-text"></i> <?php echo count($transactions); ?> Transactions
+                    </span>
+                    <?php if ($start_date && $end_date): ?>
+                        <span class="badge-count" style="background: var(--gray-500);">
+                            <i class="bi bi-calendar-range"></i>
+                            <?php echo date('d M Y', strtotime($start_date)); ?> - <?php echo date('d M Y', strtotime($end_date)); ?>
+                        </span>
+                    <?php endif; ?>
+                </div>
+            </div>
+            
             <?php if (empty($transactions)): ?>
-                <div class="text-center py-5">
-                    <i class="bi bi-inbox" style="font-size: 3rem; color: #6c757d;"></i>
-                    <h5 class="mt-3 text-muted">No transactions found</h5>
+                <div class="empty-state">
+                    <i class="bi bi-inbox"></i>
+                    <h5>No transactions found</h5>
+                    <p>Try adjusting your filter criteria or date range</p>
                 </div>
             <?php else: ?>
                 <div class="table-responsive">
-                    <table class="table table-hover table-sm mb-0">
-                        <thead class="table-light">
+                    <table class="table-modern">
+                        <thead>
                             <tr>
-                                <th>#</th>
                                 <th>Date</th>
-                                <th>Source</th>
                                 <th>Reference</th>
                                 <th>Description</th>
                                 <th>Account</th>
-                                <th class="text-end">Debit (TZS)</th>
-                                <th class="text-end">Credit (TZS)</th>
-                                <th class="text-end">Balance (TZS)</th>
+                                <th>Source</th>
+                                <th class="text-end">Debit</th>
+                                <th class="text-end">Credit</th>
+                                <th class="text-end">Balance</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <?php 
-                            $running = $opening_balance;
-                            $row_num = $offset + 1;
-                            foreach ($transactions as $tx):
-                                $amount = (float)$tx['signed_amount'];
-                                $running += $amount;
-                                $is_debit = $amount < 0;
-                                $debit = $is_debit ? abs($amount) : 0;
-                                $credit = $is_debit ? 0 : $amount;
+                            <?php foreach ($transactions as $transaction): 
+                                $date = isset($transaction['transaction_date']) ? date('d/m/Y', strtotime($transaction['transaction_date'])) : '';
+                                $ref = $transaction['reference'] ?? '';
+                                $desc = $transaction['description'] ?? '';
+                                $account = $transaction['account'] ?? '';
+                                $source = $transaction['source_label'] ?? 'GL Entry';
+                                
+                                // Source badge class
+                                $source_class = 'gl_entry';
+                                if ($source === 'Receipt') $source_class = 'receipt';
+                                elseif ($source === 'Payment') $source_class = 'payment';
+                                
+                                $debit = isset($transaction['debit']) && $transaction['debit'] > 0 ? $transaction['debit'] : 0;
+                                $credit = isset($transaction['credit']) && $transaction['credit'] > 0 ? $transaction['credit'] : 0;
+                                $balance_val = isset($transaction['running_balance']) ? $transaction['running_balance'] : 0;
+                                
+                                $balance_class = $balance_val > 0 ? 'text-balance-positive' : ($balance_val < 0 ? 'text-balance-negative' : 'text-balance-zero');
                             ?>
                                 <tr>
-                                    <td class="text-muted"><?php echo $row_num++; ?></td>
-                                    <td><?php echo date('d M Y', strtotime($tx['tx_date'])); ?></td>
+                                    <td><strong><?php echo $date; ?></strong></td>
+                                    <td><code style="background: var(--gray-100); padding: 2px 8px; border-radius: 4px; font-size: 13px;"><?php echo htmlspecialchars($ref); ?></code></td>
+                                    <td><?php echo htmlspecialchars($desc); ?></td>
+                                    <td><span style="background: var(--gray-100); padding: 2px 8px; border-radius: 4px; font-size: 12px;"><?php echo htmlspecialchars($account); ?></span></td>
                                     <td>
-                                        <?php if ($tx['source'] === 'receipt'): ?>
-                                            <span class="badge bg-success bg-opacity-10 text-success">Receipt</span>
-                                        <?php elseif ($tx['source'] === 'payment'): ?>
-                                            <span class="badge bg-danger bg-opacity-10 text-danger">Payment</span>
-                                        <?php else: ?>
-                                            <span class="badge bg-secondary bg-opacity-10 text-secondary">GL Entry</span>
-                                        <?php endif; ?>
+                                        <span class="source-badge <?php echo $source_class; ?>">
+                                            <?php echo $source; ?>
+                                        </span>
                                     </td>
-                                    <td><code><?php echo htmlspecialchars($tx['reference']); ?></code></td>
-                                    <td><?php echo htmlspecialchars($tx['description']); ?></td>
-                                    <td><small class="text-muted"><?php echo htmlspecialchars($tx['bank_account'] ?? '-'); ?></small></td>
-                                    <td class="text-end text-danger fw-bold"><?php echo $debit > 0 ? number_format($debit, 2) : '-'; ?></td>
-                                    <td class="text-end text-success fw-bold"><?php echo $credit > 0 ? number_format($credit, 2) : '-'; ?></td>
-                                    <td class="text-end running-balance <?php echo $running >= 0 ? 'tx-inflow' : 'tx-outflow'; ?>">
-                                        <?php echo number_format($running, 2); ?>
+                                    <td class="text-end text-debit">
+                                        <?php echo $debit > 0 ? number_format($debit, 2) : '-'; ?>
+                                    </td>
+                                    <td class="text-end text-credit">
+                                        <?php echo $credit > 0 ? number_format($credit, 2) : '-'; ?>
+                                    </td>
+                                    <td class="text-end <?php echo $balance_class; ?>">
+                                        <?php echo number_format($balance_val, 2); ?>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
                         </tbody>
-                        <tfoot class="table-light">
-                            <tr>
-                                <th colspan="7" class="text-end">Page Closing Balance:</th>
-                                <th class="text-end running-balance <?php echo $running >= 0 ? 'tx-inflow' : 'tx-outflow'; ?>" colspan="2">
-                                    TZS <?php echo number_format($running, 2); ?>
-                                </th>
-                            </tr>
-                        </tfoot>
                     </table>
+                </div>
+                
+                <div class="table-footer">
+                    <div class="totals-row">
+                        <div class="total-item">
+                            <span class="label">Total Debit:</span>
+                            <span class="value text-debit"><?php echo number_format($debit_total, 2); ?></span>
+                        </div>
+                        <div class="total-item">
+                            <span class="label">Total Credit:</span>
+                            <span class="value text-credit"><?php echo number_format($credit_total, 2); ?></span>
+                        </div>
+                        <div class="total-item">
+                            <span class="label">Balance:</span>
+                            <span class="value <?php echo $balance > 0 ? 'text-credit' : ($balance < 0 ? 'text-debit' : ''); ?>">
+                                <?php echo number_format($balance, 2); ?>
+                                <span style="font-size: 12px; font-weight: 400; color: var(--gray-400);">
+                                    (<?php echo $balance > 0 ? 'Credit' : ($balance < 0 ? 'Debit' : 'Settled'); ?>)
+                                </span>
+                            </span>
+                        </div>
+                    </div>
                 </div>
             <?php endif; ?>
         </div>
-        <?php if ($total_pages > 1): ?>
-            <div class="card-footer">
-                <nav>
-                    <ul class="pagination pagination-sm justify-content-center mb-0">
-                        <li class="page-item <?php echo $page <= 1 ? 'disabled' : ''; ?>">
-                            <a class="page-link" href="?type=<?php echo urlencode($entity_type); ?>&id=<?php echo urlencode($entity_id); ?>&per_page=<?php echo $per_page; ?>&page=1">&laquo;&laquo;</a>
-                        </li>
-                        <li class="page-item <?php echo $page <= 1 ? 'disabled' : ''; ?>">
-                            <a class="page-link" href="?type=<?php echo urlencode($entity_type); ?>&id=<?php echo urlencode($entity_id); ?>&per_page=<?php echo $per_page; ?>&page=<?php echo max(1, $page - 1); ?>">&laquo;</a>
-                        </li>
-                        <?php
-                        $start_p = max(1, $page - 2);
-                        $end_p = min($total_pages, $page + 2);
-                        if ($start_p > 1): ?>
-                            <li class="page-item disabled"><span class="page-link">...</span></li>
-                        <?php endif;
-                        for ($i = $start_p; $i <= $end_p; $i++): ?>
-                            <li class="page-item <?php echo $i == $page ? 'active' : ''; ?>">
-                                <a class="page-link" href="?type=<?php echo urlencode($entity_type); ?>&id=<?php echo urlencode($entity_id); ?>&per_page=<?php echo $per_page; ?>&page=<?php echo $i; ?>"><?php echo $i; ?></a>
-                            </li>
-                        <?php endfor;
-                        if ($end_p < $total_pages): ?>
-                            <li class="page-item disabled"><span class="page-link">...</span></li>
-                        <?php endif; ?>
-                        <li class="page-item <?php echo $page >= $total_pages ? 'disabled' : ''; ?>">
-                            <a class="page-link" href="?type=<?php echo urlencode($entity_type); ?>&id=<?php echo urlencode($entity_id); ?>&per_page=<?php echo $per_page; ?>&page=<?php echo min($total_pages, $page + 1); ?>">&raquo;</a>
-                        </li>
-                        <li class="page-item <?php echo $page >= $total_pages ? 'disabled' : ''; ?>">
-                            <a class="page-link" href="?type=<?php echo urlencode($entity_type); ?>&id=<?php echo urlencode($entity_id); ?>&per_page=<?php echo $per_page; ?>&page=<?php echo $total_pages; ?>">&raquo;&raquo;</a>
-                        </li>
-                    </ul>
-                </nav>
-            </div>
-        <?php endif; ?>
     </div>
 </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Reset filters
+    window.resetFilters = function() {
+        const form = document.getElementById('filterForm');
+        form.querySelectorAll('input[type="date"], input[type="text"]').forEach(input => {
+            input.value = '';
+        });
+        form.submit();
+    };
+    
+    // Auto-submit on Enter key in search
+    document.querySelector('input[name="search"]')?.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            document.getElementById('filterForm').submit();
+        }
+    });
+});
+</script>
 
 <?php include '../includes/footer.php'; ?>

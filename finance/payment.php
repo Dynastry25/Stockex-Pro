@@ -1,4 +1,5 @@
 <?php
+// /finance/payment.php - Payment Processing System
 require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
 
@@ -23,6 +24,19 @@ if (empty($_SESSION['csrf_token'])) {
 $db = getDBConnection();
 $success_message = '';
 $error_message = '';
+
+// =====================================================
+// STATUTORY ACCOUNT CODES
+// =====================================================
+define('STATUTORY_ACCOUNTS', ['2121', '2122', '2123', '2124', '2125', '2126']);
+define('STATUTORY_ACCOUNT_NAMES', [
+    '2121' => 'NSSF Payable',
+    '2122' => 'SDL Payable',
+    '2123' => 'WCF Payable',
+    '2124' => 'OSHA Payable',
+    '2125' => 'Health Insurance Payable',
+    '2126' => 'PAYE Payable'
+]);
 
 // =====================================================
 // HELPER FUNCTIONS
@@ -123,83 +137,6 @@ function getChartAccountInfo($db, $account_code) {
     return $stmt->fetch();
 }
 
-function getAppropriateAccountLevel($db, $account_type) {
-    try {
-        $query = "
-            SELECT account_code, account_name, level, is_group_account 
-            FROM chart_of_accounts 
-            WHERE account_type = ? 
-            AND is_active = 1 
-            AND (is_group_account = 0 OR level IN (2, 3, 4, 5))
-            ORDER BY level DESC, account_code
-            LIMIT 1
-        ";
-        
-        $stmt = $db->prepare($query);
-        $stmt->execute([$account_type]);
-        $account = $stmt->fetch();
-        
-        if ($account) {
-            return $account;
-        }
-        
-        $fallback_query = "
-            SELECT account_code, account_name 
-            FROM chart_of_accounts 
-            WHERE account_type = 'expense' 
-            AND is_active = 1 
-            LIMIT 1
-        ";
-        $stmt = $db->prepare($fallback_query);
-        $stmt->execute();
-        return $stmt->fetch() ?: ['account_code' => '51', 'account_name' => 'Operating Expenses'];
-        
-    } catch (Exception $e) {
-        error_log("Error getting appropriate account level: " . $e->getMessage());
-        return ['account_code' => '51', 'account_name' => 'Operating Expenses'];
-    }
-}
-
-function getTradeDetails($db, $trade_reference) {
-    $stmt = $db->prepare("
-        SELECT t.*, 
-               c.fee_type as client_fee_type, 
-               c.default_brokerage_fee,
-               c.client_name
-        FROM trades t
-        LEFT JOIN clients c ON t.client_cds_account = c.cds_account
-        WHERE t.trade_reference = ?
-    ");
-    $stmt->execute([$trade_reference]);
-    return $stmt->fetch();
-}
-
-function getClientBalance($db, $client_cds_account) {
-    $stmt = $db->prepare("
-        SELECT 
-            COALESCE(SUM(CASE WHEN trade_side = 'buy' THEN consideration ELSE -consideration END), 0) as net_position,
-            COUNT(*) as trade_count
-        FROM trades 
-        WHERE client_cds_account = ? 
-        AND status = 'active'
-    ");
-    $stmt->execute([$client_cds_account]);
-    return $stmt->fetch();
-}
-
-function getUnsettledTrades($db, $client_cds_account) {
-    $stmt = $db->prepare("
-        SELECT trade_reference, security_id, trade_side, quantity, price, consideration, trade_date
-        FROM trades 
-        WHERE client_cds_account = ? 
-        AND status = 'active'
-        AND (settlement_status IS NULL OR settlement_status != 'settled')
-        ORDER BY trade_date DESC
-    ");
-    $stmt->execute([$client_cds_account]);
-    return $stmt->fetchAll();
-}
-
 function getValidAccountCode($db, $account_code, $default = null) {
     $stmt = $db->prepare("SELECT account_code FROM chart_of_accounts WHERE account_code = ? AND is_active = 1");
     $stmt->execute([$account_code]);
@@ -218,7 +155,6 @@ function getValidAccountCode($db, $account_code, $default = null) {
         }
     }
     
-    // Try to get any active account
     $stmt = $db->query("SELECT account_code FROM chart_of_accounts WHERE is_active = 1 LIMIT 1");
     $account = $stmt->fetch();
     
@@ -230,23 +166,25 @@ function getValidAccountCode($db, $account_code, $default = null) {
 }
 
 function getControlAccount($db, $paid_to) {
-    // Define the control account mapping with fallback options
     $control_account_map = [
-        'A' => ['code' => '73111', 'fallback' => '73100'], // Agents Control
-        'B' => ['code' => '72714', 'fallback' => '72700'], // Brokers Control
-        'C' => ['code' => '73101', 'fallback' => '73100'], // Clients Control
-        'S' => ['code' => '73102', 'fallback' => '73100'], // Suppliers Control
-        'D' => ['code' => '72114', 'fallback' => '72100'], // Custodians Control
-        'E' => ['code' => '72715', 'fallback' => '72700'], // Employees Control
-        'O' => ['code' => '73113', 'fallback' => '73100'], // Chart Accounts
+        'A' => ['code' => '73111', 'fallback' => '73100'],
+        'B' => ['code' => '72714', 'fallback' => '72700'],
+        'C' => ['code' => '73101', 'fallback' => '73100'],
+        'S' => ['code' => '73102', 'fallback' => '73100'],
+        'D' => ['code' => '72114', 'fallback' => '72100'],
+        'E' => ['code' => '72715', 'fallback' => '72700'],
+        'O' => ['code' => '73113', 'fallback' => '73100'],
     ];
     
-    // Get the account mapping for the paid_to type
+    // Check if this is a statutory account (2121-2126)
+    if (in_array($paid_to, STATUTORY_ACCOUNTS)) {
+        return $paid_to;
+    }
+    
     $mapping = $control_account_map[$paid_to] ?? ['code' => '73100', 'fallback' => '73100'];
     $account_code = $mapping['code'];
     $fallback_code = $mapping['fallback'];
     
-    // First, check if the primary account exists
     $stmt = $db->prepare("SELECT account_code, account_name FROM chart_of_accounts WHERE account_code = ? AND is_active = 1");
     $stmt->execute([$account_code]);
     $account = $stmt->fetch();
@@ -255,7 +193,6 @@ function getControlAccount($db, $paid_to) {
         return $account['account_code'];
     }
     
-    // If primary doesn't exist, try the fallback
     $stmt = $db->prepare("SELECT account_code, account_name FROM chart_of_accounts WHERE account_code = ? AND is_active = 1");
     $stmt->execute([$fallback_code]);
     $account = $stmt->fetch();
@@ -264,7 +201,6 @@ function getControlAccount($db, $paid_to) {
         return $account['account_code'];
     }
     
-    // If neither exists, try to get any active expense account
     $stmt = $db->query("SELECT account_code FROM chart_of_accounts WHERE account_type = 'expense' AND is_active = 1 LIMIT 1");
     $account = $stmt->fetch();
     
@@ -272,7 +208,6 @@ function getControlAccount($db, $paid_to) {
         return $account['account_code'];
     }
     
-    // Ultimate fallback - get any active account
     $stmt = $db->query("SELECT account_code FROM chart_of_accounts WHERE is_active = 1 LIMIT 1");
     $account = $stmt->fetch();
     
@@ -280,18 +215,70 @@ function getControlAccount($db, $paid_to) {
         return $account['account_code'];
     }
     
-    // If all fails, throw an exception with helpful message
     throw new Exception("No valid account found for paid_to: $paid_to. Please check chart_of_accounts table.");
 }
 
+/**
+ * Get total statutory payable for a specific account
+ */
+function getStatutoryPayableTotal($db, $account_code, $period = null) {
+    $params = [$account_code];
+    $period_condition = '';
+    
+    if ($period) {
+        $period_condition = " AND fiscal_period = ? AND fiscal_year = ? ";
+        $params[] = date('m', strtotime($period));
+        $params[] = date('Y', strtotime($period));
+    }
+    
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(credit_amount), 0) as total_payable
+        FROM general_ledger 
+        WHERE account_code = ? 
+        AND reference_type IN ('payroll', 'salary_payment')
+        AND status = 'active'
+        $period_condition
+    ");
+    $stmt->execute($params);
+    $result = $stmt->fetch();
+    return $result['total_payable'] ?? 0;
+}
+
+/**
+ * Create journal entry with duplicate prevention
+ */
 function createJournalEntry($db, $data) {
     try {
+        // Check for duplicate entry to prevent double posting
+        $check_stmt = $db->prepare("
+            SELECT COUNT(*) as count 
+            FROM journal_entries 
+            WHERE reference_no = ? 
+            AND account_code = ? 
+            AND debit_amount = ? 
+            AND credit_amount = ?
+            AND DATE(transaction_date) = ?
+            AND reference_type = ?
+        ");
+        $check_stmt->execute([
+            $data['reference_no'],
+            $data['account_code'],
+            $data['debit_amount'] ?? 0,
+            $data['credit_amount'] ?? 0,
+            $data['transaction_date'],
+            $data['reference_type'] ?? 'journal'
+        ]);
+        $existing = $check_stmt->fetch();
+        
+        if ($existing && $existing['count'] > 0) {
+            error_log("DUPLICATE JOURNAL ENTRY SKIPPED: " . $data['reference_no'] . " - " . $data['account_code']);
+            return null;
+        }
+        
         $journal_no = generateJournalNo($db);
         $fiscal_year = getFiscalYear($data['transaction_date']);
         $fiscal_period = getFiscalPeriod($data['transaction_date']);
 
-        // Validate account exists. If the exact account is missing, use a safe fallback
-        // so payments are not left half-posted without ledger visibility.
         $account_info = getChartAccountInfo($db, $data['account_code']);
 
         if (!$account_info) {
@@ -314,7 +301,6 @@ function createJournalEntry($db, $data) {
         $current_user = $_SESSION['username'] ?? 'system';
         $user_id = $_SESSION['user_id'] ?? null;
 
-        // Keep reference_type within DB limits while preserving payment and bulk-payment meaning.
         $reference_type = $data['reference_type'] ?? 'journal';
         $reference_type_map = [
             'bulk_payment' => 'bulk_pmt',
@@ -322,6 +308,8 @@ function createJournalEntry($db, $data) {
             'bulk_payment_reversal' => 'bulk_rev',
             'bulk_rev' => 'bulk_rev',
             'payment' => 'payment',
+            'statutory_payment' => 'stat_pmt',
+            'statutory_bulk' => 'stat_bulk',
             'receipt' => 'receipt',
             'reversal' => 'reversal',
             'journal' => 'journal',
@@ -351,9 +339,9 @@ function createJournalEntry($db, $data) {
             $data['description'],
             $data['account_code'],
             $account_name,
-            $data['debit_amount'],
-            $data['credit_amount'],
-            $data['currency'],
+            $data['debit_amount'] ?? 0,
+            $data['credit_amount'] ?? 0,
+            $data['currency'] ?? 'Tsh',
             $data['entity_id'] ?? null,
             $data['entity_name'] ?? null,
             $data['entity_type'] ?? null,
@@ -369,8 +357,7 @@ function createJournalEntry($db, $data) {
 
         $journal_id = $db->lastInsertId();
 
-        // Local ledger fix: mirror every posted journal entry into general_ledger
-        // so both normal and bulk payments appear in ledger/reporting views.
+        // Mirror to general_ledger
         $gl_stmt = $db->prepare("
             INSERT INTO general_ledger (
                 journal_id, transaction_date, account_id, account_code, account_name,
@@ -389,8 +376,8 @@ function createJournalEntry($db, $data) {
             $account_id,
             $data['account_code'],
             $account_name,
-            $data['debit_amount'],
-            $data['credit_amount'],
+            $data['debit_amount'] ?? 0,
+            $data['credit_amount'] ?? 0,
             $normal_balance,
             $data['description'],
             $data['reference_no'],
@@ -398,7 +385,7 @@ function createJournalEntry($db, $data) {
             $data['entity_id'] ?? null,
             $data['entity_name'] ?? null,
             $data['entity_type'] ?? null,
-            $data['currency'],
+            $data['currency'] ?? 'Tsh',
             $fiscal_year,
             $fiscal_period,
             $user_id,
@@ -485,6 +472,32 @@ function getBankAccountDetails($db, $account_id) {
     return $stmt->fetch();
 }
 
+function getClientTrades($db, $client_cds) {
+    $stmt = $db->prepare("
+        SELECT trade_reference, security_id, trade_side, quantity, price, consideration, trade_date
+        FROM trades 
+        WHERE client_cds_account = ? 
+        AND status = 'active'
+        AND (settlement_status IS NULL OR settlement_status != 'settled')
+        ORDER BY trade_date DESC
+    ");
+    $stmt->execute([$client_cds]);
+    return $stmt->fetchAll();
+}
+
+function getClientBalance($db, $client_cds) {
+    $stmt = $db->prepare("
+        SELECT 
+            COALESCE(SUM(CASE WHEN trade_side = 'buy' THEN consideration ELSE -consideration END), 0) as net_position,
+            COUNT(*) as trade_count
+        FROM trades 
+        WHERE client_cds_account = ? 
+        AND status = 'active'
+    ");
+    $stmt->execute([$client_cds]);
+    return $stmt->fetch();
+}
+
 function exportPaymentsToExcel($payments) {
     header('Content-Type: application/vnd.ms-excel');
     header('Content-Disposition: attachment; filename="payments_' . date('Y-m-d_H-i-s') . '.xls"');
@@ -556,7 +569,7 @@ function exportPaymentsToExcel($payments) {
 }
 
 // =====================================================
-// BULK PAYMENT PROCESSING
+// BULK PAYMENT PROCESSING - FIXED FOR STATUTORY
 // =====================================================
 
 function processBulkPayment($db, $data) {
@@ -571,6 +584,24 @@ function processBulkPayment($db, $data) {
         $bank_account = getBankAccountDetails($db, $data['bank_account_id']);
         if (!$bank_account) {
             throw new Exception("Bank account not found");
+        }
+        
+        // Check if this is a statutory bulk payment
+        $is_statutory = false;
+        $statutory_grouped = [];
+        $non_statutory_items = [];
+        
+        foreach ($data['payments'] as $payment_item) {
+            $paid_to = $payment_item['paid_to'];
+            if (in_array($paid_to, STATUTORY_ACCOUNTS)) {
+                $is_statutory = true;
+                if (!isset($statutory_grouped[$paid_to])) {
+                    $statutory_grouped[$paid_to] = 0;
+                }
+                $statutory_grouped[$paid_to] += floatval($payment_item['amount']);
+            } else {
+                $non_statutory_items[] = $payment_item;
+            }
         }
         
         // Insert into bulk_payments table
@@ -599,8 +630,96 @@ function processBulkPayment($db, $data) {
         $bulk_payment_id = $db->lastInsertId();
         $payment_numbers = [];
         
-        // Process each payment in the bulk
-        foreach ($data['payments'] as $payment_item) {
+        // ============================================================
+        // PROCESS STATUTORY PAYMENTS - GROUPED BY ACCOUNT
+        // ============================================================
+        if ($is_statutory && !empty($statutory_grouped)) {
+            foreach ($statutory_grouped as $account_code => $amount) {
+                $account_name = STATUTORY_ACCOUNT_NAMES[$account_code] ?? $account_code;
+                
+                // Check if there's a payable balance for this account
+                $payable_balance = getStatutoryPayableTotal($db, $account_code, $data['payment_date']);
+                
+                // Create single payment record for this statutory account
+                $payment_no = generatePaymentNo($db, $data['payment_date'], 'PMT');
+                $payment_numbers[] = $payment_no;
+                
+                $stmt = $db->prepare("
+                    INSERT INTO payments (
+                        payment_no, payment_date, payment_mode, paid_to,
+                        name, name_id, source_type, record_in_financial, ac_credit,
+                        currency, account_no, amount, cheque_no, narration,
+                        trade_reference, payment_type, bulk_payment_id, bulk_payment_no,
+                        created_by_username, created_at, status,
+                        bank_name, bank_account_number
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 'active', ?, ?)
+                ");
+                
+                $stmt->execute([
+                    $payment_no,
+                    $data['payment_date'],
+                    $data['payment_mode'],
+                    $account_code,
+                    $account_name,
+                    null,
+                    'statutory',
+                    $data['record_in_financial'] ?? 'yes',
+                    $data['bank_account_id'],
+                    $data['currency'],
+                    '',
+                    $amount,
+                    '',
+                    "Statutory Payment - $account_name",
+                    null,
+                    'statutory',
+                    $bulk_payment_id,
+                    $bulk_payment_no,
+                    $_SESSION['username'] ?? 'system',
+                    $bank_account['bank_name'] ?? '',
+                    $bank_account['account_number'] ?? ''
+                ]);
+                
+                $payment_ids[] = $db->lastInsertId();
+                
+                // Create journal entries for statutory payment (SINGLE ENTRY)
+                if (($data['record_in_financial'] ?? 'yes') == 'yes') {
+                    // DR - Statutory Payable Account
+                    createJournalEntry($db, [
+                        'transaction_date' => $data['payment_date'],
+                        'reference_no' => $payment_no,
+                        'reference_type' => 'statutory_payment',
+                        'description' => "Statutory Payment - $account_name ($bulk_payment_no)",
+                        'account_code' => $account_code,
+                        'debit_amount' => $amount,
+                        'credit_amount' => 0,
+                        'currency' => $data['currency'],
+                        'bank_account_id' => $data['bank_account_id'],
+                        'bank_name' => $bank_account['bank_name'],
+                        'bank_account_number' => $bank_account['account_number']
+                    ]);
+                    
+                    // CR - Bank Account
+                    createJournalEntry($db, [
+                        'transaction_date' => $data['payment_date'],
+                        'reference_no' => $payment_no,
+                        'reference_type' => 'statutory_payment',
+                        'description' => "Statutory Payment - $account_name ($bulk_payment_no)",
+                        'account_code' => $bank_account['code'],
+                        'debit_amount' => 0,
+                        'credit_amount' => $amount,
+                        'currency' => $data['currency'],
+                        'bank_account_id' => $data['bank_account_id'],
+                        'bank_name' => $bank_account['bank_name'],
+                        'bank_account_number' => $bank_account['account_number']
+                    ]);
+                }
+            }
+        }
+        
+        // ============================================================
+        // PROCESS NON-STATUTORY PAYMENTS - INDIVIDUAL
+        // ============================================================
+        foreach ($non_statutory_items as $payment_item) {
             $payment_no = generatePaymentNo($db, $data['payment_date'], 'PMT');
             $payment_numbers[] = $payment_no;
             
@@ -645,45 +764,22 @@ function processBulkPayment($db, $data) {
                 updateTradeSettlementStatus($db, $payment_item['trade_reference'], 'settled', 
                     "Bulk Payment: $bulk_payment_no - {$payment_item['narration']}");
             }
-        }
-        
-        // Create journal entries if financial recording is enabled
-        if (($data['record_in_financial'] ?? 'yes') == 'yes') {
-            // Pre-generate all journal entries data first
-            $journal_entries_data = [];
             
-            // Credit journal entry for bank (total amount)
-            $journal_entries_data[] = [
-                'transaction_date' => $data['payment_date'],
-                'reference_no' => $bulk_payment_no,
-                'reference_type' => 'bulk_pmt',
-                'description' => "Bulk Payment: $bulk_payment_no - " . count($data['payments']) . " payments",
-                'account_code' => $bank_account['code'],
-                'debit_amount' => 0,
-                'credit_amount' => $total_amount,
-                'currency' => $data['currency'],
-                'bank_account_id' => $data['bank_account_id'],
-                'bank_name' => $bank_account['bank_name'],
-                'bank_account_number' => $bank_account['account_number']
-            ];
-            
-            // Debit journal entries for each payee
-            foreach ($data['payments'] as $payment_item) {
-                // Get the control account using the updated function.
-                // For Chart Account payments, use the selected chart account directly.
+            // Create journal entries for non-statutory payment
+            if (($data['record_in_financial'] ?? 'yes') == 'yes') {
                 $control_account_code = getControlAccount($db, $payment_item['paid_to']);
+                
                 if (($payment_item['paid_to'] ?? '') === 'O' && !empty($payment_item['entity_id'])) {
                     $selected_account_code = getValidAccountCode($db, $payment_item['entity_id'], null);
                     if ($selected_account_code) {
                         $control_account_code = $selected_account_code;
-                    } else {
-                        error_log("Selected chart account '{$payment_item['entity_id']}' not found for bulk item; using control account '$control_account_code'");
                     }
                 }
-
-                $journal_entries_data[] = [
+                
+                // DR - Payee Account
+                createJournalEntry($db, [
                     'transaction_date' => $data['payment_date'],
-                    'reference_no' => $bulk_payment_no,
+                    'reference_no' => $payment_no,
                     'reference_type' => 'bulk_pmt',
                     'description' => "Payment to {$payment_item['name']}: {$payment_item['narration']}",
                     'account_code' => $control_account_code,
@@ -696,19 +792,32 @@ function processBulkPayment($db, $data) {
                     'bank_account_id' => $data['bank_account_id'],
                     'bank_name' => $bank_account['bank_name'],
                     'bank_account_number' => $bank_account['account_number']
-                ];
+                ]);
+                
+                // CR - Bank Account
+                createJournalEntry($db, [
+                    'transaction_date' => $data['payment_date'],
+                    'reference_no' => $payment_no,
+                    'reference_type' => 'bulk_pmt',
+                    'description' => "Payment to {$payment_item['name']}: {$payment_item['narration']}",
+                    'account_code' => $bank_account['code'],
+                    'debit_amount' => 0,
+                    'credit_amount' => $payment_item['amount'],
+                    'currency' => $data['currency'],
+                    'entity_id' => $payment_item['entity_id'] ?? null,
+                    'entity_name' => $payment_item['name'],
+                    'entity_type' => $payment_item['entity_type'] ?? null,
+                    'bank_account_id' => $data['bank_account_id'],
+                    'bank_name' => $bank_account['bank_name'],
+                    'bank_account_number' => $bank_account['account_number']
+                ]);
             }
-            
-            // Now create all journal entries with unique numbers
-            foreach ($journal_entries_data as $entry) {
-                createJournalEntry($db, $entry);
-            }
-            
-            // Update bank balance once (total amount)
-            updateBankBalance($db, $data['bank_account_id'], $total_amount);
         }
         
-        // Update bulk payment status to processed
+        // Update bank balance once for total amount
+        updateBankBalance($db, $data['bank_account_id'], $total_amount);
+        
+        // Update bulk payment status
         $stmt = $db->prepare("
             UPDATE bulk_payments 
             SET status = 'processed', processed_at = NOW(), processed_by = ?
@@ -725,7 +834,8 @@ function processBulkPayment($db, $data) {
             'payment_ids' => $payment_ids,
             'payment_references' => $payment_numbers,
             'total_amount' => $total_amount,
-            'payment_count' => count($data['payments'])
+            'payment_count' => count($data['payments']),
+            'statutory_grouped' => $statutory_grouped ?? []
         ];
         
     } catch (Exception $e) {
@@ -904,7 +1014,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_journal_entries') {
         $stmt = $db->prepare("
             SELECT * FROM journal_entries 
             WHERE reference_no IN ($placeholders)
-              AND reference_type IN ('payment', 'bulk_pmt', 'bulk_payment', 'journal')
+              AND reference_type IN ('payment', 'bulk_pmt', 'bulk_payment', 'statutory_payment', 'statutory_bulk', 'journal')
             ORDER BY transaction_date, id
         ");
         $stmt->execute($reference_numbers);
@@ -926,7 +1036,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_client_trades') {
     $client_cds = $_GET['client_cds'] ?? '';
     
     try {
-        $trades = getUnsettledTrades($db, $client_cds);
+        $trades = getClientTrades($db, $client_cds);
         $balance = getClientBalance($db, $client_cds);
         
         header('Content-Type: application/json');
@@ -974,6 +1084,21 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_client_outstanding') {
     }
 }
 
+if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_statutory_balance') {
+    $account_code = $_GET['account_code'] ?? '';
+    $period = $_GET['period'] ?? null;
+    
+    try {
+        $balance = getStatutoryPayableTotal($db, $account_code, $period);
+        header('Content-Type: application/json');
+        echo json_encode(['balance' => $balance]);
+        exit;
+    } catch (Exception $e) {
+        header('Content-Type: application/json');
+        echo json_encode(['error' => $e->getMessage()]);
+        exit;
+    }
+}
 
 // Handle Excel export
 if (isset($_GET['export']) && $_GET['export'] == 'excel') {
@@ -1125,6 +1250,14 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                         $success_message .= "Payments: <strong>{$result['payment_count']}</strong> distributions<br>";
                         $success_message .= "Payment References: " . implode(', ', $result['payment_references']);
                         
+                        if (!empty($result['statutory_grouped'])) {
+                            $success_message .= "<br><strong>Statutory Payments:</strong><br>";
+                            foreach ($result['statutory_grouped'] as $account => $amount) {
+                                $name = STATUTORY_ACCOUNT_NAMES[$account] ?? $account;
+                                $success_message .= "- $name: " . number_format($amount, 2) . " Tsh<br>";
+                            }
+                        }
+                        
                         $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
                     }
                 } catch (Exception $e) {
@@ -1190,6 +1323,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                         $payment_no = generatePaymentNo($db, $payment_date);
                         $is_update = isset($_POST['update_payment']) && $payment_id > 0;
                         
+                        // Check if this is a statutory payment
+                        $is_statutory = in_array($paid_to, STATUTORY_ACCOUNTS);
+                        
                         if ($is_update) {
                             $update_stmt = $db->prepare("
                                 UPDATE payments SET
@@ -1218,6 +1354,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             $success_message = "Payment updated successfully! Payment No: " . ($_POST['payment_no'] ?? '');
                             
                         } else {
+                            // Insert payment record
                             $insert_stmt = $db->prepare("
                                 INSERT INTO payments (
                                     payment_no, payment_date, payment_mode, paid_to,
@@ -1244,60 +1381,112 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                                 updateTradeSettlementStatus($db, $trade_reference, 'settled', "Payment No: $payment_no - $narration");
                             }
                             
+                            // Create journal entries
                             if ($record_in_financial == 'yes') {
                                 try {
-                                    $debit_account_code = getControlAccount($db, $paid_to);
+                                    if ($is_statutory) {
+                                        // =============================================
+                                        // STATUTORY PAYMENT - SINGLE ENTRY
+                                        // =============================================
+                                        // DR - Statutory Payable Account
+                                        $account_name = STATUTORY_ACCOUNT_NAMES[$paid_to] ?? $paid_to;
+                                        createJournalEntry($db, [
+                                            'transaction_date' => $payment_date,
+                                            'reference_no' => $payment_no,
+                                            'reference_type' => 'statutory_payment',
+                                            'description' => "Statutory Payment - $account_name: $narration",
+                                            'account_code' => $paid_to,
+                                            'debit_amount' => $amount,
+                                            'credit_amount' => 0,
+                                            'currency' => $currency,
+                                            'entity_id' => $entity_id,
+                                            'entity_name' => $name,
+                                            'entity_type' => $entity_type,
+                                            'bank_account_id' => $ac_credit,
+                                            'bank_name' => $bank_name,
+                                            'bank_account_number' => $bank_account_number
+                                        ]);
+                                        
+                                        // CR - Bank Account
+                                        createJournalEntry($db, [
+                                            'transaction_date' => $payment_date,
+                                            'reference_no' => $payment_no,
+                                            'reference_type' => 'statutory_payment',
+                                            'description' => "Statutory Payment - $account_name: $narration",
+                                            'account_code' => $bank_code,
+                                            'debit_amount' => 0,
+                                            'credit_amount' => $amount,
+                                            'currency' => $currency,
+                                            'entity_id' => $entity_id,
+                                            'entity_name' => $name,
+                                            'entity_type' => $entity_type,
+                                            'bank_account_id' => $ac_credit,
+                                            'bank_name' => $bank_name,
+                                            'bank_account_number' => $bank_account_number
+                                        ]);
+                                        
+                                        $success_message = "Statutory payment created successfully! Payment No: $payment_no";
+                                        
+                                    } else {
+                                        // =============================================
+                                        // NON-STATUTORY PAYMENT - REGULAR
+                                        // =============================================
+                                        $debit_account_code = getControlAccount($db, $paid_to);
 
-                                    // For Chart Account payments, use the selected account directly.
-                                    if ($paid_to === 'O' && !empty($entity_id)) {
-                                        $selected_account_code = getValidAccountCode($db, $entity_id, null);
-                                        if ($selected_account_code) {
-                                            $debit_account_code = $selected_account_code;
-                                        } else {
-                                            error_log("Selected chart account '$entity_id' not found; using control account '$debit_account_code'");
+                                        if ($paid_to === 'O' && !empty($entity_id)) {
+                                            $selected_account_code = getValidAccountCode($db, $entity_id, null);
+                                            if ($selected_account_code) {
+                                                $debit_account_code = $selected_account_code;
+                                            } else {
+                                                error_log("Selected chart account '$entity_id' not found; using control account '$debit_account_code'");
+                                            }
                                         }
-                                    }
 
-                                    createJournalEntry($db, [
-                                        'transaction_date' => $payment_date,
-                                        'reference_no' => $payment_no,
-                                        'reference_type' => 'payment',
-                                        'description' => "Payment to $name: $narration" . (!empty($trade_reference) ? " (Trade: $trade_reference)" : ""),
-                                        'account_code' => $debit_account_code,
-                                        'debit_amount' => $amount,
-                                        'credit_amount' => 0,
-                                        'currency' => $currency,
-                                        'entity_id' => $entity_id,
-                                        'entity_name' => $name,
-                                        'entity_type' => $entity_type,
-                                        'bank_account_id' => $ac_credit,
-                                        'bank_name' => $bank_name,
-                                        'bank_account_number' => $bank_account_number
-                                    ]);
+                                        // DR - Payee Account
+                                        createJournalEntry($db, [
+                                            'transaction_date' => $payment_date,
+                                            'reference_no' => $payment_no,
+                                            'reference_type' => 'payment',
+                                            'description' => "Payment to $name: $narration" . (!empty($trade_reference) ? " (Trade: $trade_reference)" : ""),
+                                            'account_code' => $debit_account_code,
+                                            'debit_amount' => $amount,
+                                            'credit_amount' => 0,
+                                            'currency' => $currency,
+                                            'entity_id' => $entity_id,
+                                            'entity_name' => $name,
+                                            'entity_type' => $entity_type,
+                                            'bank_account_id' => $ac_credit,
+                                            'bank_name' => $bank_name,
+                                            'bank_account_number' => $bank_account_number
+                                        ]);
+                                        
+                                        // CR - Bank Account
+                                        createJournalEntry($db, [
+                                            'transaction_date' => $payment_date,
+                                            'reference_no' => $payment_no,
+                                            'reference_type' => 'payment',
+                                            'description' => "Payment to $name: $narration" . (!empty($trade_reference) ? " (Trade: $trade_reference)" : ""),
+                                            'account_code' => $bank_code,
+                                            'debit_amount' => 0,
+                                            'credit_amount' => $amount,
+                                            'currency' => $currency,
+                                            'entity_id' => $entity_id,
+                                            'entity_name' => $name,
+                                            'entity_type' => $entity_type,
+                                            'bank_account_id' => $ac_credit,
+                                            'bank_name' => $bank_name,
+                                            'bank_account_number' => $bank_account_number
+                                        ]);
+                                        
+                                        $success_message = "Payment created successfully with journal entries! Payment No: $payment_no";
+                                    }
                                     
-                                    createJournalEntry($db, [
-                                        'transaction_date' => $payment_date,
-                                        'reference_no' => $payment_no,
-                                        'reference_type' => 'payment',
-                                        'description' => "Payment to $name: $narration" . (!empty($trade_reference) ? " (Trade: $trade_reference)" : ""),
-                                        'account_code' => $bank_code,
-                                        'debit_amount' => 0,
-                                        'credit_amount' => $amount,
-                                        'currency' => $currency,
-                                        'entity_id' => $entity_id,
-                                        'entity_name' => $name,
-                                        'entity_type' => $entity_type,
-                                        'bank_account_id' => $ac_credit,
-                                        'bank_name' => $bank_name,
-                                        'bank_account_number' => $bank_account_number
-                                    ]);
-                                    
+                                    // Update bank balance once
                                     updateBankBalance($db, $ac_credit, $amount);
-                                    $success_message = "Payment created successfully with journal entries! Payment No: $payment_no";
                                     
                                 } catch (Exception $e) {
                                     error_log("Journal entry error: " . $e->getMessage());
-                                    $success_message = "Payment created! Payment No: $payment_no (Journal entries failed)";
+                                    $success_message = "Payment created! Payment No: $payment_no (Journal entries may have issues)";
                                 }
                             } else {
                                 $success_message = "Payment created successfully! Payment No: $payment_no";
@@ -1404,6 +1593,7 @@ try {
 $total_amount = 0;
 $total_recorded = 0;
 $total_trade_payments = 0;
+$total_statutory_payments = 0;
 
 foreach ($all_payments as $payment) {
     $total_amount += $payment['amount'] ?? 0;
@@ -1412,6 +1602,9 @@ foreach ($all_payments as $payment) {
     }
     if (!empty($payment['trade_reference'])) {
         $total_trade_payments += $payment['amount'] ?? 0;
+    }
+    if (in_array($payment['paid_to'] ?? '', STATUTORY_ACCOUNTS)) {
+        $total_statutory_payments += $payment['amount'] ?? 0;
     }
 }
 
@@ -1422,6 +1615,9 @@ $bank_accounts = getBankAccounts($db);
 $page_title = 'Payment Processing - Money Out';
 include '../includes/header.php';
 ?>
+
+<!-- The HTML/JS remains the same as before - no changes needed to the frontend -->
+<!-- ... (rest of the file remains unchanged) ... -->
 
 <style>
     .form-control-sm { height: calc(1.5em + 0.5rem + 2px); padding: 0.25rem 0.5rem; font-size: 0.875rem; }

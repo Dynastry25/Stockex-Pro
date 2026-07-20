@@ -2,8 +2,17 @@
 require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
 
-require_trader();
-require_mandate();
+$user_role = $_SESSION['role'] ?? '';
+$allowed_roles = ['finance_officer', 'system_admin', 'trader'];
+require_login();
+if (!in_array($user_role, $allowed_roles)) {
+    show_alert('Access denied.', 'danger');
+    redirect('auth/login.php');
+    exit;
+}
+if ($user_role !== 'system_admin') {
+    require_mandate();
+}
 
 $db = getDBConnection();
 $trade = null;

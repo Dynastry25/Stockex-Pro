@@ -21,16 +21,16 @@ $db = getDBConnection();
 $company_stmt = $db->prepare("
     SELECT 
         company_code,
-        company_name,
+        COALESCE(company_name, name) as company_name,
         address,
         phone,
-        COALESCE(mobile, phone) as mobile,
+        mobile,
         email,
         registration_number,
         currency,
         country
     FROM companies 
-    WHERE is_active = 1
+    WHERE status = 'active' OR is_active = 1
     ORDER BY id ASC 
     LIMIT 1
 ");
