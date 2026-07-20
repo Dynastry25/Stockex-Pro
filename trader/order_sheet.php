@@ -222,131 +222,131 @@ if (isset($_POST['approve_trade']) && isset($_POST['trade_id'])) {
 
 // Handle Receipt Upload
 if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
-    $trade_id = (int) $_POST['trade_id'];
-    $uploaded_files = [];
-    $errors = [];
-    $comment = trim($_POST['receipt_comment'] ?? '');
-    $receipt_type = $_POST['receipt_type'] ?? 'payment';
-    
-    $allowed_exts = ['jpg', 'jpeg', 'png', 'gif', 'pdf'];
-    $max_size = 5 * 1024 * 1024;
-    
-    $upload_dir = __DIR__ . '/../uploads/numeric_receipts/';
-    if (!file_exists($upload_dir)) {
-        mkdir($upload_dir, 0777, true);
-    }
-    
-    // Get existing receipts and comment
-    $stmt = $db->prepare("SELECT payment_receipt, commission_receipt, comment FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
-    $stmt->execute([$trade_id]);
-    $existing = $stmt->fetch(PDO::FETCH_ASSOC);
-    $existing_payment_receipts = !empty($existing['payment_receipt']) ? explode(',', $existing['payment_receipt']) : [];
-    $existing_commission_receipts = !empty($existing['commission_receipt']) ? explode(',', $existing['commission_receipt']) : [];
-    $existing_comment = $existing['comment'] ?? '';
-    
-    // Determine which field to update
-    if ($receipt_type === 'commission') {
-        $existing_receipts = $existing_commission_receipts;
-        $field_name = 'commission_receipt';
-    } else {
-        $existing_receipts = $existing_payment_receipts;
-        $field_name = 'payment_receipt';
-    }
-    
-    if (isset($_FILES['payment_receipts']) && !empty($_FILES['payment_receipts']['name'][0])) {
-        $files = $_FILES['payment_receipts'];
-        $total_files = count($files['name']);
+    try {
+        $trade_id = (int) $_POST['trade_id'];
+        $uploaded_files = [];
+        $errors = [];
+        $comment = trim($_POST['receipt_comment'] ?? '');
+        $receipt_type = $_POST['receipt_type'] ?? 'payment';
         
-        for ($i = 0; $i < $total_files; $i++) {
-            if ($files['error'][$i] !== UPLOAD_ERR_OK) {
-                $errors[] = "File '{$files['name'][$i]}' upload error: " . $files['error'][$i];
-                continue;
-            }
-            
-            $file_ext = strtolower(pathinfo($files['name'][$i], PATHINFO_EXTENSION));
-            if (!in_array($file_ext, $allowed_exts)) {
-                $errors[] = "File '{$files['name'][$i]}' - Invalid type. Allowed: JPG, PNG, GIF, PDF";
-                continue;
-            }
-            
-            if ($files['size'][$i] > $max_size) {
-                $errors[] = "File '{$files['name'][$i]}' exceeds 5MB limit";
-                continue;
-            }
-            
-            $file_data = file_get_contents($files['tmp_name'][$i]);
-            $mime_type = $files['type'][$i] ?: 'application/octet-stream';
-            $orig_name = $files['name'][$i];
-            
-            $stmt = $db->prepare("INSERT INTO receipt_files (trade_id, receipt_type, file_data, file_name, file_size, mime_type, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?)");
-            $stmt->execute([$trade_id, $receipt_type, $file_data, $orig_name, $files['size'][$i], $mime_type, $user_name]);
-            $file_id = $db->lastInsertId();
-            $uploaded_files[] = 'db_' . $file_id . '.' . $file_ext;
+        $allowed_exts = ['jpg', 'jpeg', 'png', 'gif', 'pdf'];
+        $max_size = 5 * 1024 * 1024;
+        
+        // Get existing receipts and comment
+        $stmt = $db->prepare("SELECT payment_receipt, commission_receipt, comment FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+        $stmt->execute([$trade_id]);
+        $existing_record = $stmt->fetch(PDO::FETCH_ASSOC);
+        $existing_payment_receipts = !empty($existing_record['payment_receipt']) ? explode(',', $existing_record['payment_receipt']) : [];
+        $existing_commission_receipts = !empty($existing_record['commission_receipt']) ? explode(',', $existing_record['commission_receipt']) : [];
+        $existing_comment = $existing_record['comment'] ?? '';
+        
+        // Determine which field to update
+        if ($receipt_type === 'commission') {
+            $existing_receipts = $existing_commission_receipts;
+            $field_name = 'commission_receipt';
+        } else {
+            $existing_receipts = $existing_payment_receipts;
+            $field_name = 'payment_receipt';
         }
         
-        $full_comment = $existing_comment;
-        if (!empty($comment)) {
-            $timestamp = date('Y-m-d H:i:s');
-            $full_comment = $existing_comment 
-                ? $existing_comment . "\n---\n[" . $timestamp . "] " . $user_name . ": " . $comment 
-                : "[" . $timestamp . "] " . $user_name . ": " . $comment;
-        }
-        
-        if (!empty($uploaded_files)) {
-            $all_receipts = array_merge($existing_receipts, $uploaded_files);
-            $receipts_str = implode(',', $all_receipts);
+        if (isset($_FILES['payment_receipts']) && !empty($_FILES['payment_receipts']['name'][0])) {
+            $files = $_FILES['payment_receipts'];
+            $total_files = count($files['name']);
             
-            $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
-            $stmt->execute([$trade_id]);
-            if ($stmt->fetch()) {
-                $stmt = $db->prepare("UPDATE numeric_trade_receipts SET $field_name = ?, comment = ?, updated_at = NOW(), uploaded_by = ? WHERE trade_id = ? AND trade_type = 'trade'");
-                $result = $stmt->execute([$receipts_str, $full_comment, $user_name, $trade_id]);
-            } else {
-                $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, $field_name, comment, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, ?, NOW(), NOW())");
-                $result = $stmt->execute([$trade_id, $receipts_str, $full_comment, $user_name]);
+            for ($i = 0; $i < $total_files; $i++) {
+                if ($files['error'][$i] !== UPLOAD_ERR_OK) {
+                    $errors[] = "File '{$files['name'][$i]}' upload error: " . $files['error'][$i];
+                    continue;
+                }
+                
+                $file_ext = strtolower(pathinfo($files['name'][$i], PATHINFO_EXTENSION));
+                if (!in_array($file_ext, $allowed_exts)) {
+                    $errors[] = "File '{$files['name'][$i]}' - Invalid type. Allowed: JPG, PNG, GIF, PDF";
+                    continue;
+                }
+                
+                if ($files['size'][$i] > $max_size) {
+                    $errors[] = "File '{$files['name'][$i]}' exceeds 5MB limit";
+                    continue;
+                }
+                
+                $file_data = file_get_contents($files['tmp_name'][$i]);
+                $mime_type = $files['type'][$i] ?: 'application/octet-stream';
+                $orig_name = $files['name'][$i];
+                
+                $stmt = $db->prepare("INSERT INTO receipt_files (trade_id, receipt_type, file_data, file_name, file_size, mime_type, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?)");
+                $stmt->execute([$trade_id, $receipt_type, $file_data, $orig_name, $files['size'][$i], $mime_type, $user_name]);
+                $file_id = $db->lastInsertId();
+                $uploaded_files[] = 'db_' . $file_id . '.' . $file_ext;
             }
             
-            if ($result) {
-                $message = [];
-                if (!empty($uploaded_files)) $message[] = count($uploaded_files) . ' receipt(s) uploaded';
-                if (!empty($comment)) $message[] = 'comment added';
-                $_SESSION['alert'] = [implode(' and ', $message) . ' successfully!', 'success'];
+            $full_comment = $existing_comment;
+            if (!empty($comment)) {
+                $timestamp = date('Y-m-d H:i:s');
+                $full_comment = $existing_comment 
+                    ? $existing_comment . "\n---\n[" . $timestamp . "] " . $user_name . ": " . $comment 
+                    : "[" . $timestamp . "] " . $user_name . ": " . $comment;
+            }
+            
+            if (!empty($uploaded_files)) {
+                $all_receipts = array_merge($existing_receipts, $uploaded_files);
+                $receipts_str = implode(',', $all_receipts);
+                
+                $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+                $stmt->execute([$trade_id]);
+                if ($stmt->fetch()) {
+                    $stmt = $db->prepare("UPDATE numeric_trade_receipts SET $field_name = ?, comment = ?, updated_at = NOW(), uploaded_by = ? WHERE trade_id = ? AND trade_type = 'trade'");
+                    $result = $stmt->execute([$receipts_str, $full_comment, $user_name, $trade_id]);
+                } else {
+                    $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, $field_name, comment, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, ?, NOW(), NOW())");
+                    $result = $stmt->execute([$trade_id, $receipts_str, $full_comment, $user_name]);
+                }
+                
+                if ($result) {
+                    $message = [];
+                    if (!empty($uploaded_files)) $message[] = count($uploaded_files) . ' receipt(s) uploaded';
+                    if (!empty($comment)) $message[] = 'comment added';
+                    $_SESSION['alert'] = [implode(' and ', $message) . ' successfully!', 'success'];
+                } else {
+                    $_SESSION['alert'] = ['Failed to update numeric_trade_receipts', 'danger'];
+                }
             } else {
-                $_SESSION['alert'] = ['Failed to update database', 'danger'];
+                $_SESSION['alert'] = ['No files were uploaded successfully. Errors: ' . implode('; ', $errors), 'danger'];
             }
         } else {
-            $_SESSION['alert'] = ['No files were uploaded successfully. Errors: ' . implode('; ', $errors), 'danger'];
-        }
-    } else {
-        if (!empty($comment)) {
-            $stmt = $db->prepare("SELECT comment FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
-            $stmt->execute([$trade_id]);
-            $existing = $stmt->fetch(PDO::FETCH_ASSOC);
-            $existing_comment = $existing['comment'] ?? '';
-            
-            $timestamp = date('Y-m-d H:i:s');
-            $full_comment = $existing_comment 
-                ? $existing_comment . "\n---\n[" . $timestamp . "] " . $user_name . ": " . $comment 
-                : "[" . $timestamp . "] " . $user_name . ": " . $comment;
-            
-            $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
-            $stmt->execute([$trade_id]);
-            if ($stmt->fetch()) {
-                $stmt = $db->prepare("UPDATE numeric_trade_receipts SET comment = ?, updated_at = NOW(), uploaded_by = ? WHERE trade_id = ? AND trade_type = 'trade'");
-                $result = $stmt->execute([$full_comment, $user_name, $trade_id]);
+            if (!empty($comment)) {
+                $stmt = $db->prepare("SELECT comment FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+                $stmt->execute([$trade_id]);
+                $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+                $existing_comment = $existing['comment'] ?? '';
+                
+                $timestamp = date('Y-m-d H:i:s');
+                $full_comment = $existing_comment 
+                    ? $existing_comment . "\n---\n[" . $timestamp . "] " . $user_name . ": " . $comment 
+                    : "[" . $timestamp . "] " . $user_name . ": " . $comment;
+                
+                $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+                $stmt->execute([$trade_id]);
+                if ($stmt->fetch()) {
+                    $stmt = $db->prepare("UPDATE numeric_trade_receipts SET comment = ?, updated_at = NOW(), uploaded_by = ? WHERE trade_id = ? AND trade_type = 'trade'");
+                    $result = $stmt->execute([$full_comment, $user_name, $trade_id]);
+                } else {
+                    $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, comment, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, NOW(), NOW())");
+                    $result = $stmt->execute([$trade_id, $full_comment, $user_name]);
+                }
+                
+                if ($result) {
+                    $_SESSION['alert'] = ['Comment added successfully!', 'success'];
+                } else {
+                    $_SESSION['alert'] = ['Failed to add comment', 'danger'];
+                }
             } else {
-                $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, comment, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, NOW(), NOW())");
-                $result = $stmt->execute([$trade_id, $full_comment, $user_name]);
+                $_SESSION['alert'] = ['No files selected for upload', 'danger'];
             }
-            
-            if ($result) {
-                $_SESSION['alert'] = ['Comment added successfully!', 'success'];
-            } else {
-                $_SESSION['alert'] = ['Failed to add comment', 'danger'];
-            }
-        } else {
-            $_SESSION['alert'] = ['No files selected for upload', 'danger'];
         }
+    } catch (Exception $e) {
+        $_SESSION['alert'] = ['Upload error: ' . $e->getMessage(), 'danger'];
+        error_log("Receipt upload error: " . $e->getMessage());
     }
     header('Location: order_sheet.php?' . http_build_query(array_filter([
         'filter' => $_GET['filter'] ?? 'pending',
