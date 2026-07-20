@@ -312,7 +312,6 @@ $search = $_GET['search'] ?? '';
 // FETCH TRADES - GROUPED BY CLIENT, SECURITY, DATE
 // ============================================
 function getNumericTrades($db, $filter = 'pending', $asset_class_filter = 'all', $search = '') {
-    // Use ANY_VALUE to handle the sql_mode issue
     $sql = "
         SELECT 
             MIN(t.id) as id,
@@ -395,7 +394,7 @@ function getNumericTrades($db, $filter = 'pending', $asset_class_filter = 'all',
                 t.asset_class,
                 t.trade_side,
                 DATE(t.trade_date)
-              ORDER BY t.trade_date DESC, t.id DESC";
+              ORDER BY DATE(t.trade_date) DESC, t.id DESC";
     
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
@@ -661,18 +660,6 @@ include '../includes/header.php';
         padding: 1px 6px;
         border-radius: 10px;
         margin-left: 4px;
-    }
-    
-    .bond-upload-section {
-        border-left: 3px solid #6c757d;
-        padding-left: 15px;
-        margin-bottom: 15px;
-    }
-    .bond-upload-section.payment-section {
-        border-left-color: #28a745;
-    }
-    .bond-upload-section.commission-section {
-        border-left-color: #ffc107;
     }
 </style>
 
