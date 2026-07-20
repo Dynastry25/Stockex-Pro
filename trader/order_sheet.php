@@ -73,7 +73,7 @@ try {
 }
 
 // ============================================
-// HANDLE UPLOAD
+// HANDLE UPLOAD - FIXED
 // ============================================
 
 // Handle Receipt Upload
@@ -82,7 +82,7 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
     $uploaded_files = [];
     $errors = [];
     $comment = trim($_POST['receipt_comment'] ?? '');
-    $receipt_type = $_POST['receipt_type'] ?? 'payment'; // 'payment' or 'commission'
+    $receipt_type = $_POST['receipt_type'] ?? 'payment';
     
     $allowed_exts = ['jpg', 'jpeg', 'png', 'gif', 'pdf'];
     $max_size = 5 * 1024 * 1024;
@@ -91,6 +91,13 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
     if (!file_exists($upload_dir)) {
         mkdir($upload_dir, 0777, true);
     }
+    
+    // Log for debugging
+    error_log("=== UPLOAD DEBUG ===");
+    error_log("Trade ID: " . $trade_id);
+    error_log("Receipt Type: " . $receipt_type);
+    error_log("FILES: " . print_r($_FILES, true));
+    error_log("POST: " . print_r($_POST, true));
     
     // Get existing receipts and comment
     $stmt = $db->prepare("SELECT payment_receipt, commission_receipt, comment FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
@@ -109,6 +116,7 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
         $field_name = 'payment_receipt';
     }
     
+    // Check if files were uploaded
     if (isset($_FILES['payment_receipts']) && !empty($_FILES['payment_receipts']['name'][0])) {
         $files = $_FILES['payment_receipts'];
         $total_files = count($files['name']);
@@ -116,17 +124,20 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
         for ($i = 0; $i < $total_files; $i++) {
             if ($files['error'][$i] !== UPLOAD_ERR_OK) {
                 $errors[] = "File '{$files['name'][$i]}' upload error: " . $files['error'][$i];
+                error_log("Upload error for {$files['name'][$i]}: " . $files['error'][$i]);
                 continue;
             }
             
             $file_ext = strtolower(pathinfo($files['name'][$i], PATHINFO_EXTENSION));
             if (!in_array($file_ext, $allowed_exts)) {
                 $errors[] = "File '{$files['name'][$i]}' - Invalid type. Allowed: JPG, PNG, GIF, PDF";
+                error_log("Invalid type for {$files['name'][$i]}: " . $file_ext);
                 continue;
             }
             
             if ($files['size'][$i] > $max_size) {
                 $errors[] = "File '{$files['name'][$i]}' exceeds 5MB limit";
+                error_log("File too large {$files['name'][$i]}: " . $files['size'][$i]);
                 continue;
             }
             
@@ -136,8 +147,10 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
             
             if (move_uploaded_file($files['tmp_name'][$i], $filepath)) {
                 $uploaded_files[] = $filename;
+                error_log("Successfully uploaded: " . $filename);
             } else {
                 $errors[] = "Failed to upload file '{$files['name'][$i]}'";
+                error_log("Failed to move file: " . $files['tmp_name'][$i] . " to " . $filepath);
             }
         }
         
@@ -159,9 +172,11 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
             if ($stmt->fetch()) {
                 $stmt = $db->prepare("UPDATE numeric_trade_receipts SET $field_name = ?, comment = ?, updated_at = NOW(), uploaded_by = ? WHERE trade_id = ? AND trade_type = 'trade'");
                 $result = $stmt->execute([$receipts_str, $full_comment, $user_name, $trade_id]);
+                error_log("UPDATE result: " . ($result ? 'success' : 'failed'));
             } else {
                 $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, $field_name, comment, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, ?, NOW(), NOW())");
                 $result = $stmt->execute([$trade_id, $receipts_str, $full_comment, $user_name]);
+                error_log("INSERT result: " . ($result ? 'success' : 'failed'));
             }
             
             if ($result) {
@@ -171,13 +186,14 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
                 $_SESSION['alert'] = [implode(' and ', $message) . ' successfully!', 'success'];
             } else {
                 $_SESSION['alert'] = ['Failed to update database', 'danger'];
+                error_log("Database update failed for trade_id: " . $trade_id);
             }
         } else {
             $_SESSION['alert'] = ['No files were uploaded successfully. Errors: ' . implode('; ', $errors), 'danger'];
         }
     } else {
+        // If no files but comment only
         if (!empty($comment)) {
-            // Comment only
             $stmt = $db->prepare("SELECT comment FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
             $stmt->execute([$trade_id]);
             $existing = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -205,6 +221,7 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
             }
         } else {
             $_SESSION['alert'] = ['No files selected for upload', 'danger'];
+            error_log("No files in FILES array or empty name");
         }
     }
     header('Location: numeric_receipt_upload.php?' . http_build_query(array_filter([
@@ -385,7 +402,6 @@ function getNumericTrades($db, $filter = 'pending', $asset_class_filter = 'all',
         $params[] = $search_param;
     }
     
-    // GROUP BY all non-aggregated columns
     $sql .= " GROUP BY 
                 t.client_name, 
                 t.client_cds_account,
@@ -394,7 +410,7 @@ function getNumericTrades($db, $filter = 'pending', $asset_class_filter = 'all',
                 t.asset_class,
                 t.trade_side,
                 DATE(t.trade_date)
-ORDER BY trade_date DESC";
+              ORDER BY trade_date DESC";
     
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
@@ -492,6 +508,7 @@ include '../includes/header.php';
 ?>
 
 <style>
+    /* Receipt Thumbnails */
     .receipt-thumbnails {
         display: flex;
         gap: 5px;
@@ -660,6 +677,29 @@ include '../includes/header.php';
         padding: 1px 6px;
         border-radius: 10px;
         margin-left: 4px;
+    }
+    
+    /* File Upload */
+    .file-item {
+        display: flex;
+        justify-content: space-between;
+        padding: 4px 8px;
+        background: #f8f9fa;
+        border-radius: 3px;
+        margin-bottom: 2px;
+        font-size: 13px;
+    }
+    .file-item .file-size {
+        color: #999;
+        font-size: 11px;
+    }
+    .receipt-preview-container img {
+        max-width: 80px;
+        max-height: 60px;
+        object-fit: cover;
+        border: 1px solid #ddd;
+        border-radius: 3px;
+        margin: 2px;
     }
 </style>
 
@@ -1069,7 +1109,7 @@ function openUploadModal(tradeId, receiptType) {
     modal.show();
 }
 
-// File preview - same as dealing_sheet.php
+// File preview - shows images and file list
 document.getElementById('receipt_files')?.addEventListener('change', function(e) {
     const files = this.files;
     const fileList = document.getElementById('fileList');
@@ -1080,12 +1120,13 @@ document.getElementById('receipt_files')?.addEventListener('change', function(e)
     
     for (let i = 0; i < files.length; i++) {
         const file = files[i];
+        const size = (file.size / 1024).toFixed(1);
         
         const fileItem = document.createElement('div');
         fileItem.className = 'file-item';
         fileItem.innerHTML = `
             <span class="file-name" title="${file.name}">${file.name}</span>
-            <span class="file-size">${(file.size / 1024).toFixed(1)} KB</span>
+            <span class="file-size">${size} KB</span>
         `;
         fileList.appendChild(fileItem);
         
@@ -1168,10 +1209,6 @@ function viewTrade(tradeId) {
         `;
     }, 500);
 }
-
-// ============================================
-// INITIALIZATION
-// ============================================
 
 // Auto-refresh alerts after 5 seconds
 document.querySelectorAll('.alert').forEach(alert => {
