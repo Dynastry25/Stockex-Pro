@@ -1,6 +1,6 @@
 <?php
 // ============================================
-// SETTLEMENT.PHP - COMPLETE UPDATED VERSION
+// SETTLEMENT.PHP - COMPLETE WITH ALL MODALS
 // ============================================
 
 require_once '../config/config.php';
@@ -388,7 +388,6 @@ if (isset($_GET['ajax'])) {
     if ($_GET['ajax'] == 'get_grouped_buy_trades') {
         $trade_id = (int)$_GET['trade_id'];
         try {
-            // Get the sale trade to find the client
             $stmt = $db->prepare("SELECT client_name FROM trades WHERE id = ?");
             $stmt->execute([$trade_id]);
             $sale_trade = $stmt->fetch();
@@ -400,7 +399,6 @@ if (isset($_GET['ajax'])) {
             
             $client_name = $sale_trade['client_name'];
             
-            // Get grouped buy trades for this client - ONLY NUMERIC ADDITIONAL REFERENCE
             $sql = "
                 SELECT 
                     MIN(t.id) as id,
@@ -443,7 +441,6 @@ if (isset($_GET['ajax'])) {
             $stmt->execute([$client_name, $trade_id]);
             $trades = $stmt->fetchAll();
             
-            // Clear any cached data
             ob_clean();
             echo json_encode($trades);
             exit;
@@ -528,12 +525,150 @@ if (isset($_POST['single_payment']) && isset($_POST['trade_id'])) {
     $user_id = $_SESSION['user_id'];
     $username = $_SESSION['username'] ?? 'system';
     
-    // ... (keep existing payment handling)
-    // To keep this manageable, I'll include the full code in the final output
+    $payment_method_stmt = $db->prepare("SELECT description FROM payment_methods WHERE id = ?");
+    $payment_method_stmt->execute([$payment_mode]);
+    $payment_method = $payment_method_stmt->fetch();
+    $payment_method_desc = $payment_method['description'] ?? '';
+    
+    $bank_account = null;
+    if ($bank_account_id > 0) {
+        $bank_stmt = $db->prepare("SELECT * FROM banks_accounts WHERE id = ?");
+        $bank_stmt->execute([$bank_account_id]);
+        $bank_account = $bank_stmt->fetch();
+    }
+    
+    $stmt = $db->prepare("SELECT * FROM trades WHERE id = ?");
+    $stmt->execute([$trade_id]);
+    $trade = $stmt->fetch();
+    
+    if ($trade) {
+        if ($trade['settlement_status'] === 'paid' || $trade['settlement_status'] === 'linked') {
+            $error_message = "Trade is already settled (Status: " . $trade['settlement_status'] . ")";
+        } else {
+            $db->beginTransaction();
+            try {
+                $current_time = date('Y-m-d H:i:s');
+                $notes = "\nPaid using " . $payment_method_desc . " by user $username on $current_time";
+                if ($bank_account) {
+                    $notes .= " - Bank: " . $bank_account['bank_name'] . " (" . $bank_account['account_number'] . ")";
+                }
+                if ($narration) {
+                    $notes .= "\nNarration: " . $narration;
+                }
+                
+                $existing_payment_stmt = $db->prepare("SELECT id, payment_no FROM payments WHERE source_id = ? AND source_type = 'trade_settlement'");
+                $existing_payment_stmt->execute([$trade_id]);
+                $existing_payment = $existing_payment_stmt->fetch();
+                
+                $payment_no = '';
+                if ($existing_payment) {
+                    $update_payment_stmt = $db->prepare("
+                        UPDATE payments 
+                        SET status = 'active',
+                            updated_at = NOW(),
+                            payment_mode = ?,
+                            ac_credit = ?,
+                            narration = ?
+                        WHERE id = ?
+                    ");
+                    $update_payment_stmt->execute([$payment_mode, $bank_account_id > 0 ? $bank_account_id : null, $narration, $existing_payment['id']]);
+                    $payment_no = $existing_payment['payment_no'];
+                } else {
+                    $payment_no = generateUniquePaymentNo($db);
+                }
+                
+                $update_stmt = $db->prepare("
+                    UPDATE trades 
+                    SET settlement_status = 'paid', 
+                        settled_by = ?, 
+                        settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?),
+                        settled_at = NOW()
+                    WHERE id = ?
+                ");
+                
+                if ($update_stmt->execute([$user_id, $notes, $trade_id])) {
+                    updateOrderSheetStatus($db, $trade_id, 'settled', $order_sheet_notes);
+                    
+                    syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
+                    recordBankChargesForTrade($db, $trade_id, $trade['consideration'], $trade['settlement_date'] ?: $trade['trade_date']);
+                    
+                    if (!$existing_payment) {
+                        $amount = $trade['consideration'];
+                        $description = $narration ?: "Payment for " . $trade['security_id'] . " shares " . ($trade['trade_side'] === 'sell' ? 'sold' : 'purchased');
+                        
+                        if ($trade['trade_side'] === 'sell') {
+                            $payee_name = $trade['counterparty_name'];
+                            $payee_type = 'C';
+                        } else {
+                            $payee_name = $trade['client_name'];
+                            $payee_type = 'C';
+                        }
+                        
+                        $ac_credit_id = $bank_account_id > 0 ? $bank_account_id : 1;
+                        if ($bank_account_id <= 0) {
+                            $default_bank_stmt = $db->query("SELECT id FROM banks_accounts WHERE status = 'active' LIMIT 1");
+                            $default_bank = $default_bank_stmt->fetch();
+                            if ($default_bank) {
+                                $ac_credit_id = $default_bank['id'];
+                            }
+                        }
+                        
+                        $payment_stmt = $db->prepare("
+                            INSERT INTO payments (
+                                payment_no, payment_date, payment_mode, paid_to,
+                                name, record_in_financial, ac_credit,
+                                currency, amount, narration,
+                                created_by_username, created_at, status,
+                                bank_name, bank_account_number, source_type, source_id
+                            ) VALUES (?, NOW(), ?, ?, ?, 'yes', ?, ?, ?, ?, ?, NOW(), 'active', ?, ?, 'trade_settlement', ?)
+                        ");
+                        
+                        $payment_stmt->execute([
+                            $payment_no,
+                            $payment_mode,
+                            $payee_type,
+                            $payee_name,
+                            $ac_credit_id,
+                            'Tsh',
+                            $amount,
+                            $description,
+                            $username,
+                            $bank_account ? $bank_account['bank_name'] : '',
+                            $bank_account ? $bank_account['account_number'] : '',
+                            $trade_id
+                        ]);
+                    }
+                    
+                    if ($bank_account_id > 0 && $bank_account) {
+                        $is_payment_out = ($trade['trade_side'] === 'sell');
+                        updateBankBalance($db, $bank_account_id, $trade['consideration'], $is_payment_out);
+                        if (!$existing_payment) {
+                            createJournalEntry($db, $payment_no, $trade, $bank_account, $trade['consideration'], 
+                                $narration ?: "Payment for " . $trade['security_id'] . " shares " . ($trade['trade_side'] === 'sell' ? 'sold' : 'purchased'));
+                        }
+                    }
+                    
+                    $db->commit();
+                    $success_message = 'Payment recorded successfully! Payment No: ' . $payment_no;
+                } else {
+                    throw new Exception("Error updating trade as paid.");
+                }
+            } catch (Exception $e) {
+                $db->rollBack();
+                $error_message = "Error: " . $e->getMessage();
+                error_log("Payment error: " . $e->getMessage());
+            }
+        }
+    } else {
+        $error_message = 'Trade not found.';
+    }
+    
+    header('Location: settlement.php?message=' . urlencode($success_message ?: $error_message) . '&type=' . ($success_message ? 'success' : 'danger'));
+    exit;
 }
 
 // ============================================
-// HANDLE LINK TRADE - FIXED
+// HANDLE LINK TRADE
 // ============================================
 if (isset($_POST['link_trade']) && isset($_POST['trade_id']) && isset($_POST['linked_trade_ids'])) {
     $trade_id = (int)$_POST['trade_id'];
@@ -568,7 +703,6 @@ if (isset($_POST['link_trade']) && isset($_POST['trade_id']) && isset($_POST['li
                 continue;
             }
             
-            // Insert link record
             $link_stmt = $db->prepare("
                 INSERT INTO linked_trades (trade_id, linked_trade_id, linked_by, linked_at)
                 VALUES (?, ?, ?, NOW())
@@ -576,7 +710,6 @@ if (isset($_POST['link_trade']) && isset($_POST['trade_id']) && isset($_POST['li
             ");
             $link_stmt->execute([$trade_id, $linked_trade_id, $user_id, $linked_trade_id]);
             
-            // Update buy trade
             $update_buy = $db->prepare("
                 UPDATE trades 
                 SET settlement_status = 'linked',
@@ -595,7 +728,6 @@ if (isset($_POST['link_trade']) && isset($_POST['trade_id']) && isset($_POST['li
                 $linked_trade_id
             ]);
             
-            // Update order_sheet for buy trade
             updateOrderSheetStatus($db, $linked_trade_id, 'linked', 
                 "\nLinked to sale trade ID: $trade_id (Ref: " . $trade['trade_reference'] . ") by user $username",
                 $trade_id,
@@ -608,7 +740,6 @@ if (isset($_POST['link_trade']) && isset($_POST['trade_id']) && isset($_POST['li
             syncSettlementTradeToDealingSheetSafely($db, $linked_trade_id, $current_user);
         }
         
-        // Update sale trade
         $all_linked_refs = implode(', ', $linked_refs);
         $sale_notes = "\nLinked to buy trades: $all_linked_refs by user $username on " . date('Y-m-d H:i:s');
         $update_sale = $db->prepare("
@@ -629,7 +760,6 @@ if (isset($_POST['link_trade']) && isset($_POST['trade_id']) && isset($_POST['li
             $trade_id
         ]);
         
-        // Update order_sheet for sale trade
         updateOrderSheetStatus($db, $trade_id, 'linked', 
             "\nLinked to buy trades: $all_linked_refs by user $username",
             $linked_ids[0] ?? null,
@@ -652,6 +782,130 @@ if (isset($_POST['link_trade']) && isset($_POST['trade_id']) && isset($_POST['li
 }
 
 // ============================================
+// HANDLE MARK AS UNPAID
+// ============================================
+if (isset($_POST['mark_unpaid']) && isset($_POST['trade_id'])) {
+    $trade_id = (int)$_POST['trade_id'];
+    $user_id = $_SESSION['user_id'];
+    $username = $_SESSION['username'] ?? 'system';
+    
+    try {
+        $trade_stmt = $db->prepare("SELECT * FROM trades WHERE id = ?");
+        $trade_stmt->execute([$trade_id]);
+        $trade = $trade_stmt->fetch();
+        
+        if ($trade) {
+            $notes = "\nPayment undone by user $username on " . date('Y-m-d H:i:s');
+            $update_stmt = $db->prepare("
+                UPDATE trades 
+                SET settlement_status = 'unpaid', 
+                    settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?),
+                    settled_by = NULL,
+                    settled_at = NULL
+                WHERE id = ?
+            ");
+            
+            if ($update_stmt->execute([$notes, $trade_id])) {
+                updateOrderSheetStatus($db, $trade_id, 'unpaid', $notes);
+                syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
+                
+                $payment_stmt = $db->prepare("
+                    UPDATE payments 
+                    SET status = 'inactive',
+                        updated_at = NOW()
+                    WHERE source_id = ? AND source_type = 'trade_settlement'
+                ");
+                $payment_stmt->execute([$trade_id]);
+                
+                $success_message = 'Payment undone successfully. Trade marked as unpaid.';
+            } else {
+                $error_message = 'Error marking trade as unpaid.';
+            }
+        } else {
+            $error_message = 'Trade not found.';
+        }
+    } catch (Exception $e) {
+        $error_message = 'Error: ' . $e->getMessage();
+    }
+    
+    header('Location: settlement.php?message=' . urlencode($success_message ?: $error_message) . '&type=' . ($success_message ? 'success' : 'danger'));
+    exit;
+}
+
+// ============================================
+// HANDLE MARK AS FAILED
+// ============================================
+if (isset($_POST['mark_failed']) && isset($_POST['trade_id'])) {
+    $trade_id = (int)$_POST['trade_id'];
+    $failure_reason = sanitize_input($_POST['failure_reason'] ?? '');
+    $action_needed = sanitize_input($_POST['action_needed'] ?? '');
+    $user_id = $_SESSION['user_id'];
+    $username = $_SESSION['username'] ?? 'system';
+    
+    try {
+        $notes = "\nMarked as failed by user $username on " . date('Y-m-d H:i:s') . ": $failure_reason | Action: $action_needed";
+        
+        $stmt = $db->prepare("
+            UPDATE trades 
+            SET settlement_status = 'failed', 
+                failure_reason = ?, 
+                action_needed = ?,
+                settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?),
+                settled_by = ?
+            WHERE id = ?
+        ");
+        
+        if ($stmt->execute([$failure_reason, $action_needed, $notes, $user_id, $trade_id])) {
+            updateOrderSheetStatus($db, $trade_id, 'failed', $notes);
+            syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
+            $success_message = 'Trade marked as failed with reason.';
+        } else {
+            $error_message = 'Error marking trade as failed.';
+        }
+    } catch (Exception $e) {
+        $error_message = 'Error: ' . $e->getMessage();
+    }
+    
+    header('Location: settlement.php?message=' . urlencode($success_message ?: $error_message) . '&type=' . ($success_message ? 'success' : 'danger'));
+    exit;
+}
+
+// ============================================
+// HANDLE RETRY FAILED
+// ============================================
+if (isset($_POST['retry_failed']) && isset($_POST['trade_id'])) {
+    $trade_id = (int)$_POST['trade_id'];
+    $username = $_SESSION['username'] ?? 'system';
+    
+    try {
+        $notes = "\nRetried from failed status by user $username on " . date('Y-m-d H:i:s');
+        
+        $stmt = $db->prepare("
+            UPDATE trades 
+            SET settlement_status = 'unpaid', 
+                failure_reason = NULL,
+                action_needed = NULL,
+                settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?),
+                settled_by = NULL
+            WHERE id = ?
+        ");
+        
+        if ($stmt->execute([$notes, $trade_id])) {
+            updateOrderSheetStatus($db, $trade_id, 'unpaid', $notes);
+            syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
+            $success_message = 'Trade ready for payment retry.';
+        } else {
+            $error_message = 'Error resetting failed trade.';
+        }
+    } catch (Exception $e) {
+        $error_message = 'Error: ' . $e->getMessage();
+    }
+    
+    header('Location: settlement.php?message=' . urlencode($success_message ?: $error_message) . '&type=' . ($success_message ? 'success' : 'danger'));
+    exit;
+}
+
+// ============================================
 // GET FILTER VALUES AND DATA
 // ============================================
 $today = date('Y-m-d');
@@ -659,19 +913,17 @@ $two_days_ago = date('Y-m-d', strtotime('-30 days'));
 $next_30_days = date('Y-m-d', strtotime('+30 days'));
 $trade_side_filter = isset($_GET['side']) ? $_GET['side'] : 'sell_only';
 $hide_buy_orders = isset($_GET['hide_buy']) ? $_GET['hide_buy'] : '1';
+$filter_tab = isset($_GET['tab']) ? $_GET['tab'] : 'all';
 
 $records_per_page = 50;
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 if ($page < 1) $page = 1;
 $offset = ($page - 1) * $records_per_page;
 
-// Get grouped trades
 $grouped_trades = getGroupedTrades($db, $two_days_ago, $next_30_days, $hide_buy_orders, $trade_side_filter);
 
-// FILTER BY TAB STATUS
-$filter_tab = isset($_GET['tab']) ? $_GET['tab'] : 'all';
+// Filter by tab
 $filtered_trades = [];
-
 foreach ($grouped_trades as $trade) {
     $status = $trade['settlement_status'] ?? 'pending';
     
@@ -706,12 +958,11 @@ foreach ($grouped_trades as $trade) {
     }
 }
 
-// Paginate filtered trades
 $total_records = count($filtered_trades);
 $total_pages = ceil($total_records / $records_per_page);
 $paginated_trades = array_slice($filtered_trades, $offset, $records_per_page);
 
-// Calculate summary statistics from ALL grouped trades (not filtered)
+// Calculate stats from ALL trades
 $stats = [
     'total_count' => 0,
     'total_value' => 0,
@@ -762,7 +1013,6 @@ include '../includes/header.php';
 ?>
 
 <style>
-    /* Same styles as before */
     .floating-bulk-payment {
         position: fixed;
         bottom: 30px;
@@ -780,9 +1030,6 @@ include '../includes/header.php';
     .floating-bulk-payment .badge {
         font-size: 0.7rem;
         padding: 0.25em 0.5em;
-    }
-    .grouped-trade-row {
-        background-color: #f8f9fa;
     }
     .badge-group {
         background-color: #e9ecef;
@@ -869,7 +1116,7 @@ include '../includes/header.php';
                 <div class="col-md-6 text-end">
                     <form method="GET" class="d-inline">
                         <input type="hidden" name="page" value="1">
-                        <input type="hidden" name="tab" id="tabInput" value="<?php echo htmlspecialchars($filter_tab); ?>">
+                        <input type="hidden" name="tab" value="<?php echo htmlspecialchars($filter_tab); ?>">
                         <div class="row g-2 justify-content-end">
                             <div class="col-auto">
                                 <select class="form-select form-select-sm" name="side" onchange="this.form.submit()">
@@ -1310,10 +1557,6 @@ include '../includes/header.php';
                                 $start_page = max(1, $page - 2);
                                 $end_page = min($total_pages, $start_page + 4);
                                 
-                                if ($end_page - $start_page < 4) {
-                                    $start_page = max(1, $end_page - 4);
-                                }
-                                
                                 for ($i = $start_page; $i <= $end_page; $i++): ?>
                                     <li class="page-item <?php echo $i == $page ? 'active' : ''; ?>">
                                         <a class="page-link" href="?page=<?php echo $i; ?>&tab=<?php echo urlencode($filter_tab); ?>&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?>">
@@ -1348,12 +1591,337 @@ include '../includes/header.php';
 </div>
 
 <!-- ============================================ -->
-<!-- MODALS (same as before) -->
+<!-- ALL MODALS -->
 <!-- ============================================ -->
+
+<!-- Link Trade Modal -->
+<div class="modal fade" id="linkTradeModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-info">
+                <h5 class="modal-title"><i class="bi bi-link me-2"></i>Link Sale to Buy Trade(s)</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="linkTradeForm" method="POST">
+                <input type="hidden" name="trade_id" id="linkTradeId">
+                <input type="hidden" name="link_trade" value="1">
+                
+                <div class="modal-body">
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle me-2"></i>
+                        <strong>Important:</strong> Linking a sale to buy trade(s) will:
+                        <ul class="mb-0 mt-2">
+                            <li>Mark both trades as <strong>linked</strong> in the settlement page</li>
+                            <li>Update the <strong>order_sheet</strong> status to "linked"</li>
+                            <li>The buy trade(s) will <strong>NOT</strong> require a receipt upload in order_sheet</li>
+                            <li>Two contract notes will be available: Sold & Bought</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Current Sale Trade:</label>
+                        <div class="p-3 bg-light rounded" id="currentSaleDetails">
+                            <span class="text-muted">Loading sale trade details...</span>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Available Buy Trades for this Client:</label>
+                        <div id="buyTradesContainer">
+                            <div class="text-center py-3">
+                                <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+                                <span class="ms-2">Loading buy trades...</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="alert alert-warning" id="noBuyTradesWarning" style="display: none;">
+                        <i class="bi bi-exclamation-triangle me-2"></i>
+                        No available buy trades found for this client.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-info" id="linkSubmitBtn" disabled>Select at least one trade</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Grouped Trades Modal -->
+<div class="modal fade" id="groupedTradesModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-primary">
+                <h5 class="modal-title"><i class="bi bi-layers me-2"></i>Grouped Trade Details</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="groupedTradesContent">
+                <div class="text-center py-3">
+                    <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+                    <span class="ms-2">Loading trade details...</span>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Payment Modal -->
+<div class="modal fade" id="paymentModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-success">
+                <h5 class="modal-title">Record Payment</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="paymentForm" method="POST">
+                <input type="hidden" name="trade_id" id="paymentTradeId">
+                <input type="hidden" name="single_payment" value="1">
+                
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="payment_mode" class="form-label">Payment Method <span class="text-danger">*</span></label>
+                        <select class="form-select" id="payment_mode" name="payment_mode" required onchange="toggleBankSelection()">
+                            <option value="">Select Payment Method</option>
+                            <?php foreach ($payment_methods as $method): ?>
+                                <option value="<?php echo (int)$method['id']; ?>">
+                                    <?php echo htmlspecialchars($method['code'] . ' - ' . $method['description']); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    
+                    <div class="mb-3" id="bankAccountField" style="display: none;">
+                        <label for="bank_account" class="form-label">Select Bank Account <span class="text-danger">*</span></label>
+                        <select class="form-select" id="bank_account" name="bank_account">
+                            <option value="">Select Bank Account</option>
+                            <?php foreach ($bank_accounts as $bank): ?>
+                                <option value="<?php echo (int)$bank['id']; ?>"
+                                        data-balance="<?php echo $bank['current_balance']; ?>"
+                                        data-currency="<?php echo htmlspecialchars($bank['currency']); ?>">
+                                    <?php echo htmlspecialchars($bank['bank_name'] . ' - ' . $bank['account_name'] . ' (' . $bank['account_number'] . ') - ' . number_format($bank['current_balance'], 2) . ' ' . $bank['currency']); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                        <small class="text-muted" id="bankBalanceInfo"></small>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="narration" class="form-label">Payment Narration</label>
+                        <textarea class="form-control" id="narration" name="narration" rows="2" placeholder="Enter payment description..."></textarea>
+                    </div>
+                    
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle me-2"></i>
+                        Payment will be recorded in the payment book and bank balance will be updated accordingly.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success">Record Payment</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Bulk Payment Modal -->
+<div class="modal fade" id="bulkPaymentModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-success">
+                <h5 class="modal-title">Bulk Payment for Selected Trades</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="bulkPaymentForm" method="POST">
+                <input type="hidden" name="bulk_payment" value="1">
+                <div id="bulkPaymentTradeIds"></div>
+                
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="bulk_payment_mode" class="form-label">Payment Method <span class="text-danger">*</span></label>
+                        <select class="form-select" id="bulk_payment_mode" name="payment_mode" required onchange="toggleBulkBankSelection()">
+                            <option value="">Select Payment Method</option>
+                            <?php foreach ($payment_methods as $method): ?>
+                                <option value="<?php echo (int)$method['id']; ?>">
+                                    <?php echo htmlspecialchars($method['code'] . ' - ' . $method['description']); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    
+                    <div class="mb-3" id="bulkBankAccountField" style="display: none;">
+                        <label for="bulk_bank_account" class="form-label">Select Bank Account <span class="text-danger">*</span></label>
+                        <select class="form-select" id="bulk_bank_account" name="bank_account">
+                            <option value="">Select Bank Account</option>
+                            <?php foreach ($bank_accounts as $bank): ?>
+                                <option value="<?php echo (int)$bank['id']; ?>"
+                                        data-balance="<?php echo $bank['current_balance']; ?>"
+                                        data-currency="<?php echo htmlspecialchars($bank['currency']); ?>">
+                                    <?php echo htmlspecialchars($bank['bank_name'] . ' - ' . $bank['account_name'] . ' (' . $bank['account_number'] . ') - ' . number_format($bank['current_balance'], 2) . ' ' . $bank['currency']); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                        <small class="text-muted" id="bulkBankBalanceInfo"></small>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="bulk_narration" class="form-label">Payment Narration (Applied to all)</label>
+                        <textarea class="form-control" id="bulk_narration" name="narration" rows="2" placeholder="Enter payment description for all selected trades..."></textarea>
+                    </div>
+                    
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle me-2"></i>
+                        <span id="bulkPaymentCount">0</span> trades will be paid.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success">Process Bulk Payment</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Failure Modal -->
+<div class="modal fade" id="failureModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-warning">
+                <h5 class="modal-title">Mark Settlement as Failed</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="failureForm" method="POST">
+                <input type="hidden" name="trade_id" id="failureTradeId">
+                <input type="hidden" name="mark_failed" value="1">
+                
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="failure_reason" class="form-label">Failure Reason <span class="text-danger">*</span></label>
+                        <textarea class="form-control" id="failure_reason" name="failure_reason" rows="3" required 
+                                  placeholder="Explain why the payment failed..."></textarea>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="action_needed" class="form-label">Action Needed <span class="text-danger">*</span></label>
+                        <select class="form-select" id="action_needed" name="action_needed" required>
+                            <option value="">Select required action</option>
+                            <option value="retry_payment">Retry Payment</option>
+                            <option value="contact_client">Contact Client</option>
+                            <option value="contact_counterparty">Contact Counterparty</option>
+                            <option value="investigate_discrepancy">Investigate Discrepancy</option>
+                            <option value="update_account_details">Update Account Details</option>
+                            <option value="escalate_to_manager">Escalate to Manager</option>
+                            <option value="other">Other</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-warning">Mark as Failed</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Failure Details Modal -->
+<div class="modal fade" id="failureDetailsModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-dark text-white">
+                <h5 class="modal-title">Failure Details</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Failure Reason:</label>
+                    <div class="p-3 bg-light rounded" id="detailsFailureReason"></div>
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Action Needed:</label>
+                    <div class="p-3 bg-light rounded" id="detailsActionNeeded"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Export Modal -->
+<div class="modal fade" id="exportModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title"><i class="bi bi-download me-2"></i>Export Settlement Report</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="export_settlement_contracts">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Export Type <span class="text-danger">*</span></label>
+                        <div class="d-flex gap-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="export_type" id="exportTypeContract" value="contract_notes" checked>
+                                <label class="form-check-label" for="exportTypeContract">
+                                    <i class="bi bi-file-earmark-text text-primary me-1"></i> Contract Notes
+                                </label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="export_type" id="exportTypeClient" value="client_list">
+                                <label class="form-check-label" for="exportTypeClient">
+                                    <i class="bi bi-people text-info me-1"></i> Client List
+                                </label>
+                            </div>
+                        </div>
+                        <small class="text-muted" id="exportTypeHelp">Combined contract notes for each client who traded on the selected date.</small>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="export_date" class="form-label fw-bold">Settlement Date <span class="text-danger">*</span></label>
+                        <input type="date" class="form-control" id="export_date" name="export_date" value="<?php echo date('Y-m-d'); ?>" required>
+                        <small class="text-muted">Select the settlement date to export.</small>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="cds_filter" class="form-label fw-bold">CDS Account (Optional)</label>
+                        <input type="text" class="form-control" id="cds_filter" name="cds_filter" placeholder="Leave blank for all clients">
+                        <small class="text-muted">Filter by a specific CDS account number.</small>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-download me-1"></i> Export PDF
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Hidden Forms -->
+<form id="unpaidForm" method="POST" style="display: none;">
+    <input type="hidden" name="trade_id" id="unpaidTradeId">
+    <input type="hidden" name="mark_unpaid" value="1">
+</form>
+
+<form id="retryFailedForm" method="POST" style="display: none;">
+    <input type="hidden" name="trade_id" id="retryTradeId">
+    <input type="hidden" name="retry_failed" value="1">
+</form>
 
 <script>
 // ============================================
-// JAVASCRIPT - FIXED
+// JAVASCRIPT
 // ============================================
 
 let currentTradeId = null;
@@ -1363,7 +1931,6 @@ function resetFilters() {
     window.location.href = 'settlement';
 }
 
-// Bulk selection functions
 function toggleSelectAll(checkbox) {
     const checkboxes = document.querySelectorAll('.trade-checkbox');
     checkboxes.forEach(cb => {
@@ -1394,7 +1961,7 @@ function updateBulkActions() {
 }
 
 // ============================================
-// SHOW LINK TRADE MODAL - FIXED
+// SHOW LINK TRADE MODAL
 // ============================================
 function showLinkTradeModal(tradeId) {
     currentTradeId = tradeId;
@@ -1404,7 +1971,6 @@ function showLinkTradeModal(tradeId) {
     const saleDetails = document.getElementById('currentSaleDetails');
     saleDetails.innerHTML = '<span class="text-muted">Loading sale trade details...</span>';
     
-    // Fetch sale trade details
     fetch(`?ajax=get_trade_details&trade_id=${tradeId}`)
         .then(response => response.json())
         .then(data => {
@@ -1425,7 +1991,6 @@ function showLinkTradeModal(tradeId) {
             saleDetails.innerHTML = '<span class="text-muted">Error loading trade details</span>';
         });
     
-    // Fetch grouped buy trades - ONLY numeric additional_reference
     fetch(`?ajax=get_grouped_buy_trades&trade_id=${tradeId}`)
         .then(response => response.json())
         .then(data => {
@@ -1485,7 +2050,7 @@ function showLinkTradeModal(tradeId) {
             } else {
                 container.innerHTML = '';
                 warning.style.display = 'block';
-                warning.innerHTML = '<i class="bi bi-exclamation-triangle me-2"></i>No available buy trades with numeric Additional Reference found for this client. Buy trades must have a numeric Additional Reference to be linked.';
+                warning.innerHTML = '<i class="bi bi-exclamation-triangle me-2"></i>No available buy trades with numeric Additional Reference found for this client.';
             }
             
             updateLinkSelection();
