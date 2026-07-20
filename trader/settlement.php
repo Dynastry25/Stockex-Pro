@@ -356,8 +356,17 @@ function getGroupedTrades($db, $date_from, $date_to, $hide_buy_orders = true, $t
 // ============================================
 // AJAX HANDLERS
 // ============================================
+// ============================================
+// AJAX HANDLERS - FIXED
+// ============================================
 if (isset($_GET['ajax'])) {
+    // Clear any output buffers
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+    
     header('Content-Type: application/json');
+    header('Cache-Control: no-cache, must-revalidate');
     
     if ($_GET['ajax'] == 'get_trade_details') {
         $trade_id = (int)$_GET['trade_id'];
@@ -380,7 +389,8 @@ if (isset($_GET['ajax'])) {
             echo json_encode($trade ?: []);
             exit;
         } catch (Exception $e) {
-            echo json_encode([]);
+            error_log("get_trade_details error: " . $e->getMessage());
+            echo json_encode(['error' => $e->getMessage()]);
             exit;
         }
     }
@@ -388,17 +398,23 @@ if (isset($_GET['ajax'])) {
     if ($_GET['ajax'] == 'get_grouped_buy_trades') {
         $trade_id = (int)$_GET['trade_id'];
         try {
+            error_log("=== get_grouped_buy_trades called for trade_id: $trade_id ===");
+            
+            // Get the sale trade to find the client
             $stmt = $db->prepare("SELECT client_name FROM trades WHERE id = ?");
             $stmt->execute([$trade_id]);
             $sale_trade = $stmt->fetch();
             
             if (!$sale_trade) {
+                error_log("Sale trade not found for ID: $trade_id");
                 echo json_encode([]);
                 exit;
             }
             
             $client_name = $sale_trade['client_name'];
+            error_log("Client name: $client_name");
             
+            // Get grouped buy trades for this client - ONLY NUMERIC ADDITIONAL REFERENCE
             $sql = "
                 SELECT 
                     MIN(t.id) as id,
@@ -437,21 +453,28 @@ if (isset($_GET['ajax'])) {
                     DATE(t.trade_date)
                 ORDER BY MIN(t.settlement_date) ASC, MIN(t.trade_date) ASC
             ";
+            
+            error_log("SQL: " . $sql);
+            error_log("Params: client_name=$client_name, trade_id=$trade_id");
+            
             $stmt = $db->prepare($sql);
             $stmt->execute([$client_name, $trade_id]);
             $trades = $stmt->fetchAll();
             
-            ob_clean();
+            error_log("Found " . count($trades) . " buy trades");
+            
+            // Return empty array if no trades found (not an error)
             echo json_encode($trades);
             exit;
         } catch (Exception $e) {
-            error_log("Error fetching grouped buy trades: " . $e->getMessage());
-            ob_clean();
+            error_log("get_grouped_buy_trades error: " . $e->getMessage());
+            error_log("Stack trace: " . $e->getTraceAsString());
             echo json_encode([]);
             exit;
         }
     }
     
+   
     if ($_GET['ajax'] == 'get_grouped_trade_details') {
         $trade_id = (int)$_GET['trade_id'];
         try {
@@ -1963,6 +1986,9 @@ function updateBulkActions() {
 // ============================================
 // SHOW LINK TRADE MODAL
 // ============================================
+// ============================================
+// SHOW LINK TRADE MODAL - FIXED
+// ============================================
 function showLinkTradeModal(tradeId) {
     currentTradeId = tradeId;
     document.getElementById('linkTradeId').value = tradeId;
@@ -1971,6 +1997,7 @@ function showLinkTradeModal(tradeId) {
     const saleDetails = document.getElementById('currentSaleDetails');
     saleDetails.innerHTML = '<span class="text-muted">Loading sale trade details...</span>';
     
+    // Fetch sale trade details
     fetch(`?ajax=get_trade_details&trade_id=${tradeId}`)
         .then(response => response.json())
         .then(data => {
@@ -1984,19 +2011,29 @@ function showLinkTradeModal(tradeId) {
                     ${data.trade_count > 1 ? `<br><strong>Grouped Trades:</strong> ${data.trade_count} trades` : ''}
                 `;
             } else {
-                saleDetails.innerHTML = '<span class="text-muted">Error loading trade details</span>';
+                saleDetails.innerHTML = '<span class="text-muted">Could not load trade details</span>';
             }
         })
-        .catch(() => {
-            saleDetails.innerHTML = '<span class="text-muted">Error loading trade details</span>';
+        .catch((error) => {
+            console.error('Error fetching sale trade:', error);
+            saleDetails.innerHTML = '<span class="text-danger">Error loading trade details</span>';
         });
     
+    // Fetch grouped buy trades
+    const container = document.getElementById('buyTradesContainer');
+    const warning = document.getElementById('noBuyTradesWarning');
+    
+    container.innerHTML = '<div class="text-center py-3"><div class="spinner-border spinner-border-sm text-primary" role="status"></div><span class="ms-2">Loading buy trades...</span></div>';
+    warning.style.display = 'none';
+    
     fetch(`?ajax=get_grouped_buy_trades&trade_id=${tradeId}`)
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Network response was not ok');
+            }
+            return response.json();
+        })
         .then(data => {
-            const container = document.getElementById('buyTradesContainer');
-            const warning = document.getElementById('noBuyTradesWarning');
-            
             if (data && data.length > 0) {
                 warning.style.display = 'none';
                 let html = `
@@ -2042,29 +2079,33 @@ function showLinkTradeModal(tradeId) {
                         </table>
                     </div>
                     <div class="mt-2">
-                        <small class="text-muted">Select one or more buy trades to link with this sale.</small>
+                        <small class="text-muted">Select one or more buy trades to link with this sale. Only trades with numeric Additional Reference are shown.</small>
                     </div>
                 `;
                 
                 container.innerHTML = html;
+                updateLinkSelection();
             } else {
                 container.innerHTML = '';
                 warning.style.display = 'block';
-                warning.innerHTML = '<i class="bi bi-exclamation-triangle me-2"></i>No available buy trades with numeric Additional Reference found for this client.';
+                warning.innerHTML = '<i class="bi bi-exclamation-triangle me-2"></i>No available buy trades with numeric Additional Reference found for this client. Buy trades must have a numeric Additional Reference to be linked.';
             }
-            
-            updateLinkSelection();
         })
-        .catch(error => {
+        .catch((error) => {
             console.error('Error fetching buy trades:', error);
-            document.getElementById('buyTradesContainer').innerHTML = '<div class="alert alert-danger">Error loading buy trades. Please refresh the page and try again.</div>';
-            document.getElementById('noBuyTradesWarning').style.display = 'none';
+            container.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="bi bi-exclamation-circle me-2"></i>
+                    Error loading buy trades. Please refresh the page and try again.
+                    <br><small class="text-muted">Error: ${error.message}</small>
+                </div>
+            `;
+            warning.style.display = 'none';
         });
     
     const linkModal = new bootstrap.Modal(document.getElementById('linkTradeModal'));
     linkModal.show();
 }
-
 function toggleSelectAllBuy(checkbox) {
     const checkboxes = document.querySelectorAll('.buy-trade-checkbox');
     checkboxes.forEach(cb => cb.checked = checkbox.checked);
