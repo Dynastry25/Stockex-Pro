@@ -311,16 +311,16 @@ function getGroupedTrades($db, $date_from, $date_to, $hide_buy_orders = true, $t
             GROUP_CONCAT(t.trade_reference SEPARATOR ',') as trade_references,
             MIN(t.exchange_reference) as exchange_reference,
             MIN(t.additional_reference) as additional_reference,
-            ANY_VALUE(t.counterparty_name) as counterparty_name,
-            ANY_VALUE(t.counterparty_cds_account) as counterparty_cds_account,
-            ANY_VALUE(t.settlement_status) as settlement_status,
-            ANY_VALUE(t.settled_by) as settled_by,
-            ANY_VALUE(t.settled_at) as settled_at,
-            ANY_VALUE(t.failure_reason) as failure_reason,
-            ANY_VALUE(t.action_needed) as action_needed,
-            ANY_VALUE(t.settlement_notes) as settlement_notes,
-            ANY_VALUE(t.linked_trade_id) as linked_trade_id,
-            ANY_VALUE(t.linked_trade_ref) as linked_trade_ref
+            MAX(t.counterparty_name) as counterparty_name,
+            MAX(t.counterparty_cds_account) as counterparty_cds_account,
+            MAX(t.settlement_status) as settlement_status,
+            MAX(t.settled_by) as settled_by,
+            MAX(t.settled_at) as settled_at,
+            MAX(t.failure_reason) as failure_reason,
+            MAX(t.action_needed) as action_needed,
+            MAX(t.settlement_notes) as settlement_notes,
+            MAX(t.linked_trade_id) as linked_trade_id,
+            MAX(t.linked_trade_ref) as linked_trade_ref
         FROM trades t
         WHERE t.status = 'active'
         AND t.settlement_date IS NOT NULL 
@@ -434,7 +434,7 @@ if (isset($_GET['ajax'])) {
                     GROUP_CONCAT(t.trade_reference SEPARATOR ',') as trade_references,
                     MIN(t.exchange_reference) as exchange_reference,
                     MIN(t.additional_reference) as additional_reference,
-                    ANY_VALUE(t.settlement_status) as settlement_status
+                    MAX(t.settlement_status) as settlement_status
                 FROM trades t
                 WHERE t.client_name = ?
                 AND t.trade_side = 'buy'
@@ -610,7 +610,7 @@ if (isset($_POST['single_payment']) && isset($_POST['trade_id'])) {
                 ");
                 
                 if ($update_stmt->execute([$user_id, $notes, $trade_id])) {
-                    updateOrderSheetStatus($db, $trade_id, 'settled', $order_sheet_notes);
+                    updateOrderSheetStatus($db, $trade_id, 'settled', $notes);
                     
                     syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
                     recordBankChargesForTrade($db, $trade_id, $trade['consideration'], $trade['settlement_date'] ?: $trade['trade_date']);
@@ -1032,6 +1032,14 @@ foreach ($grouped_trades as $trade) {
 }
 
 $page_title = 'Trade Settlement';
+
+// Output JS early (echo here is safe: POST/AJAX handlers already redirected/exited)
+if (!isset($_GET['ajax'])) {
+    echo '<script>' . "\n";
+    echo file_get_contents(__DIR__ . '/../assets/js/settlement.js');
+    echo "\n" . '</script>' . "\n";
+}
+
 include '../includes/header.php';
 ?>
 
@@ -1615,11 +1623,12 @@ include '../includes/header.php';
                     <?php endif; ?>
                 </div>
                 
+                <?php $settlement_trades = $grouped_trades; ?>
                 <!-- Overdue Tab -->
                 <div class="tab-pane fade" id="overdue" role="tabpanel">
                     <?php 
                     $overdue_trades = array_filter($settlement_trades, function($trade) {
-                        return $trade['settlement_status_category'] === 'overdue' && 
+                        return ($trade['settlement_status_category'] ?? '') === 'overdue' && 
                                $trade['settlement_status'] !== 'paid' && 
                                $trade['settlement_status'] !== 'failed' &&
                                $trade['settlement_status'] !== 'linked';
@@ -1724,7 +1733,7 @@ include '../includes/header.php';
                 <div class="tab-pane fade" id="today" role="tabpanel">
                     <?php 
                     $today_trades = array_filter($settlement_trades, function($trade) {
-                        return $trade['settlement_status_category'] === 'today' && 
+                        return ($trade['settlement_status_category'] ?? '') === 'today' && 
                                $trade['settlement_status'] !== 'paid' && 
                                $trade['settlement_status'] !== 'failed' &&
                                $trade['settlement_status'] !== 'linked';
@@ -2251,53 +2260,6 @@ include '../includes/header.php';
     </div>
 </div>
 
-<!-- Link Trade Modal -->
-<div class="modal fade" id="linkTradeModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header bg-info">
-                <h5 class="modal-title">Link Sale to Buy Trade</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <form id="linkTradeForm" method="POST">
-                <input type="hidden" name="trade_id" id="linkTradeId">
-                <input type="hidden" name="link_trade" value="1">
-                
-                <div class="modal-body">
-                    <div class="mb-3">
-                        <label for="link_trade_search" class="form-label">Search Buy Trade</label>
-                        <input type="text" class="form-control" id="link_trade_search" placeholder="Type to search trade..." oninput="filterLinkTrades(this.value)">
-                    </div>
-                    <div class="mb-3">
-                        <label for="linked_trade_id" class="form-label">Select Buy Trade to Link <span class="text-danger">*</span></label>
-                        <select class="form-select" id="linked_trade_id" name="linked_trade_id" required size="6">
-                            <option value="">Select Buy Trade</option>
-                            <?php 
-                            $buy_trades = array_filter($all_trades, function($trade) {
-                                return $trade['trade_side'] === 'buy' && $trade['settlement_status'] !== 'linked';
-                            });
-                            foreach ($buy_trades as $trade): ?>
-                                <option value="<?php echo $trade['id']; ?>" data-search="<?php echo htmlspecialchars(strtolower($trade['trade_reference'] . ' ' . $trade['client_name'] . ' ' . $trade['security_id'] . ' ' . $trade['counterparty_name'])); ?>">
-                                    <?php echo htmlspecialchars($trade['trade_reference'] . ' - ' . $trade['client_name'] . ' - ' . $trade['security_id'] . ' - TZS ' . number_format($trade['consideration'], 2)); ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    
-                    <div class="alert alert-info">
-                        <i class="bi bi-info-circle me-2"></i>
-                        Linking this sale to a buy trade will mark it as settled without payment. The buy trade will not require separate payment receipt.
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-info">Link Trade</button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
-
 <!-- Linked Details Modal -->
 <div class="modal fade" id="linkedDetailsModal" tabindex="-1">
     <div class="modal-dialog">
@@ -2397,17 +2359,6 @@ include '../includes/header.php';
     </div>
 </div>
 
-<!-- Forms for other actions -->
-<form id="unpaidForm" method="POST" style="display: none;">
-    <input type="hidden" name="trade_id" id="unpaidTradeId">
-    <input type="hidden" name="mark_unpaid" value="1">
-</form>
-
-<form id="retryFailedForm" method="POST" style="display: none;">
-    <input type="hidden" name="trade_id" id="retryTradeId">
-    <input type="hidden" name="retry_failed" value="1">
-</form>
-
 <style>
 .floating-bulk-payment {
     position: fixed;
@@ -2440,291 +2391,6 @@ include '../includes/header.php';
     border-color: var(--success-color);
 }
 </style>
-
-<script>
-// Trade ID for current actions
-let currentTradeId = null;
-let selectedTradeIds = [];
-
-// Bulk selection functions
-function toggleSelectAll(checkbox) {
-    const checkboxes = document.querySelectorAll('.trade-checkbox');
-    checkboxes.forEach(cb => {
-        cb.checked = checkbox.checked;
-        if (checkbox.checked) {
-            if (!selectedTradeIds.includes(cb.value)) {
-                selectedTradeIds.push(cb.value);
-            }
-        } else {
-            const index = selectedTradeIds.indexOf(cb.value);
-            if (index > -1) {
-                selectedTradeIds.splice(index, 1);
-            }
-        }
-    });
-    updateBulkActions();
-}
-
-function updateBulkActions() {
-    const checkboxes = document.querySelectorAll('.trade-checkbox:checked');
-    selectedTradeIds = Array.from(checkboxes).map(cb => cb.value);
-    const selectedCount = selectedTradeIds.length;
-    const floatingBtn = document.getElementById('floatingBulkPayment');
-    const badge = document.getElementById('selectedCountBadge');
-    
-    badge.textContent = selectedCount;
-    
-    if (selectedCount > 0) {
-        floatingBtn.style.display = 'block';
-    } else {
-        floatingBtn.style.display = 'none';
-    }
-}
-
-function clearSelection() {
-    const checkboxes = document.querySelectorAll('.trade-checkbox');
-    checkboxes.forEach(cb => cb.checked = false);
-    document.getElementById('selectAll').checked = false;
-    selectedTradeIds = [];
-    updateBulkActions();
-}
-
-function resetFilters() {
-    window.location.href = 'settlement';
-}
-
-// Single payment functions
-function showPaymentModal(tradeId) {
-    currentTradeId = tradeId;
-    document.getElementById('paymentTradeId').value = tradeId;
-    document.getElementById('paymentForm').reset();
-    document.getElementById('bankAccountField').style.display = 'none';
-    document.getElementById('bankBalanceInfo').textContent = '';
-    
-    const paymentModal = new bootstrap.Modal(document.getElementById('paymentModal'));
-    paymentModal.show();
-}
-
-function toggleBankSelection() {
-    const paymentMode = document.getElementById('payment_mode').value;
-    const bankField = document.getElementById('bankAccountField');
-    const bankSelect = document.getElementById('bank_account');
-    const balanceInfo = document.getElementById('bankBalanceInfo');
-    
-    const bankMethods = ['1', '2', '3'];
-    
-    if (bankMethods.includes(paymentMode)) {
-        bankField.style.display = 'block';
-        bankSelect.required = true;
-        
-        bankSelect.addEventListener('change', function() {
-            const selectedOption = this.options[this.selectedIndex];
-            if (selectedOption && selectedOption.value) {
-                const balance = selectedOption.getAttribute('data-balance');
-                const currency = selectedOption.getAttribute('data-currency');
-                balanceInfo.textContent = `Current Balance: ${currency} ${parseFloat(balance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-            } else {
-                balanceInfo.textContent = '';
-            }
-        });
-        
-        bankSelect.selectedIndex = 0;
-        bankSelect.dispatchEvent(new Event('change'));
-    } else {
-        bankField.style.display = 'none';
-        bankSelect.required = false;
-        balanceInfo.textContent = '';
-    }
-}
-
-// Bulk payment functions
-function showBulkPaymentModal() {
-    if (selectedTradeIds.length === 0) {
-        alert('Please select at least one trade to pay.');
-        return;
-    }
-    
-    let validTrades = [];
-    let invalidTrades = [];
-    
-    const checkboxes = document.querySelectorAll('.trade-checkbox:checked');
-    checkboxes.forEach(cb => {
-        const row = cb.closest('tr');
-        const statusBadge = row.querySelector('.badge');
-        if (statusBadge) {
-            const statusText = statusBadge.textContent.trim();
-            if (statusText.includes('Paid') || statusText.includes('Linked') || statusText.includes('Failed')) {
-                const tradeRef = row.querySelector('td:nth-child(2) .fw-semibold').textContent;
-                invalidTrades.push(tradeRef);
-            } else {
-                validTrades.push(cb.value);
-            }
-        }
-    });
-    
-    if (invalidTrades.length > 0) {
-        alert('Some selected trades are already paid, linked, or failed:\n' + invalidTrades.join(', ') + '\n\nOnly unpaid trades will be processed.');
-    }
-    
-    if (validTrades.length === 0) {
-        alert('No valid unpaid trades selected.');
-        return;
-    }
-    
-    const container = document.getElementById('bulkPaymentTradeIds');
-    container.innerHTML = '';
-    
-    validTrades.forEach(tradeId => {
-        const input = document.createElement('input');
-        input.type = 'hidden';
-        input.name = 'trade_ids[]';
-        input.value = tradeId;
-        container.appendChild(input);
-    });
-    
-    document.getElementById('bulkPaymentCount').textContent = validTrades.length;
-    
-    document.getElementById('bulkPaymentForm').reset();
-    document.getElementById('bulkBankAccountField').style.display = 'none';
-    document.getElementById('bulkBankBalanceInfo').textContent = '';
-    
-    const bulkPaymentModal = new bootstrap.Modal(document.getElementById('bulkPaymentModal'));
-    bulkPaymentModal.show();
-}
-
-function toggleBulkBankSelection() {
-    const paymentMode = document.getElementById('bulk_payment_mode').value;
-    const bankField = document.getElementById('bulkBankAccountField');
-    const bankSelect = document.getElementById('bulk_bank_account');
-    const balanceInfo = document.getElementById('bulkBankBalanceInfo');
-    
-    const bankMethods = ['1', '2', '3'];
-    
-    if (bankMethods.includes(paymentMode)) {
-        bankField.style.display = 'block';
-        bankSelect.required = true;
-        
-        bankSelect.addEventListener('change', function() {
-            const selectedOption = this.options[this.selectedIndex];
-            if (selectedOption && selectedOption.value) {
-                const balance = selectedOption.getAttribute('data-balance');
-                const currency = selectedOption.getAttribute('data-currency');
-                balanceInfo.textContent = `Current Balance: ${currency} ${parseFloat(balance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-            } else {
-                balanceInfo.textContent = '';
-            }
-        });
-        
-        bankSelect.selectedIndex = 0;
-        bankSelect.dispatchEvent(new Event('change'));
-    } else {
-        bankField.style.display = 'none';
-        bankSelect.required = false;
-        balanceInfo.textContent = '';
-    }
-}
-
-// Link trade functions
-function showLinkTradeModal(tradeId) {
-    currentTradeId = tradeId;
-    document.getElementById('linkTradeId').value = tradeId;
-    document.getElementById('linkTradeForm').reset();
-    document.getElementById('link_trade_search').value = '';
-    document.querySelectorAll('#linked_trade_id option').forEach(o => o.style.display = '');
-    
-    const linkModal = new bootstrap.Modal(document.getElementById('linkTradeModal'));
-    linkModal.show();
-}
-
-function filterLinkTrades(query) {
-    const q = query.toLowerCase().trim();
-    document.querySelectorAll('#linked_trade_id option').forEach(function(opt) {
-        if (!opt.value) return;
-        if (!q) {
-            opt.style.display = '';
-            return;
-        }
-        const searchData = (opt.getAttribute('data-search') || opt.textContent).toLowerCase();
-        opt.style.display = searchData.includes(q) ? '' : 'none';
-    });
-}
-
-function showLinkedDetails(tradeId, linkedTradeId, linkedRef, linkedClient, linkedSecurity, linkedAmount) {
-    document.getElementById('linkedSaleDetails').innerHTML = `
-        <strong>Trade ID:</strong> ${tradeId}<br>
-        <strong>Status:</strong> Linked<br>
-        <strong>Linked To:</strong> Buy Trade #${linkedTradeId}
-    `;
-    
-    document.getElementById('linkedBuyDetails').innerHTML = `
-        <strong>Trade Reference:</strong> ${linkedRef || 'N/A'}<br>
-        <strong>Client:</strong> ${linkedClient || 'N/A'}<br>
-        <strong>Security:</strong> ${linkedSecurity || 'N/A'}<br>
-        <strong>Amount:</strong> TZS ${parseFloat(linkedAmount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) || 'N/A'}<br>
-        <strong>Trade ID:</strong> ${linkedTradeId}
-    `;
-    
-    const linkedModal = new bootstrap.Modal(document.getElementById('linkedDetailsModal'));
-    linkedModal.show();
-}
-
-// Single action functions
-function markAsUnpaid(tradeId) {
-    if (confirm('Are you sure you want to undo this payment? This will mark the trade as unpaid and deactivate the payment record.')) {
-        document.getElementById('unpaidTradeId').value = tradeId;
-        document.getElementById('unpaidForm').submit();
-    }
-}
-
-function markAsFailed(tradeId) {
-    currentTradeId = tradeId;
-    document.getElementById('failureTradeId').value = tradeId;
-    document.getElementById('failureForm').reset();
-    
-    const failureModal = new bootstrap.Modal(document.getElementById('failureModal'));
-    failureModal.show();
-}
-
-function retryFailed(tradeId) {
-    if (confirm('Reset this failed trade for payment retry?')) {
-        document.getElementById('retryTradeId').value = tradeId;
-        document.getElementById('retryFailedForm').submit();
-    }
-}
-
-function showFailureDetails(tradeId, reason, action) {
-    document.getElementById('detailsFailureReason').textContent = reason || 'No reason provided';
-    document.getElementById('detailsActionNeeded').textContent = action || 'No action specified';
-    
-    const detailsModal = new bootstrap.Modal(document.getElementById('failureDetailsModal'));
-    detailsModal.show();
-}
-
-// Initialize when page loads
-document.addEventListener('DOMContentLoaded', function() {
-    const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-    tooltipTriggerList.map(function (tooltipTriggerEl) {
-        return new bootstrap.Tooltip(tooltipTriggerEl);
-    });
-    
-    const checkboxes = document.querySelectorAll('.trade-checkbox');
-    checkboxes.forEach(cb => {
-        cb.addEventListener('change', updateBulkActions);
-    });
-    
-    updateBulkActions();
-    
-    document.addEventListener('keydown', function(e) {
-        if (e.ctrlKey && e.shiftKey && e.key === 'D') {
-            e.preventDefault();
-            const debugInfo = document.getElementById('debugInfo');
-            if (debugInfo) {
-                debugInfo.style.display = debugInfo.style.display === 'none' ? 'block' : 'none';
-            }
-        }
-    });
-});
-</script>
 
 <!-- Export Modal -->
 <div class="modal fade" id="exportModal" tabindex="-1">
@@ -2788,427 +2454,5 @@ document.addEventListener('DOMContentLoaded', function() {
     <input type="hidden" name="trade_id" id="retryTradeId">
     <input type="hidden" name="retry_failed" value="1">
 </form>
-
-<script>
-// ============================================
-// JAVASCRIPT
-// ============================================
-
-let currentTradeId = null;
-let selectedTradeIds = [];
-
-function resetFilters() {
-    window.location.href = 'settlement';
-}
-
-function toggleSelectAll(checkbox) {
-    const checkboxes = document.querySelectorAll('.trade-checkbox');
-    checkboxes.forEach(cb => {
-        cb.checked = checkbox.checked;
-        if (checkbox.checked) {
-            if (!selectedTradeIds.includes(cb.value)) {
-                selectedTradeIds.push(cb.value);
-            }
-        } else {
-            const index = selectedTradeIds.indexOf(cb.value);
-            if (index > -1) {
-                selectedTradeIds.splice(index, 1);
-            }
-        }
-    });
-    updateBulkActions();
-}
-
-function updateBulkActions() {
-    const checkboxes = document.querySelectorAll('.trade-checkbox:checked');
-    selectedTradeIds = Array.from(checkboxes).map(cb => cb.value);
-    const selectedCount = selectedTradeIds.length;
-    const floatingBtn = document.getElementById('floatingBulkPayment');
-    const badge = document.getElementById('selectedCountBadge');
-    
-    badge.textContent = selectedCount;
-    floatingBtn.style.display = selectedCount > 0 ? 'block' : 'none';
-}
-
-// ============================================
-// SHOW LINK TRADE MODAL
-// ============================================
-// ============================================
-// SHOW LINK TRADE MODAL - FIXED
-// ============================================
-function showLinkTradeModal(tradeId) {
-    currentTradeId = tradeId;
-    document.getElementById('linkTradeId').value = tradeId;
-    document.getElementById('linkTradeForm').reset();
-    
-    const saleDetails = document.getElementById('currentSaleDetails');
-    saleDetails.innerHTML = '<span class="text-muted">Loading sale trade details...</span>';
-    
-    // Fetch sale trade details
-    fetch(`?ajax=get_trade_details&trade_id=${tradeId}`)
-        .then(response => response.json())
-        .then(data => {
-            if (data && data.trade_reference) {
-                saleDetails.innerHTML = `
-                    <strong>Trade Ref:</strong> ${data.trade_reference}<br>
-                    <strong>Client:</strong> ${data.client_name}<br>
-                    <strong>Security:</strong> ${data.security_id}<br>
-                    <strong>Amount:</strong> TZS ${parseFloat(data.total_consideration || data.consideration || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}<br>
-                    <strong>Side:</strong> ${data.trade_side.toUpperCase()}
-                    ${data.trade_count > 1 ? `<br><strong>Grouped Trades:</strong> ${data.trade_count} trades` : ''}
-                `;
-            } else {
-                saleDetails.innerHTML = '<span class="text-muted">Could not load trade details</span>';
-            }
-        })
-        .catch((error) => {
-            console.error('Error fetching sale trade:', error);
-            saleDetails.innerHTML = '<span class="text-danger">Error loading trade details</span>';
-        });
-    
-    // Fetch grouped buy trades
-    const container = document.getElementById('buyTradesContainer');
-    const warning = document.getElementById('noBuyTradesWarning');
-    
-    container.innerHTML = '<div class="text-center py-3"><div class="spinner-border spinner-border-sm text-primary" role="status"></div><span class="ms-2">Loading buy trades...</span></div>';
-    warning.style.display = 'none';
-    
-    fetch(`?ajax=get_grouped_buy_trades&trade_id=${tradeId}`)
-        .then(response => {
-            if (!response.ok) {
-                throw new Error('Network response was not ok');
-            }
-            return response.json();
-        })
-        .then(data => {
-            if (data && data.length > 0) {
-                warning.style.display = 'none';
-                let html = `
-                    <div class="table-responsive">
-                        <table class="table table-sm table-hover">
-                            <thead>
-                                <tr>
-                                    <th><input type="checkbox" id="selectAllBuy" onchange="toggleSelectAllBuy(this)"></th>
-                                    <th>Reference(s)</th>
-                                    <th>Security</th>
-                                    <th class="text-end">Qty</th>
-                                    <th class="text-end">Amount</th>
-                                    <th>Date</th>
-                                    <th>Status</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                `;
-                
-                data.forEach((trade) => {
-                    const tradeCount = parseInt(trade.trade_count) || 1;
-                    const refs = trade.trade_references ? trade.trade_references.split(',') : [];
-                    const displayRef = refs.length > 0 ? refs[0] : trade.trade_reference || 'N/A';
-                    
-                    html += `
-                        <tr>
-                            <td><input type="checkbox" class="buy-trade-checkbox" name="linked_trade_ids[]" value="${trade.id}" onchange="updateLinkSelection()"></td>
-                            <td>
-                                ${displayRef}
-                                ${tradeCount > 1 ? `<br><small class="text-muted">+${tradeCount - 1} more</small>` : ''}
-                            </td>
-                            <td>${trade.security_id}</td>
-                            <td class="text-end">${parseFloat(trade.total_quantity).toLocaleString()}</td>
-                            <td class="text-end">TZS ${parseFloat(trade.total_consideration).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-                            <td>${trade.trade_date}</td>
-                            <td><span class="badge bg-${trade.settlement_status ? 'secondary' : 'warning'}">${trade.settlement_status || 'Pending'}</span></td>
-                        </tr>
-                    `;
-                });
-                
-                html += `
-                            </tbody>
-                        </table>
-                    </div>
-                    <div class="mt-2">
-                        <small class="text-muted">Select one or more buy trades to link with this sale. Only trades with numeric Additional Reference are shown.</small>
-                    </div>
-                `;
-                
-                container.innerHTML = html;
-                updateLinkSelection();
-            } else {
-                container.innerHTML = '';
-                warning.style.display = 'block';
-                warning.innerHTML = '<i class="bi bi-exclamation-triangle me-2"></i>No available buy trades with numeric Additional Reference found for this client. Buy trades must have a numeric Additional Reference to be linked.';
-            }
-        })
-        .catch((error) => {
-            console.error('Error fetching buy trades:', error);
-            container.innerHTML = `
-                <div class="alert alert-danger">
-                    <i class="bi bi-exclamation-circle me-2"></i>
-                    Error loading buy trades. Please refresh the page and try again.
-                    <br><small class="text-muted">Error: ${error.message}</small>
-                </div>
-            `;
-            warning.style.display = 'none';
-        });
-    
-    const linkModal = new bootstrap.Modal(document.getElementById('linkTradeModal'));
-    linkModal.show();
-}
-function toggleSelectAllBuy(checkbox) {
-    const checkboxes = document.querySelectorAll('.buy-trade-checkbox');
-    checkboxes.forEach(cb => cb.checked = checkbox.checked);
-    updateLinkSelection();
-}
-
-function updateLinkSelection() {
-    const checked = document.querySelectorAll('.buy-trade-checkbox:checked').length;
-    const btn = document.getElementById('linkSubmitBtn');
-    if (checked > 0) {
-        btn.innerHTML = `Link ${checked} Trade${checked > 1 ? 's' : ''}`;
-        btn.disabled = false;
-    } else {
-        btn.innerHTML = 'Select at least one trade';
-        btn.disabled = true;
-    }
-}
-
-// ============================================
-// SHOW GROUPED TRADES
-// ============================================
-function showGroupedTrades(tradeId) {
-    const modal = new bootstrap.Modal(document.getElementById('groupedTradesModal'));
-    const content = document.getElementById('groupedTradesContent');
-    content.innerHTML = '<div class="text-center py-3"><div class="spinner-border spinner-border-sm text-primary" role="status"></div><span class="ms-2">Loading trade details...</span></div>';
-    modal.show();
-    
-    fetch(`?ajax=get_grouped_trade_details&trade_id=${tradeId}`)
-        .then(response => response.json())
-        .then(data => {
-            if (data && data.length > 0) {
-                let html = `
-                    <div class="table-responsive">
-                        <table class="table table-sm">
-                            <thead>
-                                <tr>
-                                    <th>#</th>
-                                    <th>Trade Ref</th>
-                                    <th>Security</th>
-                                    <th class="text-end">Qty</th>
-                                    <th class="text-end">Price</th>
-                                    <th class="text-end">Amount</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                `;
-                
-                data.forEach((trade, index) => {
-                    html += `
-                        <tr>
-                            <td>${index + 1}</td>
-                            <td>${trade.trade_reference}</td>
-                            <td>${trade.security_id}</td>
-                            <td class="text-end">${parseFloat(trade.quantity).toLocaleString()}</td>
-                            <td class="text-end">${parseFloat(trade.price).toFixed(2)}</td>
-                            <td class="text-end">TZS ${parseFloat(trade.consideration).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-                        </tr>
-                    `;
-                });
-                
-                html += `
-                            </tbody>
-                            <tfoot>
-                                <tr class="fw-bold">
-                                    <td colspan="3" class="text-end">TOTAL:</td>
-                                    <td class="text-end">${data.reduce((sum, t) => sum + parseFloat(t.quantity), 0).toLocaleString()}</td>
-                                    <td></td>
-                                    <td class="text-end">TZS ${data.reduce((sum, t) => sum + parseFloat(t.consideration), 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-                                </tr>
-                            </tfoot>
-                        </table>
-                    </div>
-                `;
-                content.innerHTML = html;
-            } else {
-                content.innerHTML = '<div class="alert alert-warning">No trade details found.</div>';
-            }
-        })
-        .catch(() => {
-            content.innerHTML = '<div class="alert alert-danger">Error loading trade details.</div>';
-        });
-}
-
-// ============================================
-// PAYMENT FUNCTIONS
-// ============================================
-function showPaymentModal(tradeId) {
-    currentTradeId = tradeId;
-    document.getElementById('paymentTradeId').value = tradeId;
-    document.getElementById('paymentForm').reset();
-    document.getElementById('bankAccountField').style.display = 'none';
-    document.getElementById('bankBalanceInfo').textContent = '';
-    
-    const paymentModal = new bootstrap.Modal(document.getElementById('paymentModal'));
-    paymentModal.show();
-}
-
-function toggleBankSelection() {
-    const paymentMode = document.getElementById('payment_mode').value;
-    const bankField = document.getElementById('bankAccountField');
-    const bankSelect = document.getElementById('bank_account');
-    const balanceInfo = document.getElementById('bankBalanceInfo');
-    
-    const bankMethods = ['1', '2', '3'];
-    
-    if (bankMethods.includes(paymentMode)) {
-        bankField.style.display = 'block';
-        bankSelect.required = true;
-        bankSelect.onchange = function() {
-            const opt = this.options[this.selectedIndex];
-            if (opt && opt.value) {
-                const balance = opt.getAttribute('data-balance');
-                const currency = opt.getAttribute('data-currency');
-                balanceInfo.textContent = `Balance: ${currency} ${parseFloat(balance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-            } else {
-                balanceInfo.textContent = '';
-            }
-        };
-        bankSelect.selectedIndex = 0;
-        bankSelect.dispatchEvent(new Event('change'));
-    } else {
-        bankField.style.display = 'none';
-        bankSelect.required = false;
-        balanceInfo.textContent = '';
-    }
-}
-
-function showBulkPaymentModal() {
-    if (selectedTradeIds.length === 0) {
-        alert('Please select at least one trade to pay.');
-        return;
-    }
-    
-    let validTrades = [];
-    const checkboxes = document.querySelectorAll('.trade-checkbox:checked');
-    checkboxes.forEach(cb => {
-        const row = cb.closest('tr');
-        const statusBadge = row.querySelector('.badge');
-        if (statusBadge) {
-            const statusText = statusBadge.textContent.trim();
-            if (!statusText.includes('Paid') && !statusText.includes('Linked') && !statusText.includes('Failed')) {
-                validTrades.push(cb.value);
-            }
-        }
-    });
-    
-    if (validTrades.length === 0) {
-        alert('No valid unpaid trades selected.');
-        return;
-    }
-    
-    const container = document.getElementById('bulkPaymentTradeIds');
-    container.innerHTML = '';
-    validTrades.forEach(tradeId => {
-        const input = document.createElement('input');
-        input.type = 'hidden';
-        input.name = 'trade_ids[]';
-        input.value = tradeId;
-        container.appendChild(input);
-    });
-    
-    document.getElementById('bulkPaymentCount').textContent = validTrades.length;
-    document.getElementById('bulkPaymentForm').reset();
-    document.getElementById('bulkBankAccountField').style.display = 'none';
-    document.getElementById('bulkBankBalanceInfo').textContent = '';
-    
-    const bulkPaymentModal = new bootstrap.Modal(document.getElementById('bulkPaymentModal'));
-    bulkPaymentModal.show();
-}
-
-function toggleBulkBankSelection() {
-    const paymentMode = document.getElementById('bulk_payment_mode').value;
-    const bankField = document.getElementById('bulkBankAccountField');
-    const bankSelect = document.getElementById('bulk_bank_account');
-    const balanceInfo = document.getElementById('bulkBankBalanceInfo');
-    
-    const bankMethods = ['1', '2', '3'];
-    
-    if (bankMethods.includes(paymentMode)) {
-        bankField.style.display = 'block';
-        bankSelect.required = true;
-        bankSelect.onchange = function() {
-            const opt = this.options[this.selectedIndex];
-            if (opt && opt.value) {
-                const balance = opt.getAttribute('data-balance');
-                const currency = opt.getAttribute('data-currency');
-                balanceInfo.textContent = `Balance: ${currency} ${parseFloat(balance).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-            } else {
-                balanceInfo.textContent = '';
-            }
-        };
-        bankSelect.selectedIndex = 0;
-        bankSelect.dispatchEvent(new Event('change'));
-    } else {
-        bankField.style.display = 'none';
-        bankSelect.required = false;
-        balanceInfo.textContent = '';
-    }
-}
-
-function markAsUnpaid(tradeId) {
-    if (confirm('Undo this payment? Trade will be marked as unpaid.')) {
-        document.getElementById('unpaidTradeId').value = tradeId;
-        document.getElementById('unpaidForm').submit();
-    }
-}
-
-function markAsFailed(tradeId) {
-    currentTradeId = tradeId;
-    document.getElementById('failureTradeId').value = tradeId;
-    document.getElementById('failureForm').reset();
-    const failureModal = new bootstrap.Modal(document.getElementById('failureModal'));
-    failureModal.show();
-}
-
-function retryFailed(tradeId) {
-    if (confirm('Reset this failed trade for retry?')) {
-        document.getElementById('retryTradeId').value = tradeId;
-        document.getElementById('retryFailedForm').submit();
-    }
-}
-
-// ============================================
-// INITIALIZATION
-// ============================================
-document.addEventListener('DOMContentLoaded', function() {
-    const checkboxes = document.querySelectorAll('.trade-checkbox');
-    checkboxes.forEach(cb => {
-        cb.addEventListener('change', updateBulkActions);
-    });
-    updateBulkActions();
-    
-    const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-    tooltipTriggerList.map(function (el) {
-        return new bootstrap.Tooltip(el);
-    });
-});
-
-// Export type help text
-document.addEventListener('DOMContentLoaded', function() {
-    const contractRadio = document.getElementById('exportTypeContract');
-    const clientRadio = document.getElementById('exportTypeClient');
-    const helpText = document.getElementById('exportTypeHelp');
-
-    if (contractRadio && clientRadio && helpText) {
-        function updateExportHelp() {
-            if (contractRadio.checked) {
-                helpText.textContent = 'Combined contract notes for each client who traded on the selected date.';
-            } else {
-                helpText.textContent = 'PDF list of all clients and their trades due for settlement on the selected date.';
-            }
-        }
-        contractRadio.addEventListener('change', updateExportHelp);
-        clientRadio.addEventListener('change', updateExportHelp);
-    }
-});
-</script>
 
 <?php include '../includes/footer.php'; ?>

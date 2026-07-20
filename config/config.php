@@ -236,8 +236,10 @@ function display_alerts(): void
 {
     if (isset($_SESSION['alert'])) {
         $alert = $_SESSION['alert'];
-        echo '<div class="alert alert-' . htmlspecialchars($alert['type']) . ' alert-dismissible fade show" role="alert">';
-        echo htmlspecialchars($alert['message']);
+        $alert_type = $alert['type'] ?? ($alert[1] ?? 'info');
+        $alert_message = $alert['message'] ?? ($alert[0] ?? '');
+        echo '<div class="alert alert-' . htmlspecialchars($alert_type) . ' alert-dismissible fade show" role="alert">';
+        echo htmlspecialchars($alert_message);
         echo '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>';
         echo '</div>';
         unset($_SESSION['alert']);

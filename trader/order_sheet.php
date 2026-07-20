@@ -1128,7 +1128,7 @@ include '../includes/header.php';
                                     </td>
                                     <td class="text-end">
                                         <div class="btn-group btn-group-sm" role="group">
-                                            <?php if (!$isLinked && $isApproved !== 1 && $user_role !== 'finance_officer'): ?>
+                                            <?php if (!$isLinked && $isApproved !== 1): ?>
                                                 <button class="btn btn-outline-secondary" onclick="openUploadModal(<?php echo $trade['id']; ?>, 'payment', <?php echo htmlspecialchars(json_encode($trade['payment_receipt'] ?? '')); ?>)" title="Upload Payment Receipt">
                                                     <i class="bi bi-cash"></i>
                                                 </button>
@@ -1329,11 +1329,11 @@ function openUploadModal(tradeId, receiptType, existingReceipts) {
     const typeDesc = document.getElementById('receiptTypeDesc');
     
     if (receiptType === 'commission') {
-        typeLabel.textContent = 'Commission Receipt';
-        typeDesc.textContent = '- Upload commission payment confirmation';
+        if (typeLabel) typeLabel.textContent = 'Commission Receipt';
+        if (typeDesc) typeDesc.textContent = '- Upload commission payment confirmation';
     } else {
-        typeLabel.textContent = 'Payment Receipt';
-        typeDesc.textContent = '- Upload payment confirmation';
+        if (typeLabel) typeLabel.textContent = 'Payment Receipt';
+        if (typeDesc) typeDesc.textContent = '- Upload payment confirmation';
     }
     
     const previewContainer = document.getElementById('receiptPreviews');
