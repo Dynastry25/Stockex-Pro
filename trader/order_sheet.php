@@ -124,6 +124,27 @@ try {
         error_log("Added linked_trade_ref column to trades table");
     }
     
+    // Auto-create receipt_files table for DB-based receipt storage
+    $checkTable = $db->query("SHOW TABLES LIKE 'receipt_files'");
+    if ($checkTable->rowCount() == 0) {
+        $createTable = "
+            CREATE TABLE receipt_files (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                trade_id INT NOT NULL,
+                receipt_type VARCHAR(20) NOT NULL DEFAULT 'payment',
+                file_data LONGBLOB NOT NULL,
+                file_name VARCHAR(255) NOT NULL,
+                file_size INT NOT NULL DEFAULT 0,
+                mime_type VARCHAR(100) NOT NULL DEFAULT '',
+                uploaded_by VARCHAR(100) DEFAULT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                KEY trade_id (trade_id)
+            )
+        ";
+        $db->exec($createTable);
+        error_log("Created receipt_files table");
+    }
+    
 } catch (Exception $e) {
     error_log("Table setup error: " . $e->getMessage());
 }
