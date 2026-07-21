@@ -13,11 +13,10 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// --- Global Constants (override via .env) ---
-require_once __DIR__ . '/env_loader.php';
-define('APP_ENV', env('APP_ENV', 'production'));
-define('APP_DEBUG', env('APP_DEBUG', 'false') === 'true');
-define('BASE_URL', rtrim(env('BASE_URL', env('APP_URL', 'http://145.241.96.142')), '/') . '/');
+// --- Global Constants ---
+// Use defined constants for values that do not change to improve maintainability.
+define('BASE_URL', 'https://stockex.neovam.com/');
+// define('BASE_URL', 'http://localhost/stockex/');
 define('UPLOAD_PATH', 'uploads/');
 define('MAX_FILE_SIZE', 50 * 1024 * 1024); // 50MB in bytes
 
@@ -40,14 +39,11 @@ require_once 'database.php';
 // Set the default timezone to prevent date/time inconsistencies.
 date_default_timezone_set('UTC');
 
-// Error reporting controlled by APP_DEBUG env var
-if (APP_DEBUG) {
-    ini_set('display_errors', '1');
-    error_reporting(E_ALL);
-} else {
-    ini_set('display_errors', '0');
-    error_reporting(E_ALL & ~E_DEPRECATED & ~E_STRICT);
-}
+// Enable detailed error reporting for development.
+// IMPORTANT: These settings MUST be turned OFF in a production environment
+// to prevent sensitive information from being exposed.
+ini_set('display_errors', '1');
+error_reporting(E_ALL);
 
 // --- Helper Functions ---
 /**
@@ -64,6 +60,18 @@ function sanitize_input(string $data): string
     $data = stripslashes($data);
     $data = htmlspecialchars($data, ENT_QUOTES, 'UTF-8');
     return $data;
+}
+
+/**
+ * Safe HTML escaping function that handles null values
+ * Prevents deprecation warnings when passing null to htmlspecialchars
+ *
+ * @param string|null $string The string to escape
+ * @return string The escaped string or empty string if null
+ */
+function safe_html($string): string
+{
+    return htmlspecialchars($string ?? '', ENT_QUOTES, 'UTF-8');
 }
 
 /**
@@ -231,17 +239,25 @@ function show_alert(string $message, string $type = 'info'): void
 /**
  * Displays any pending alerts from the session and clears the session variable.
  * Assumes a Bootstrap framework is in use.
+ * FIXED: Added null checks to prevent warnings
  */
 function display_alerts(): void
 {
-    if (isset($_SESSION['alert'])) {
-        $alert = $_SESSION['alert'];
-        $alert_type = $alert['type'] ?? ($alert[1] ?? 'info');
-        $alert_message = $alert['message'] ?? ($alert[0] ?? '');
-        echo '<div class="alert alert-' . htmlspecialchars($alert_type) . ' alert-dismissible fade show" role="alert">';
-        echo htmlspecialchars($alert_message);
-        echo '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>';
-        echo '</div>';
+    // Check if alert exists in session
+    if (isset($_SESSION['alert']) && is_array($_SESSION['alert'])) {
+        // Get alert data with null coalescing to prevent warnings
+        $alert_type = $_SESSION['alert']['type'] ?? 'info';
+        $alert_message = $_SESSION['alert']['message'] ?? '';
+        
+        // Only display if there's a message
+        if (!empty($alert_message)) {
+            echo '<div class="alert alert-' . safe_html($alert_type) . ' alert-dismissible fade show" role="alert">';
+            echo safe_html($alert_message);
+            echo '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>';
+            echo '</div>';
+        }
+        
+        // Clear the alert from session
         unset($_SESSION['alert']);
     }
 }
