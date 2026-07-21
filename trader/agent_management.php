@@ -1,8 +1,7 @@
 <?php
 /**
- * Agent Management System
+ * Agent Management System - FIXED DATA FETCHING
  * Location: /trader/agent_management.php
- * Access: All roles with appropriate permissions
  */
 
 require_once '../config/config.php';
@@ -33,11 +32,11 @@ if (!in_array($user_role, $all_roles)) {
     exit;
 }
 
-// Determine permissions - ALL USERS CAN DO EVERYTHING EXCEPT PAY COMMISSIONS
-$is_finance = in_array($user_role, $finance_roles);  // Can pay commissions
-$can_manage = true;  // All users can manage agents and clients
-$can_pay_commissions = $is_finance;  // Only finance can pay commissions
-$view_only_mode = false;  // No view-only mode anymore
+// Determine permissions
+$is_finance = in_array($user_role, $finance_roles);
+$can_manage = true;
+$can_pay_commissions = $is_finance;
+$view_only_mode = false;
 
 // CSRF Protection
 if (session_status() === PHP_SESSION_NONE) {
@@ -197,36 +196,62 @@ try {
 }
 
 // =====================================================
-// HELPER FUNCTIONS
+// FIXED: GET AGENT CLIENTS - DIRECT QUERY
 // =====================================================
 
-function generateAgentCode($db) {
-    $prefix = 'AGT';
-    $year = date('Y');
-    
-    $stmt = $db->prepare("SELECT MAX(CAST(SUBSTRING(agent_code, 8) AS UNSIGNED)) as max_seq 
-                          FROM agents WHERE agent_code LIKE ?");
-    $stmt->execute([$prefix . $year . '%']);
-    $result = $stmt->fetch();
-    
-    $seq = ($result && $result['max_seq']) ? (int)$result['max_seq'] + 1 : 1;
-    return $prefix . $year . str_pad($seq, 4, '0', STR_PAD_LEFT);
-}
-
-function getAgentCommissionRate($db, $agent_id, $is_first_trade = false) {
-    $stmt = $db->prepare("SELECT first_trade_commission_rate, commission_rate FROM agents WHERE id = ? AND status = 'active'");
-    $stmt->execute([$agent_id]);
-    $agent = $stmt->fetch();
-    
-    if (!$agent) return 0;
-    
-    return $is_first_trade ? 
-        ($agent['first_trade_commission_rate'] ?? 0.2500) : 
-        ($agent['commission_rate'] ?? 0.1000);
-}
-
-function calculateAgentCommission($brokerage_commission, $rate) {
-    return $brokerage_commission * $rate;
+function getAgentClients($db, $agent_id) {
+    try {
+        // DIRECT QUERY - exactly like phpMyAdmin
+        $sql = "
+            SELECT 
+                cds_account, 
+                client_name, 
+                linked_to_agent, 
+                agent_id,
+                (SELECT COUNT(*) FROM trades WHERE client_cds_account = c.cds_account AND status = 'active') as total_trades,
+                (SELECT COUNT(*) FROM trades WHERE client_cds_account = c.cds_account AND status = 'active' AND agent_commission_calculated = 1) as calculated_trades
+            FROM clients c
+            WHERE agent_id = ?
+            AND linked_to_agent = 1
+            AND status = 'active'
+            AND is_active = 1
+            ORDER BY client_name
+        ";
+        
+        $stmt = $db->prepare($sql);
+        $stmt->execute([$agent_id]);
+        $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        // Debug logging
+        error_log("=== GET AGENT CLIENTS ===");
+        error_log("Agent ID: " . $agent_id);
+        error_log("Number of clients found: " . count($results));
+        if (!empty($results)) {
+            error_log("First client: " . print_r($results[0], true));
+        } else {
+            // Try a simpler query to verify
+            $test_sql = "SELECT cds_account, client_name, linked_to_agent, agent_id FROM clients WHERE agent_id = ?";
+            $test_stmt = $db->prepare($test_sql);
+            $test_stmt->execute([$agent_id]);
+            $test_results = $test_stmt->fetchAll(PDO::FETCH_ASSOC);
+            error_log("Simple query test - found: " . count($test_results));
+            if (!empty($test_results)) {
+                error_log("Simple query results: " . print_r($test_results, true));
+            }
+            
+            // Check if the agent exists
+            $agent_check = $db->prepare("SELECT id, name FROM agents WHERE id = ?");
+            $agent_check->execute([$agent_id]);
+            $agent = $agent_check->fetch();
+            error_log("Agent exists: " . ($agent ? $agent['name'] : 'NO'));
+        }
+        
+        return $results;
+        
+    } catch (Exception $e) {
+        error_log("Error in getAgentClients: " . $e->getMessage());
+        return [];
+    }
 }
 
 function getUnlinkedClients($db) {
@@ -250,64 +275,6 @@ function getUnlinkedClients($db) {
         
     } catch (Exception $e) {
         error_log("Error in getUnlinkedClients: " . $e->getMessage());
-        return [];
-    }
-}
-
-// =====================================================
-// FIXED: GET AGENT CLIENTS WITH DEBUGGING
-// =====================================================
-
-function getAgentClients($db, $agent_id) {
-    try {
-        // First, let's check if the client has the agent_id set
-        $check_sql = "SELECT cds_account, client_name, linked_to_agent, agent_id FROM clients WHERE agent_id = ? AND linked_to_agent = 1";
-        $stmt = $db->prepare($check_sql);
-        $stmt->execute([$agent_id]);
-        $direct_clients = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
-        error_log("Direct clients query - Agent ID: $agent_id, Found: " . count($direct_clients));
-        
-        if (!empty($direct_clients)) {
-            error_log("Direct clients found: " . print_r($direct_clients, true));
-        }
-        
-        // Now get the full data with trade counts
-        $sql = "
-            SELECT 
-                c.cds_account, 
-                c.client_name,
-                c.linked_to_agent,
-                c.agent_id,
-                (SELECT COUNT(*) FROM trades WHERE client_cds_account = c.cds_account AND status = 'active' AND agent_commission_calculated = 1) as calculated_trades,
-                (SELECT COUNT(*) FROM trades WHERE client_cds_account = c.cds_account AND status = 'active') as total_trades,
-                ac.linked_at,
-                ac.linked_by
-            FROM clients c
-            LEFT JOIN agent_clients ac ON c.cds_account = ac.client_cds_account AND ac.status = 'active'
-            WHERE c.agent_id = ?
-            AND c.linked_to_agent = 1
-            AND c.status = 'active'
-            AND c.is_active = 1
-            ORDER BY c.client_name
-        ";
-        
-        $stmt = $db->prepare($sql);
-        $stmt->execute([$agent_id]);
-        $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
-        error_log("Full query - Agent ID: $agent_id, Found: " . count($results));
-        
-        // If no results from the main query but we found direct clients, return them
-        if (empty($results) && !empty($direct_clients)) {
-            error_log("Main query returned empty, but direct clients found. Returning direct clients.");
-            return $direct_clients;
-        }
-        
-        return $results;
-        
-    } catch (Exception $e) {
-        error_log("Error getting agent clients: " . $e->getMessage());
         return [];
     }
 }
@@ -386,7 +353,7 @@ function linkClientsToAgent($db, $agent_id, $client_cds_list) {
                 continue;
             }
             
-            // Check if already linked to any agent
+            // Check if already linked
             $stmt = $db->prepare("SELECT linked_to_agent, agent_id FROM clients WHERE cds_account = ?");
             $stmt->execute([$cds_account]);
             $check = $stmt->fetch();
@@ -402,7 +369,7 @@ function linkClientsToAgent($db, $agent_id, $client_cds_list) {
                 }
             }
             
-            // Update clients table - THIS IS THE KEY STEP
+            // Update clients table
             $stmt = $db->prepare("
                 UPDATE clients 
                 SET linked_to_agent = 1, 
@@ -410,23 +377,15 @@ function linkClientsToAgent($db, $agent_id, $client_cds_list) {
                     updated_at = NOW()
                 WHERE cds_account = ?
             ");
-            $result = $stmt->execute([$agent_id, $cds_account]);
+            $stmt->execute([$agent_id, $cds_account]);
             
-            if (!$result) {
-                $error_info = $stmt->errorInfo();
-                error_log("Failed to update client: " . print_r($error_info, true));
-                $errors[] = "Failed to update client $cds_account";
-                $db->rollBack();
-                continue;
-            }
-            
-            // Verify the update worked
+            // Verify the update
             $stmt = $db->prepare("SELECT linked_to_agent, agent_id FROM clients WHERE cds_account = ?");
             $stmt->execute([$cds_account]);
             $verify = $stmt->fetch();
-            error_log("Verification - Client $cds_account: linked_to_agent={$verify['linked_to_agent']}, agent_id={$verify['agent_id']}");
+            error_log("Verified link - Client $cds_account: linked_to_agent={$verify['linked_to_agent']}, agent_id={$verify['agent_id']}");
             
-            // Insert into agent_clients for audit trail
+            // Insert into agent_clients for audit
             $stmt = $db->prepare("
                 INSERT INTO agent_clients (agent_id, client_cds_account, client_name, linked_by)
                 VALUES (?, ?, ?, ?)
@@ -440,12 +399,11 @@ function linkClientsToAgent($db, $agent_id, $client_cds_list) {
             
             $db->commit();
             $linked_count++;
-            error_log("Successfully linked client $cds_account to agent $agent_id");
             
         } catch (Exception $e) {
             $db->rollBack();
             error_log("Error linking client $cds_account: " . $e->getMessage());
-            $errors[] = "Failed to link $cds_account: " . $e->getMessage();
+            $errors[] = "Failed to link $cds_account";
         }
     }
     
@@ -483,16 +441,7 @@ function unlinkClientFromAgent($db, $agent_id, $cds_account) {
         ");
         $stmt->execute([$cds_account]);
         
-        // Also remove agent_id from trades for this client (optional - we keep the commission records)
-        $stmt = $db->prepare("
-            UPDATE trades 
-            SET agent_id = NULL 
-            WHERE client_cds_account = ? 
-            AND agent_id = ?
-        ");
-        $stmt->execute([$cds_account, $agent_id]);
-        
-        // Update agent_clients audit trail
+        // Update agent_clients audit
         $stmt = $db->prepare("
             UPDATE agent_clients 
             SET status = 'inactive',
@@ -641,12 +590,40 @@ function processAgentCommissionPayment($db, $data) {
     }
 }
 
+function generateAgentCode($db) {
+    $prefix = 'AGT';
+    $year = date('Y');
+    
+    $stmt = $db->prepare("SELECT MAX(CAST(SUBSTRING(agent_code, 8) AS UNSIGNED)) as max_seq 
+                          FROM agents WHERE agent_code LIKE ?");
+    $stmt->execute([$prefix . $year . '%']);
+    $result = $stmt->fetch();
+    
+    $seq = ($result && $result['max_seq']) ? (int)$result['max_seq'] + 1 : 1;
+    return $prefix . $year . str_pad($seq, 4, '0', STR_PAD_LEFT);
+}
+
+function getAgentCommissionRate($db, $agent_id, $is_first_trade = false) {
+    $stmt = $db->prepare("SELECT first_trade_commission_rate, commission_rate FROM agents WHERE id = ? AND status = 'active'");
+    $stmt->execute([$agent_id]);
+    $agent = $stmt->fetch();
+    
+    if (!$agent) return 0;
+    
+    return $is_first_trade ? 
+        ($agent['first_trade_commission_rate'] ?? 0.2500) : 
+        ($agent['commission_rate'] ?? 0.1000);
+}
+
+function calculateAgentCommission($brokerage_commission, $rate) {
+    return $brokerage_commission * $rate;
+}
+
 // =====================================================
-// POST HANDLING - ALL USERS CAN PERFORM ACTIONS
+// POST HANDLING
 // =====================================================
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    // All users can perform actions except paying commissions
     $action = '';
     if (isset($_POST['save_agent'])) $action = 'save_agent';
     if (isset($_POST['link_clients'])) $action = 'link_clients';
@@ -654,7 +631,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     if (isset($_POST['calculate_commissions'])) $action = 'calculate_commissions';
     if (isset($_POST['pay_commissions'])) $action = 'pay_commissions';
     
-    // Only finance can pay commissions
     if ($action === 'pay_commissions' && !in_array($user_role, $finance_roles)) {
         $error_message = "Only Finance Officers can process commission payments.";
     }
@@ -726,12 +702,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             }
         }
         
-        // ============ LINK CLIENTS - FIXED WITH DEBUGGING ============
+        // ============ LINK CLIENTS ============
         if (isset($_POST['link_clients'])) {
             $agent_id = (int)$_POST['agent_id'] ?? 0;
             $client_cds_list = $_POST['client_cds'] ?? [];
             
-            error_log("Link Clients POST - Agent ID: $agent_id, Clients: " . print_r($client_cds_list, true));
+            error_log("Linking clients - Agent ID: $agent_id, Clients: " . print_r($client_cds_list, true));
             
             if (empty($agent_id)) {
                 $error_message = "Please select an agent.";
@@ -741,15 +717,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 try {
                     $result = linkClientsToAgent($db, $agent_id, $client_cds_list);
                     
-                    error_log("Link result: " . print_r($result, true));
-                    
                     if ($result['linked_count'] > 0) {
                         $success_message = $result['linked_count'] . " client(s) linked successfully!";
                         if (!empty($result['errors'])) {
                             $success_message .= " (Errors: " . implode(", ", $result['errors']) . ")";
                         }
-                        // Force reload with the same agent selected
-                        $_SESSION['force_reload'] = true;
                     } else {
                         if (empty($result['errors'])) {
                             $error_message = "No new clients were linked. They may already be linked.";
@@ -760,7 +732,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     
                     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
                 } catch (Exception $e) {
-                    error_log("Link clients exception: " . $e->getMessage());
                     $error_message = "Error linking clients: " . $e->getMessage();
                 }
             }
@@ -811,7 +782,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         
         // ============ PAY COMMISSIONS - FINANCE ONLY ============
         if (isset($_POST['pay_commissions'])) {
-            // This is already protected by the finance check above
             $agent_id = (int)$_POST['agent_id'] ?? 0;
             $commission_ids = $_POST['commission_ids'] ?? [];
             $payment_date = $_POST['payment_date'] ?? date('Y-m-d');
@@ -849,7 +819,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                         $commission_id_string = implode(',', $commission_ids);
                         $agent_name = $commissions[0]['agent_name'];
                         
-                        // Get bank account details
                         $stmt = $db->prepare("SELECT bank_name, account_number FROM banks_accounts WHERE id = ?");
                         $stmt->execute([$bank_account_id]);
                         $bank = $stmt->fetch();
@@ -981,7 +950,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'calculate_all_commissions') {
     $agent_id = (int)$_GET['agent_id'] ?? 0;
     
     try {
-        // Get all clients linked to this agent
         $stmt = $db->prepare("SELECT cds_account FROM clients WHERE agent_id = ? AND linked_to_agent = 1 AND status = 'active'");
         $stmt->execute([$agent_id]);
         $clients = $stmt->fetchAll();
@@ -1019,7 +987,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'calculate_all_commissions') {
 }
 
 // =====================================================
-// GET DATA FOR DISPLAY
+// GET DATA FOR DISPLAY - WITH DEBUGGING
 // =====================================================
 
 // Get all agents
@@ -1041,29 +1009,49 @@ $unlinked_clients = [];
 $payment_methods = [];
 $bank_accounts = [];
 
-// Debug: Log the selected agent ID
+error_log("=== PAGE LOAD ===");
 error_log("Selected Agent ID: $selected_agent_id");
 
 if ($selected_agent_id > 0) {
     try {
+        // Get agent details
         $stmt = $db->prepare("SELECT * FROM agents WHERE id = ?");
         $stmt->execute([$selected_agent_id]);
         $selected_agent = $stmt->fetch();
         
         if ($selected_agent) {
-            error_log("Agent found: " . $selected_agent['name'] . " (ID: " . $selected_agent['id'] . ")");
+            error_log("Agent found: " . $selected_agent['name']);
             
-            // Get linked clients - WITH DEBUGGING
-            $agent_clients = getAgentClients($db, $selected_agent_id);
+            // Get linked clients - FIXED DIRECT QUERY
+            $sql = "
+                SELECT 
+                    cds_account, 
+                    client_name, 
+                    linked_to_agent, 
+                    agent_id,
+                    (SELECT COUNT(*) FROM trades WHERE client_cds_account = c.cds_account AND status = 'active') as total_trades,
+                    (SELECT COUNT(*) FROM trades WHERE client_cds_account = c.cds_account AND status = 'active' AND agent_commission_calculated = 1) as calculated_trades
+                FROM clients c
+                WHERE agent_id = ?
+                AND linked_to_agent = 1
+                AND status = 'active'
+                AND is_active = 1
+                ORDER BY client_name
+            ";
             
-            // Debug: Log the clients found
+            $stmt = $db->prepare($sql);
+            $stmt->execute([$selected_agent_id]);
+            $agent_clients = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
             error_log("Agent clients found: " . count($agent_clients));
             if (!empty($agent_clients)) {
-                error_log("Client list: " . print_r($agent_clients, true));
+                error_log("First client: " . print_r($agent_clients[0], true));
             }
             
+            // Get commission summary
             $agent_commission_summary = getAgentCommissionSummary($db, $selected_agent_id);
             
+            // Get commissions
             $status_filter = isset($_GET['commission_status']) ? $_GET['commission_status'] : null;
             $sql = "SELECT * FROM agent_commissions WHERE agent_id = ?";
             $params = [$selected_agent_id];
@@ -1077,9 +1065,10 @@ if ($selected_agent_id > 0) {
             $stmt->execute($params);
             $agent_commissions = $stmt->fetchAll();
             
+            // Get unlinked clients
             $unlinked_clients = getUnlinkedClients($db);
             
-            // Only fetch payment methods for finance users
+            // Get payment methods for finance users
             if ($can_pay_commissions) {
                 $stmt = $db->query("SELECT id, code, description FROM payment_methods WHERE status = 'active' ORDER BY priority");
                 $payment_methods = $stmt->fetchAll();
@@ -1088,7 +1077,7 @@ if ($selected_agent_id > 0) {
                 $bank_accounts = $stmt->fetchAll();
             }
         } else {
-            error_log("Agent not found for ID: $selected_agent_id");
+            error_log("Agent NOT found for ID: $selected_agent_id");
         }
         
     } catch (Exception $e) {
@@ -1303,7 +1292,7 @@ include '../includes/header.php';
         </div>
     </div>
 
-    <!-- Agent Selector - SEARCHABLE DROPDOWN -->
+    <!-- Agent Selector -->
     <div class="row mb-4">
         <div class="col-md-8">
             <div class="card">
@@ -1453,7 +1442,15 @@ include '../includes/header.php';
                                             <tr>
                                                 <td><?php echo htmlspecialchars($client['client_name'] ?? ''); ?></td>
                                                 <td><code><?php echo htmlspecialchars($client['cds_account'] ?? ''); ?></code></td>
-                                                <td><?php echo date('d/m/Y H:i', strtotime($client['linked_at'] ?? 'now')); ?></td>
+                                                <td>
+                                                    <?php 
+                                                    // Get linked date from agent_clients
+                                                    $link_stmt = $db->prepare("SELECT linked_at FROM agent_clients WHERE client_cds_account = ? AND agent_id = ? AND status = 'active' ORDER BY linked_at DESC LIMIT 1");
+                                                    $link_stmt->execute([$client['cds_account'], $selected_agent_id]);
+                                                    $link_data = $link_stmt->fetch();
+                                                    echo date('d/m/Y H:i', strtotime($link_data['linked_at'] ?? 'now')); 
+                                                    ?>
+                                                </td>
                                                 <td>
                                                     <?php echo ($client['calculated_trades'] ?? 0); ?> / <?php echo ($client['total_trades'] ?? 0); ?>
                                                     <button class="btn btn-outline-info btn-sm ms-1" onclick="viewClientTrades('<?php echo htmlspecialchars($client['cds_account'] ?? ''); ?>')" title="View Trades">
@@ -2007,17 +2004,15 @@ include '../includes/header.php';
 
 <script>
 // =====================================================
-// JAVASCRIPT - ENHANCED WITH FILTER AND CLICK SELECT
+// JAVASCRIPT
 // =====================================================
 
 document.addEventListener('DOMContentLoaded', function() {
-    // Set initial selected agent if any
     <?php if ($selected_agent_id > 0 && $selected_agent): ?>
         document.getElementById('agentSearchInput').value = '<?php echo htmlspecialchars($selected_agent['name']); ?>';
         document.getElementById('selectedAgentId').value = '<?php echo $selected_agent_id; ?>';
     <?php endif; ?>
     
-    // Close dropdown when clicking outside
     document.addEventListener('click', function(e) {
         const wrapper = document.querySelector('.agent-search-wrapper');
         if (wrapper && !wrapper.contains(e.target)) {
@@ -2025,7 +2020,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
-    // Link clients modal - load clients when opened
     const linkModal = document.getElementById('linkClientsModal');
     if (linkModal) {
         linkModal.addEventListener('show.bs.modal', function() {
@@ -2033,7 +2027,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // Commission checkboxes
     document.addEventListener('change', function(e) {
         if (e.target.classList.contains('commission-checkbox')) {
             updateSelectedCommissionSummary();
@@ -2107,11 +2100,10 @@ function selectAgent(agentId, agentName, agentCode) {
 }
 
 // =====================================================
-// ENHANCED: UNLINKED CLIENTS WITH FILTER AND CLICK SELECT
+// UNLINKED CLIENTS FUNCTIONS
 // =====================================================
 
 let selectedClients = new Set();
-let clientFilterTimeout = null;
 
 function refreshUnlinkedClients() {
     const body = document.getElementById('linkClientsBody');
@@ -2201,8 +2193,6 @@ function refreshUnlinkedClients() {
                     `;
                     
                     body.innerHTML = html;
-                    
-                    // Store client data for reference
                     body.dataset.clients = JSON.stringify(data.clients);
                 }
             } else {
@@ -2449,7 +2439,6 @@ function viewClientTrades(cdsAccount) {
     
     modal.show();
     
-    // Get client name
     fetch(`?ajax=get_client_name&cds=${encodeURIComponent(cdsAccount)}`)
         .then(r => r.json())
         .then(data => {
@@ -2459,7 +2448,6 @@ function viewClientTrades(cdsAccount) {
         })
         .catch(() => {});
     
-    // Get trades
     fetch(`?ajax=get_client_trades&cds_account=${encodeURIComponent(cdsAccount)}&agent_id=<?php echo $selected_agent_id; ?>`)
         .then(response => response.json())
         .then(data => {
@@ -2672,7 +2660,6 @@ function calculateSelectedTrades() {
                 alert('Error: ' + data.error);
             } else {
                 alert(data.message);
-                // Refresh the trades list
                 viewClientTrades(currentClientCds);
             }
         })
@@ -2763,7 +2750,6 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// Auto-dismiss alerts
 document.querySelectorAll('.alert').forEach(el => {
     setTimeout(() => {
         const bsAlert = bootstrap.Alert.getOrCreateInstance(el);
