@@ -254,9 +254,26 @@ function getUnlinkedClients($db) {
     }
 }
 
+// =====================================================
+// FIXED: GET AGENT CLIENTS WITH DEBUGGING
+// =====================================================
+
 function getAgentClients($db, $agent_id) {
     try {
-        $stmt = $db->prepare("
+        // First, let's check if the client has the agent_id set
+        $check_sql = "SELECT cds_account, client_name, linked_to_agent, agent_id FROM clients WHERE agent_id = ? AND linked_to_agent = 1";
+        $stmt = $db->prepare($check_sql);
+        $stmt->execute([$agent_id]);
+        $direct_clients = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        error_log("Direct clients query - Agent ID: $agent_id, Found: " . count($direct_clients));
+        
+        if (!empty($direct_clients)) {
+            error_log("Direct clients found: " . print_r($direct_clients, true));
+        }
+        
+        // Now get the full data with trade counts
+        $sql = "
             SELECT 
                 c.cds_account, 
                 c.client_name,
@@ -273,9 +290,22 @@ function getAgentClients($db, $agent_id) {
             AND c.status = 'active'
             AND c.is_active = 1
             ORDER BY c.client_name
-        ");
+        ";
+        
+        $stmt = $db->prepare($sql);
         $stmt->execute([$agent_id]);
-        return $stmt->fetchAll();
+        $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        error_log("Full query - Agent ID: $agent_id, Found: " . count($results));
+        
+        // If no results from the main query but we found direct clients, return them
+        if (empty($results) && !empty($direct_clients)) {
+            error_log("Main query returned empty, but direct clients found. Returning direct clients.");
+            return $direct_clients;
+        }
+        
+        return $results;
+        
     } catch (Exception $e) {
         error_log("Error getting agent clients: " . $e->getMessage());
         return [];
@@ -372,7 +402,7 @@ function linkClientsToAgent($db, $agent_id, $client_cds_list) {
                 }
             }
             
-            // Update clients table
+            // Update clients table - THIS IS THE KEY STEP
             $stmt = $db->prepare("
                 UPDATE clients 
                 SET linked_to_agent = 1, 
@@ -380,7 +410,21 @@ function linkClientsToAgent($db, $agent_id, $client_cds_list) {
                     updated_at = NOW()
                 WHERE cds_account = ?
             ");
-            $stmt->execute([$agent_id, $cds_account]);
+            $result = $stmt->execute([$agent_id, $cds_account]);
+            
+            if (!$result) {
+                $error_info = $stmt->errorInfo();
+                error_log("Failed to update client: " . print_r($error_info, true));
+                $errors[] = "Failed to update client $cds_account";
+                $db->rollBack();
+                continue;
+            }
+            
+            // Verify the update worked
+            $stmt = $db->prepare("SELECT linked_to_agent, agent_id FROM clients WHERE cds_account = ?");
+            $stmt->execute([$cds_account]);
+            $verify = $stmt->fetch();
+            error_log("Verification - Client $cds_account: linked_to_agent={$verify['linked_to_agent']}, agent_id={$verify['agent_id']}");
             
             // Insert into agent_clients for audit trail
             $stmt = $db->prepare("
@@ -396,11 +440,12 @@ function linkClientsToAgent($db, $agent_id, $client_cds_list) {
             
             $db->commit();
             $linked_count++;
+            error_log("Successfully linked client $cds_account to agent $agent_id");
             
         } catch (Exception $e) {
             $db->rollBack();
             error_log("Error linking client $cds_account: " . $e->getMessage());
-            $errors[] = "Failed to link $cds_account";
+            $errors[] = "Failed to link $cds_account: " . $e->getMessage();
         }
     }
     
@@ -681,10 +726,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             }
         }
         
-        // ============ LINK CLIENTS ============
+        // ============ LINK CLIENTS - FIXED WITH DEBUGGING ============
         if (isset($_POST['link_clients'])) {
             $agent_id = (int)$_POST['agent_id'] ?? 0;
             $client_cds_list = $_POST['client_cds'] ?? [];
+            
+            error_log("Link Clients POST - Agent ID: $agent_id, Clients: " . print_r($client_cds_list, true));
             
             if (empty($agent_id)) {
                 $error_message = "Please select an agent.";
@@ -694,11 +741,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 try {
                     $result = linkClientsToAgent($db, $agent_id, $client_cds_list);
                     
+                    error_log("Link result: " . print_r($result, true));
+                    
                     if ($result['linked_count'] > 0) {
                         $success_message = $result['linked_count'] . " client(s) linked successfully!";
                         if (!empty($result['errors'])) {
                             $success_message .= " (Errors: " . implode(", ", $result['errors']) . ")";
                         }
+                        // Force reload with the same agent selected
+                        $_SESSION['force_reload'] = true;
                     } else {
                         if (empty($result['errors'])) {
                             $error_message = "No new clients were linked. They may already be linked.";
@@ -709,6 +760,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     
                     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
                 } catch (Exception $e) {
+                    error_log("Link clients exception: " . $e->getMessage());
                     $error_message = "Error linking clients: " . $e->getMessage();
                 }
             }
@@ -989,6 +1041,9 @@ $unlinked_clients = [];
 $payment_methods = [];
 $bank_accounts = [];
 
+// Debug: Log the selected agent ID
+error_log("Selected Agent ID: $selected_agent_id");
+
 if ($selected_agent_id > 0) {
     try {
         $stmt = $db->prepare("SELECT * FROM agents WHERE id = ?");
@@ -996,7 +1051,17 @@ if ($selected_agent_id > 0) {
         $selected_agent = $stmt->fetch();
         
         if ($selected_agent) {
+            error_log("Agent found: " . $selected_agent['name'] . " (ID: " . $selected_agent['id'] . ")");
+            
+            // Get linked clients - WITH DEBUGGING
             $agent_clients = getAgentClients($db, $selected_agent_id);
+            
+            // Debug: Log the clients found
+            error_log("Agent clients found: " . count($agent_clients));
+            if (!empty($agent_clients)) {
+                error_log("Client list: " . print_r($agent_clients, true));
+            }
+            
             $agent_commission_summary = getAgentCommissionSummary($db, $selected_agent_id);
             
             $status_filter = isset($_GET['commission_status']) ? $_GET['commission_status'] : null;
@@ -1022,6 +1087,8 @@ if ($selected_agent_id > 0) {
                 $stmt = $db->query("SELECT id, bank_name, account_name, account_number, currency FROM banks_accounts WHERE status = 'active'");
                 $bank_accounts = $stmt->fetchAll();
             }
+        } else {
+            error_log("Agent not found for ID: $selected_agent_id");
         }
         
     } catch (Exception $e) {
@@ -1384,12 +1451,12 @@ include '../includes/header.php';
                                     <tbody>
                                         <?php foreach ($agent_clients as $client): ?>
                                             <tr>
-                                                <td><?php echo htmlspecialchars($client['client_name']); ?></td>
-                                                <td><code><?php echo htmlspecialchars($client['cds_account']); ?></code></td>
+                                                <td><?php echo htmlspecialchars($client['client_name'] ?? ''); ?></td>
+                                                <td><code><?php echo htmlspecialchars($client['cds_account'] ?? ''); ?></code></td>
                                                 <td><?php echo date('d/m/Y H:i', strtotime($client['linked_at'] ?? 'now')); ?></td>
                                                 <td>
                                                     <?php echo ($client['calculated_trades'] ?? 0); ?> / <?php echo ($client['total_trades'] ?? 0); ?>
-                                                    <button class="btn btn-outline-info btn-sm ms-1" onclick="viewClientTrades('<?php echo htmlspecialchars($client['cds_account']); ?>')" title="View Trades">
+                                                    <button class="btn btn-outline-info btn-sm ms-1" onclick="viewClientTrades('<?php echo htmlspecialchars($client['cds_account'] ?? ''); ?>')" title="View Trades">
                                                         <i class="bi bi-eye"></i>
                                                     </button>
                                                 </td>
@@ -1398,7 +1465,7 @@ include '../includes/header.php';
                                                         <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
                                                         <input type="hidden" name="unlink_client" value="1">
                                                         <input type="hidden" name="agent_id" value="<?php echo $selected_agent_id; ?>">
-                                                        <input type="hidden" name="client_cds" value="<?php echo htmlspecialchars($client['cds_account']); ?>">
+                                                        <input type="hidden" name="client_cds" value="<?php echo htmlspecialchars($client['cds_account'] ?? ''); ?>">
                                                         <button type="submit" class="btn btn-outline-danger btn-sm">
                                                             <i class="bi bi-link-45deg"></i> Unlink
                                                         </button>
