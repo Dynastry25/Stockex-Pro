@@ -231,12 +231,7 @@
                             <span>MTP Upload</span>
                         </a>
                     </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/assign_regulatory_fees">
-                            <i class="bi bi-cash-stack"></i>
-                            <span>Assigning Commission</span>
-                        </a>
-                    </li>
+                  
                     
                     <li class="nav-item">
                         <a class="nav-link" href="<?php echo BASE_URL; ?>finance/chart_of_accounts">
