@@ -426,12 +426,19 @@ function calculateBondFeesForContract($face_value, $consideration, $effective_ra
     
     $fees['fidelity'] = 0.00;
     
+    // Bank Charges (flat fee based on consideration)
+    if ($consideration < 100000) $fees['bank_charges'] = 250;
+    elseif ($consideration < 10000000) $fees['bank_charges'] = 2000;
+    elseif ($consideration < 50000000) $fees['bank_charges'] = 6000;
+    else $fees['bank_charges'] = 12000;
+    
     $fees['total'] = array_sum([
         $fees['brokerage'],
         $fees['vat'],
         $fees['cmsa'],
         $fees['dse'],
-        $fees['csd']
+        $fees['csd'],
+        $fees['bank_charges']
     ]);
     
     return $fees;
@@ -568,13 +575,20 @@ function calculateEquityFeesForContract($db, $consideration, $effective_rate = n
     // CDS Fee (0.0708% of consideration)
     $fees['csd'] = $consideration * (0.0708 / 100);
     
+    // Bank Charges (flat fee based on consideration)
+    if ($consideration < 100000) $fees['bank_charges'] = 250;
+    elseif ($consideration < 10000000) $fees['bank_charges'] = 2000;
+    elseif ($consideration < 50000000) $fees['bank_charges'] = 6000;
+    else $fees['bank_charges'] = 12000;
+    
     $fees['total'] = array_sum([
         $fees['brokerage'],
         $fees['vat'],
         $fees['cmsa'],
         $fees['dse'],
         $fees['fidelity'],
-        $fees['csd']
+        $fees['csd'],
+        $fees['bank_charges']
     ]);
     
     return $fees;
@@ -597,6 +611,7 @@ function calculateFeesWithEffectiveRate($db, $asset_class, $consideration, $quan
         $fees['csd'] = $bond_fees['csd'];
         $fees['dse'] = $bond_fees['dse'];
         $fees['fidelity'] = 0.00;
+        $fees['bank_charges'] = $bond_fees['bank_charges'] ?? 0;
         $fees['total'] = $bond_fees['total'];
         
     } else {
@@ -609,6 +624,7 @@ function calculateFeesWithEffectiveRate($db, $asset_class, $consideration, $quan
         $fees['dse'] = $equity_fees['dse'];
         $fees['fidelity'] = $equity_fees['fidelity'];
         $fees['csd'] = $equity_fees['csd'];
+        $fees['bank_charges'] = $equity_fees['bank_charges'] ?? 0;
         $fees['total'] = $equity_fees['total'];
     }
     
@@ -716,6 +732,7 @@ class ContractNotePDF extends TCPDF {
         }
         
         $this->AddPage();
+        $this->Ln(10);
         
         $this->SetFont('helvetica', '', 7);
         $this->Cell(90, 4, 'Trade Date: ' . date('d/m/Y', strtotime($trade['trade_date'])), 0, 0, 'L');
@@ -921,16 +938,10 @@ class ContractNotePDF extends TCPDF {
         }
         $this->Cell(40, 3.5, number_format($fees['csd'], 2), 0, 1, 'R');
         
-        $bank_charge = isset($fees['bank_charge']) ? floatval($fees['bank_charge']) : 0;
-        if ($bank_charge > 0) {
-            $this->Cell(100, 3.5, 'Bank Charges', 0, 0, 'L');
-            $this->Cell(40, 3.5, '', 0, 0, 'L');
-            $this->Cell(40, 3.5, number_format($bank_charge, 2), 0, 1, 'R');
-        }
-        
-        $this->Cell(100, 3.5, 'Other Charges', 0, 0, 'L');
+        $bank_charge = isset($fees['bank_charges']) ? floatval($fees['bank_charges']) : (isset($fees['bank_charge']) ? floatval($fees['bank_charge']) : 0);
+        $this->Cell(100, 3.5, 'Bank Charges', 0, 0, 'L');
         $this->Cell(40, 3.5, '', 0, 0, 'L');
-        $this->Cell(40, 3.5, '0.00', 0, 1, 'R');
+        $this->Cell(40, 3.5, number_format($bank_charge, 2), 0, 1, 'R');
         
         $this->SetLineWidth(0.2);
         $this->Line(25, $this->GetY() + 1, 185, $this->GetY() + 1);

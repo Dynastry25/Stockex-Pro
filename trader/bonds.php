@@ -227,6 +227,7 @@ class ContractNotePDF extends TCPDF {
         
         // Add a new page
         $this->AddPage();
+        $this->Ln(10);
         
         // Trade information - COMPACT
         $this->SetFont('helvetica', '', 7);
@@ -368,9 +369,9 @@ class ContractNotePDF extends TCPDF {
         $this->Cell(40, 3.5, '@ ' . number_format($cds_rate, 4) . '%', 0, 0, 'L');
         $this->Cell(40, 3.5, number_format($fees['csd'], 2), 0, 1, 'R');
         
-        $this->Cell(100, 3.5, 'Other Charges', 0, 0, 'L');
+        $this->Cell(100, 3.5, 'Bank Charges', 0, 0, 'L');
         $this->Cell(40, 3.5, '', 0, 0, 'L');
-        $this->Cell(40, 3.5, '0.00', 0, 1, 'R');
+        $this->Cell(40, 3.5, number_format($fees['bank_charges'], 2), 0, 1, 'R');
         
         // Total line
         $this->SetLineWidth(0.2);
@@ -747,13 +748,20 @@ function calculateFees($db, $asset_class, $consideration, $quantity, $price) {
         $fees['csd'] = $consideration * ($cds_rate / 100);
     }
     
+    // Bank Charges (flat fee based on consideration)
+    if ($consideration < 100000) $fees['bank_charges'] = 250;
+    elseif ($consideration < 10000000) $fees['bank_charges'] = 2000;
+    elseif ($consideration < 50000000) $fees['bank_charges'] = 6000;
+    else $fees['bank_charges'] = 12000;
+    
     $fees['total'] = array_sum([
         $fees['brokerage'] ?? 0,
         $fees['vat'] ?? 0,
         $fees['cmsa'] ?? 0,
         $fees['dse'] ?? 0,
         $fees['fidelity'] ?? 0,
-        $fees['csd'] ?? 0
+        $fees['csd'] ?? 0,
+        $fees['bank_charges'] ?? 0
     ]);
     
     return $fees;

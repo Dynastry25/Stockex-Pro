@@ -209,6 +209,13 @@ function getFeeConfiguration($fee_type, $applies_to = 'ALL') {
     return $config;
 }
 
+function calculateBankCharges($consideration) {
+    if ($consideration < 100000) return 250;
+    if ($consideration < 10000000) return 2000;
+    if ($consideration < 50000000) return 6000;
+    return 12000;
+}
+
 function calculateFees($amount, $consideration, $asset_class, $master_data) {
     $asset_type_map = [
         'equity' => 'EQUITY',
@@ -251,6 +258,8 @@ function calculateFees($amount, $consideration, $asset_class, $master_data) {
     $cds_rate = $cds_config['rate_percentage'] ?? 0.0708;
     $cds_fee = $amount * ($cds_rate / 100);
     
+    $bank_charges = calculateBankCharges($consideration);
+    
     return [
         'brokerage_commission' => $brokerage_commission,
         'vat_on_brokerage' => $vat_on_brokerage,
@@ -258,8 +267,9 @@ function calculateFees($amount, $consideration, $asset_class, $master_data) {
         'dse_fee' => $dse_fee,
         'fidelity_fee' => $fidelity_fee,
         'cds_fee' => $cds_fee,
-        'csdr_fee' => 0.00, // For compatibility
-        'total_charges' => $brokerage_commission + $vat_on_brokerage + $cmsa_fee + $dse_fee + $fidelity_fee + $cds_fee
+        'csdr_fee' => 0.00,
+        'bank_charges' => $bank_charges,
+        'total_charges' => $brokerage_commission + $vat_on_brokerage + $cmsa_fee + $dse_fee + $fidelity_fee + $cds_fee + $bank_charges
     ];
 }
 
@@ -278,7 +288,8 @@ function calculateTreasuryBondFees($quantity, $consideration) {
     $csdr_fee = $quantity * ($csdr_rate / 100); // VAT already included
     $dse_fee = $quantity * ($dse_rate / 100);
     
-    $total_charges = $brokerage_commission + $vat_on_brokerage + $cmsa_fee + $csdr_fee + $dse_fee;
+    $bank_charges = calculateBankCharges($consideration);
+    $total_charges = $brokerage_commission + $vat_on_brokerage + $cmsa_fee + $csdr_fee + $dse_fee + $bank_charges;
     
     return [
         'brokerage_commission' => $brokerage_commission,
@@ -286,8 +297,9 @@ function calculateTreasuryBondFees($quantity, $consideration) {
         'cmsa_fee' => $cmsa_fee,
         'csdr_fee' => $csdr_fee,
         'dse_fee' => $dse_fee,
-        'fidelity_fee' => 0.00, // Not applicable for Treasury bonds
-        'cds_fee' => 0.00, // For compatibility with existing code
+        'fidelity_fee' => 0.00,
+        'cds_fee' => 0.00,
+        'bank_charges' => $bank_charges,
         'total_charges' => $total_charges
     ];
 }
@@ -539,9 +551,9 @@ function generateEquityContractNoteHTML($trade, $contract_number, $order_number,
                     <td style="padding: 3px 0; text-align: right;"><?php echo number_format($fees['cds_fee'], 2); ?></td>
                 </tr>
                 <tr>
-                    <td style="padding: 3px 0;">Other Charges</td>
-                    <td style="padding: 3px 0;"></td>
-                    <td style="padding: 3px 0; text-align: right;">0.00</td>
+                    <td style="padding: 3px 0;">Bank Charges</td>
+                    <td style="padding: 3px 0;">Flat</td>
+                    <td style="padding: 3px 0; text-align: right;"><?php echo number_format($fees['bank_charges'], 2); ?></td>
                 </tr>
                 <tr style="border-top: 1px solid #ddd; font-weight: bold;">
                     <td style="padding: 8px 0;">Total Charges</td>
@@ -718,6 +730,11 @@ Account: <?php echo substr($trade['client_cds_account'], -6); ?>        </div>
                     <td style="padding: 3px 0;"><?php echo number_format($quantity, 2); ?> @ 0.0200600%</td>
                     <td style="padding: 3px 0; text-align: right;"><?php echo number_format($fees['dse_fee'], 2); ?></td>
                 </tr>
+                <tr>
+                    <td style="padding: 3px 0;">Bank Charges</td>
+                    <td style="padding: 3px 0;">Flat</td>
+                    <td style="padding: 3px 0; text-align: right;"><?php echo number_format($fees['bank_charges'], 2); ?></td>
+                </tr>
                 <tr style="border-top: 1px solid #ddd; font-weight: bold;">
                     <td style="padding: 8px 0;">Total Charges</td>
                     <td style="padding: 8px 0;"></td>
@@ -837,6 +854,7 @@ function generateTransactionSummaryReports($trades, $report_type, $report_by, $m
         $grouped_trades[$group_key]['summary']['total_cds'] += $fees['cds_fee'];
         $grouped_trades[$group_key]['summary']['total_fidelity'] += $fees['fidelity_fee'];
         $grouped_trades[$group_key]['summary']['total_csdr'] += $fees['csdr_fee'];
+        $grouped_trades[$group_key]['summary']['total_bank_charges'] = ($grouped_trades[$group_key]['summary']['total_bank_charges'] ?? 0) + ($fees['bank_charges'] ?? 0);
 
         $total_summary['total_quantity'] += floatval($trade['quantity']);
         $total_summary['total_consideration'] += floatval($trade['consideration']);
@@ -847,6 +865,7 @@ function generateTransactionSummaryReports($trades, $report_type, $report_by, $m
         $total_summary['total_cds'] += $fees['cds_fee'];
         $total_summary['total_fidelity'] += $fees['fidelity_fee'];
         $total_summary['total_csdr'] += $fees['csdr_fee'];
+        $total_summary['total_bank_charges'] = ($total_summary['total_bank_charges'] ?? 0) + ($fees['bank_charges'] ?? 0);
     }
 
     generateSummaryReportHTML($grouped_trades, $report_type, $report_by, $master_data, $total_summary);
@@ -887,7 +906,7 @@ function generateSummaryReportHTML($grouped_trades, $report_type, $report_by, $m
                         <th>Consideration</th>
                         <th>Brokerage</th>
                         <th>VAT</th>
-                        <th>Other Charges</th>
+                        <th>Bank Charges</th>
                         <th>Total Charges</th>
                         <th>Net Amount</th>
                     </tr>
@@ -922,7 +941,7 @@ function generateSummaryReportHTML($grouped_trades, $report_type, $report_by, $m
                             <td><?php echo number_format($consideration, 2); ?></td>
                             <td><?php echo number_format($fees['brokerage_commission'], 2); ?></td>
                             <td><?php echo number_format($fees['vat_on_brokerage'], 2); ?></td>
-                            <td><?php echo number_format($total_charges - $fees['brokerage_commission'] - $fees['vat_on_brokerage'], 2); ?></td>
+                            <td><?php echo number_format($fees['bank_charges'] ?? 0, 2); ?></td>
                             <td><?php echo number_format($total_charges, 2); ?></td>
                             <td><?php echo number_format($net_amount, 2); ?></td>
                         </tr>
@@ -934,8 +953,8 @@ function generateSummaryReportHTML($grouped_trades, $report_type, $report_by, $m
                         <td><?php echo number_format($group_data['summary']['total_consideration'], 2); ?></td>
                         <td><?php echo number_format($group_data['summary']['total_brokerage'], 2); ?></td>
                         <td><?php echo number_format($group_data['summary']['total_vat'], 2); ?></td>
-                        <td><?php echo number_format($group_data['summary']['total_cmsa'] + $group_data['summary']['total_dse'] + $group_data['summary']['total_cds'] + $group_data['summary']['total_fidelity'] + $group_data['summary']['total_csdr'], 2); ?></td>
-                        <td><?php echo number_format($group_data['summary']['total_brokerage'] + $group_data['summary']['total_vat'] + $group_data['summary']['total_cmsa'] + $group_data['summary']['total_dse'] + $group_data['summary']['total_cds'] + $group_data['summary']['total_fidelity'] + $group_data['summary']['total_csdr'], 2); ?></td>
+                        <td><?php echo number_format($group_data['summary']['total_bank_charges'] ?? 0, 2); ?></td>
+                        <td><?php echo number_format($group_data['summary']['total_brokerage'] + $group_data['summary']['total_vat'] + $group_data['summary']['total_cmsa'] + $group_data['summary']['total_dse'] + $group_data['summary']['total_cds'] + $group_data['summary']['total_fidelity'] + $group_data['summary']['total_csdr'] + ($group_data['summary']['total_bank_charges'] ?? 0), 2); ?></td>
                         <td></td>
                     </tr>
                 </tbody>
@@ -951,8 +970,8 @@ function generateSummaryReportHTML($grouped_trades, $report_type, $report_by, $m
                     <td style="width: 10%; text-align: right;"><?php echo number_format($total_summary['total_consideration'], 2); ?></td>
                     <td style="width: 10%; text-align: right;"><?php echo number_format($total_summary['total_brokerage'], 2); ?></td>
                     <td style="width: 10%; text-align: right;"><?php echo number_format($total_summary['total_vat'], 2); ?></td>
-                    <td style="width: 10%; text-align: right;"><?php echo number_format($total_summary['total_cmsa'] + $total_summary['total_dse'] + $total_summary['total_cds'] + $total_summary['total_fidelity'] + $total_summary['total_csdr'], 2); ?></td>
-                    <td style="width: 10%; text-align: right;"><?php echo number_format($total_summary['total_brokerage'] + $total_summary['total_vat'] + $total_summary['total_cmsa'] + $total_summary['total_dse'] + $total_summary['total_cds'] + $total_summary['total_fidelity'] + $total_summary['total_csdr'], 2); ?></td>
+                    <td style="width: 10%; text-align: right;"><?php echo number_format($total_summary['total_bank_charges'] ?? 0, 2); ?></td>
+                    <td style="width: 10%; text-align: right;"><?php echo number_format($total_summary['total_brokerage'] + $total_summary['total_vat'] + $total_summary['total_cmsa'] + $total_summary['total_dse'] + $total_summary['total_cds'] + $total_summary['total_fidelity'] + $total_summary['total_csdr'] + ($total_summary['total_bank_charges'] ?? 0), 2); ?></td>
                     <td style="width: 10%;"></td>
                 </tr>
             </table>

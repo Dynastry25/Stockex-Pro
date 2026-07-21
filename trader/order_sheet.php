@@ -290,10 +290,10 @@ class DealingSheetPDF extends TCPDF {
         $this->Cell(40, 6, '@ ' . $cds_rate, 0, 0, 'R');
         $this->Cell(40, 6, number_format($fees['csd'], 2), 0, 1, 'R');
         
-        // Other Charges (placeholder)
-        $this->Cell(100, 6, 'Other Charges', 0, 0, 'L');
+        // Bank Charges
+        $this->Cell(100, 6, 'Bank Charges', 0, 0, 'L');
         $this->Cell(40, 6, '', 0, 0, 'R');
-        $this->Cell(40, 6, '0.00', 0, 1, 'R');
+        $this->Cell(40, 6, number_format($fees['bank_charges'], 2), 0, 1, 'R');
         
         $this->Line(25, $this->GetY(), 185, $this->GetY());
         
@@ -535,6 +535,14 @@ function calculateDealingSheetFees($asset_class, $consideration, $quantity, $pri
     }
     
     $fees['total'] = $fees['brokerage'] + $fees['vat'] + $fees['cmsa'] + $fees['dse'] + $fees['fidelity'] + $fees['csd'];
+    
+    // Bank Charges (flat fee based on consideration)
+    if ($consideration < 100000) $fees['bank_charges'] = 250;
+    elseif ($consideration < 10000000) $fees['bank_charges'] = 2000;
+    elseif ($consideration < 50000000) $fees['bank_charges'] = 6000;
+    else $fees['bank_charges'] = 12000;
+    
+    $fees['total'] += $fees['bank_charges'];
     
     return $fees;
 }
