@@ -268,7 +268,7 @@ include '../includes/header.php';
                 <div class="card-body">
                     <div class="row g-3">
                         <div class="col-lg-3 col-md-6">
-                            <a href="dealing_sheet.php" class="btn btn-primary btn-lg w-100 h-100 d-flex flex-column align-items-center justify-content-center p-4 text-decoration-none">
+                            <a href="order_sheet.php" class="btn btn-primary btn-lg w-100 h-100 d-flex flex-column align-items-center justify-content-center p-4 text-decoration-none">
                                 <i class="bi bi-journal-check mb-2" style="font-size: 2rem;"></i>
                                 <div class="fw-semibold">Dealing Sheets</div>
                                 <small class="opacity-75">Capture and execute orders</small>

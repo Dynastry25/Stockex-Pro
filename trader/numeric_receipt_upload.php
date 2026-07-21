@@ -3,7 +3,7 @@
 // NUMERIC REFERENCE RECEIPT UPLOAD - ACTION PAGE
 // ============================================
 // This page handles all uploads, deletions, and comments
-// then redirects back to order_sheet.php
+// then redirects back to dealing_sheet.php
 
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
@@ -24,7 +24,7 @@ $current_user = get_logged_in_user() ?: get_session_user();
 $user_name = $current_user['username'] ?? 'System';
 
 // ============================================
-// FUNCTION: Redirect back to order_sheet.php
+// FUNCTION: Redirect back to dealing_sheet.php
 // ============================================
 function redirectBack($params = []) {
     $default_params = [
@@ -40,7 +40,7 @@ function redirectBack($params = []) {
     // Remove empty values
     $merged_params = array_filter($merged_params);
     
-    header('Location: order_sheet.php?' . http_build_query($merged_params));
+    header('Location: dealing_sheet.php?' . http_build_query($merged_params));
     exit;
 }
 

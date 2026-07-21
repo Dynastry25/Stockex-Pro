@@ -282,7 +282,7 @@
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/dealing_sheet">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/dealing_sheet.php">
                             <i class="bi bi-journal-check"></i>
                             <span>Dealing Sheet</span>
                         </a>

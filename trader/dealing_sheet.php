@@ -1,1214 +1,1323 @@
 <?php
-// Error reporting - log but don't display
-error_reporting(E_ALL);
-ini_set('display_errors', 0);
-ini_set('log_errors', 1);
-ini_set('error_log', __DIR__ . '/dealing_sheet_errors.log');
+/**
+ * RECEIPT UPLOAD WITH COMMISSION CALCULATION
+ * Based on actual fee structure from trades.php
+ */
 
-// Start output buffering
-if (ob_get_level() == 0) {
-    ob_start();
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
+// Start session
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
+// Includes
 require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
-require_once '../includes/dealing_sheet_helpers.php';
-require_once '../tcpdf/tcpdf.php';
-require_once __DIR__ . '/../reports/traits/ReportHeaderTrait.php';
 
-// Check user permissions - finance, admin, and traders can access
+// Security
+require_login();
 $user_role = $_SESSION['role'] ?? '';
 $allowed_roles = ['finance_officer', 'system_admin', 'trader'];
-
-require_login();
-
-// Check if user has any of the allowed roles
 if (!in_array($user_role, $allowed_roles)) {
-    show_alert('Access denied. You do not have permission to access the dealing sheet page.', 'danger');
     redirect('auth/login.php');
     exit;
 }
-
-// Only require mandate for non-system_admin roles
 if ($user_role !== 'system_admin') {
     require_mandate();
 }
 
 $db = getDBConnection();
 $current_user = get_logged_in_user() ?: get_session_user();
-$company = dealingSheetGetCompany($db);
-$view = $_GET['view'] ?? 'all';
+$user_name = $current_user['username'] ?? 'System';
+$user_id = $current_user['id'] ?? null;
 
 // ============================================
-// DEALING SHEET PDF CLASS
+// FEE CONFIGURATION FROM trades.php
 // ============================================
-class DealingSheetPDF extends TCPDF {
-    use ReportHeaderTrait;
+
+// Bond Fee Structure
+// Brokerage: First 100M @ 0.063132%, Excess @ 0.035%
+function calculateBondBrokerageFee($face_value) {
+    $brokerage_first_100m = min($face_value, 100000000) * (0.063132 / 100);
+    $brokerage_excess = max($face_value - 100000000, 0) * (0.035 / 100);
+    return $brokerage_first_100m + $brokerage_excess;
+}
+
+// Bond: Liberty on excess only (first 100M standard rate)
+function calculateBondBrokerageWithLibertyExcess($face_value, $liberty_rate) {
+    $brokerage_first_100m = min($face_value, 100000000) * (0.063132 / 100);
+    $brokerage_excess = max($face_value - 100000000, 0) * ($liberty_rate / 100);
+    return $brokerage_first_100m + $brokerage_excess;
+}
+
+// Bond: Liberty replaces entire calculation
+function calculateBondBrokerageWithLibertyReplaceAll($face_value, $liberty_rate) {
+    return $face_value * ($liberty_rate / 100);
+}
+
+// Equity Fee Structure (Tiered)
+function calculateEquityBrokerageFee($consideration) {
+    $rate1 = 1.7000; // First 10M
+    $rate2 = 1.5000; // Next 40M
+    $rate3 = 0.8000; // Excess over 50M
     
-    private $company_name = '';
-    private $watermark_enabled = true;
-    
-    public function setCompanyName($name) {
-        $this->company_name = $name;
-    }
-    
-    public function setWatermarkEnabled($enabled) {
-        $this->watermark_enabled = $enabled;
-    }
-    
-    public function Header() {
-        $this->renderReportHeader();
-        
-        $y = $this->GetY();
-        
-        if ($this->watermark_enabled) {
-            $this->SetAlpha(0.05);
-            $this->SetFont('times', 'B', 45);
-            $this->SetTextColor(200, 200, 200);
-            $this->StartTransform();
-            $this->Rotate(45, 105, 150);
-            $this->Text(105, 150, $this->company_name);
-            $this->StopTransform();
-            $this->SetAlpha(1);
-            $this->SetTextColor(0, 0, 0);
-        }
-        
-        $this->SetY($y + 2);
-    }
-    
-    public function Footer() {
-        $this->SetY(-12);
-        $this->SetFont('helvetica', 'I', 7);
-        $this->SetTextColor(100, 100, 100);
-        $this->Cell(0, 5, 'Generated on: ' . date('d/m/Y H:i:s'), 0, 0, 'L');
-        $this->Cell(0, 5, 'Page ' . $this->getAliasNumPage() . ' of ' . $this->getAliasNbPages(), 0, 0, 'R');
-    }
-    
-    public function addDealingSheet($sheet, $fees, $exportedByName) {
-        $this->AddPage();
-        
-        $is_bond = ($sheet['asset_class'] === 'bond');
-        $trade_side = strtoupper($sheet['order_type'] ?? 'BUY');
-        
-        // Title
-        $this->SetFont('helvetica', 'B', 16);
-        $this->Cell(0, 10, 'DEALING SHEET (INTERNAL USE)', 0, 1, 'C');
-        
-        $this->Ln(4);
-        
-        // Company info line
-        $this->SetFont('helvetica', '', 9);
-        $this->Cell(0, 5, 'Broker Code: ' . ($sheet['broker_code'] ?? 'N/A'), 0, 1, 'L');
-        $this->Cell(0, 5, 'Department: Operations', 0, 1, 'L');
-        $this->Cell(0, 5, 'Date: ' . date('d/m/Y', strtotime($sheet['order_date'] ?? date('Y-m-d'))), 0, 1, 'L');
-        
-        $this->Ln(4);
-        
-        // ============================================
-        // 1. CLIENT DETAILS
-        // ============================================
-        $this->SetFont('helvetica', 'B', 11);
-        $this->SetFillColor(240, 240, 240);
-        $this->Cell(0, 8, '1. CLIENT DETAILS', 0, 1, 'L', true);
-        
-        $this->SetFont('helvetica', '', 10);
-        $this->Cell(45, 7, 'Client Name:', 0, 0);
-        $this->SetFont('helvetica', 'B', 10);
-        $this->Cell(0, 7, $sheet['client_name'], 0, 1);
-        
-        $this->SetFont('helvetica', '', 10);
-        $this->Cell(45, 7, 'CDS Account:', 0, 0);
-        $this->SetFont('helvetica', 'B', 10);
-        $this->Cell(0, 7, $sheet['client_cds_account'], 0, 1);
-        
-        $this->Ln(4);
-        
-        // ============================================
-        // 2. ORDER DETAILS
-        // ============================================
-        $this->SetFont('helvetica', 'B', 11);
-        $this->SetFillColor(240, 240, 240);
-        $this->Cell(0, 8, '2. ORDER DETAILS', 0, 1, 'L', true);
-        
-        $this->SetFont('helvetica', '', 10);
-        $this->Cell(50, 7, 'Order Type:', 0, 0);
-        $this->SetFont('helvetica', 'B', 10);
-        $this->Cell(60, 7, $trade_side, 0, 0);
-        
-        $this->SetFont('helvetica', '', 10);
-        $this->Cell(45, 7, 'Priority:', 0, 0);
-        $this->SetFont('helvetica', 'B', 10);
-        $this->Cell(0, 7, $sheet['priority'] ?? 'Normal', 0, 1);
-        
-        $this->SetFont('helvetica', '', 10);
-        $this->Cell(50, 7, 'Asset Class:', 0, 0);
-        $this->SetFont('helvetica', 'B', 10);
-        $this->Cell(60, 7, ucfirst($sheet['asset_class']), 0, 0);
-        
-        $this->SetFont('helvetica', '', 10);
-        $this->Cell(45, 7, 'Security:', 0, 0);
-        $this->SetFont('helvetica', 'B', 10);
-        $this->Cell(0, 7, $sheet['security_id'] . ' - ' . $sheet['security_name'], 0, 1);
-        
-        $qty = floatval($sheet['quantity'] ?? 0);
-        $price = floatval($sheet['order_price'] ?? 0);
-        $order_value = $qty * $price;
-        
-        $this->SetFont('helvetica', '', 10);
-        $this->Cell(50, 7, 'Quantity:', 0, 0);
-        $this->SetFont('helvetica', 'B', 10);
-        $this->Cell(60, 7, number_format($qty, ($is_bond ? 2 : 0)), 0, 0);
-        
-        $this->SetFont('helvetica', '', 10);
-        $this->Cell(45, 7, 'Price (TZS):', 0, 0);
-        $this->SetFont('helvetica', 'B', 10);
-        $this->Cell(0, 7, number_format($price, ($is_bond ? 6 : 2)), 0, 1);
-        
-        $this->SetFont('helvetica', '', 10);
-        $this->Cell(50, 7, 'Order Value:', 0, 0);
-        $this->SetFont('helvetica', 'B', 10);
-        $this->Cell(60, 7, 'TZS ' . number_format($order_value, 2), 0, 0);
-        
-        $this->SetFont('helvetica', '', 10);
-        $this->Cell(45, 7, 'Order Date/Time:', 0, 0);
-        $this->SetFont('helvetica', 'B', 10);
-        $order_datetime = ($sheet['order_date'] ?? date('Y-m-d')) . ' ' . ($sheet['order_time'] ?? '');
-        $this->Cell(0, 7, date('d/m/Y H:i', strtotime($order_datetime)), 0, 1);
-        
-        $this->Ln(4);
-        
-        // ============================================
-        // 3. EXECUTION DETAILS
-        // ============================================
-        $this->SetFont('helvetica', 'B', 11);
-        $this->SetFillColor(240, 240, 240);
-        $this->Cell(0, 8, '3. EXECUTION DETAILS', 0, 1, 'L', true);
-        
-        $executed_qty = floatval($sheet['executed_quantity'] ?? 0);
-        $executed_price = floatval($sheet['executed_price'] ?? 0);
-        $executed_value = $executed_qty * $executed_price;
-        
-        $this->SetFont('helvetica', '', 10);
-        $this->Cell(60, 7, 'Executed Quantity:', 0, 0);
-        $this->SetFont('helvetica', 'B', 10);
-        $this->Cell(50, 7, $executed_qty > 0 ? number_format($executed_qty, ($is_bond ? 2 : 0)) : 'Pending', 0, 0);
-        
-        $this->SetFont('helvetica', '', 10);
-        $this->Cell(50, 7, 'Executed Price:', 0, 0);
-        $this->SetFont('helvetica', 'B', 10);
-        $this->Cell(0, 7, $executed_price > 0 ? number_format($executed_price, ($is_bond ? 6 : 2)) : 'Pending', 0, 1);
-        
-        $this->SetFont('helvetica', '', 10);
-        $this->Cell(60, 7, 'Executed Value:', 0, 0);
-        $this->SetFont('helvetica', 'B', 10);
-        $this->Cell(50, 7, $executed_value > 0 ? 'TZS ' . number_format($executed_value, 2) : 'Pending', 0, 0);
-        
-        $this->SetFont('helvetica', '', 10);
-        $this->Cell(50, 7, 'Execution Status:', 0, 0);
-        $this->SetFont('helvetica', 'B', 10);
-        $this->Cell(0, 7, ucfirst($sheet['execution_status'] ?? 'Pending'), 0, 1);
-        
-        if ($executed_qty > 0) {
-            $this->SetFont('helvetica', '', 10);
-            $this->Cell(60, 7, 'Trade Date:', 0, 0);
-            $this->SetFont('helvetica', 'B', 10);
-            $this->Cell(50, 7, $sheet['trade_date'] ? date('d/m/Y', strtotime($sheet['trade_date'])) : 'Pending', 0, 0);
-            
-            $this->SetFont('helvetica', '', 10);
-            $this->Cell(50, 7, 'Settlement Date:', 0, 0);
-            $this->SetFont('helvetica', 'B', 10);
-            $this->Cell(0, 7, $sheet['settlement_date'] ? date('d/m/Y', strtotime($sheet['settlement_date'])) : 'Pending', 0, 1);
-            
-            $this->SetFont('helvetica', '', 10);
-            $this->Cell(60, 7, 'Trade Reference:', 0, 0);
-            $this->SetFont('helvetica', 'B', 10);
-            $this->Cell(0, 7, $sheet['trade_reference'] ?? 'Pending', 0, 1);
-        }
-        
-        $this->Ln(4);
-        
-        // ============================================
-        // 4. FEES AND CHARGES
-        // ============================================
-        $this->SetFont('helvetica', 'B', 11);
-        $this->SetFillColor(240, 240, 240);
-        $this->Cell(0, 8, '4. FEES AND CHARGES', 0, 1, 'L', true);
-        
-        // Table header
-        $this->SetFont('helvetica', 'B', 9);
-        $this->Cell(100, 7, 'Description', 0, 0, 'L');
-        $this->Cell(40, 7, 'Rate', 0, 0, 'R');
-        $this->Cell(40, 7, 'Amount (TZS)', 0, 1, 'R');
-        $this->SetLineWidth(0.2);
-        $this->Line(25, $this->GetY(), 185, $this->GetY());
-        
-        $this->SetFont('helvetica', '', 9);
-        
-        // Brokerage Commission
-        $this->Cell(100, 6, 'Brokerage Commission', 0, 0, 'L');
-        $this->Cell(40, 6, $is_bond ? 'Tiered' : 'Tiered', 0, 0, 'R');
-        $this->Cell(40, 6, number_format($fees['brokerage'], 2), 0, 1, 'R');
-        
-        // Show tier details
-        if (!empty($fees['tier_details'])) {
-            $this->SetFont('helvetica', 'I', 7);
-            foreach ($fees['tier_details'] as $tier) {
-                $this->Cell(15, 4, '', 0, 0);
-                $this->Cell(85, 4, $tier['label'], 0, 0, 'L');
-                $this->Cell(40, 4, number_format($tier['fee'], 2), 0, 1, 'R');
-            }
-            $this->SetFont('helvetica', '', 9);
-        }
-        
-        // VAT
-        $this->Cell(100, 6, 'VAT on Brokerage', 0, 0, 'L');
-        $this->Cell(40, 6, '@ 18.000%', 0, 0, 'R');
-        $this->Cell(40, 6, number_format($fees['vat'], 2), 0, 1, 'R');
-        
-        // CMSA
-        $cmsa_rate = $is_bond ? '0.0100%' : '0.1400%';
-        $this->Cell(100, 6, 'CMSA Transaction Fee', 0, 0, 'L');
-        $this->Cell(40, 6, '@ ' . $cmsa_rate, 0, 0, 'R');
-        $this->Cell(40, 6, number_format($fees['cmsa'], 2), 0, 1, 'R');
-        
-        // DSE
-        $dse_rate = $is_bond ? '0.02006% (on Face Value)' : '0.1652%';
-        $this->Cell(100, 6, 'DSE Transaction Fee', 0, 0, 'L');
-        $this->Cell(40, 6, '@ ' . $dse_rate, 0, 0, 'R');
-        $this->Cell(40, 6, number_format($fees['dse'], 2), 0, 1, 'R');
-        
-        // Fidelity (Equity/ETF only)
-        if (!$is_bond) {
-            $this->Cell(100, 6, 'Fidelity Fee', 0, 0, 'L');
-            $this->Cell(40, 6, '@ 0.0200%', 0, 0, 'R');
-            $this->Cell(40, 6, number_format($fees['fidelity'] ?? 0, 2), 0, 1, 'R');
-        }
-        
-        // CDS
-        $cds_rate = $is_bond ? '0.0118% (on Face Value)' : '0.0708%';
-        $this->Cell(100, 6, 'CDS Fee', 0, 0, 'L');
-        $this->Cell(40, 6, '@ ' . $cds_rate, 0, 0, 'R');
-        $this->Cell(40, 6, number_format($fees['csd'], 2), 0, 1, 'R');
-        
-        // Other Charges (placeholder)
-        $this->Cell(100, 6, 'Other Charges', 0, 0, 'L');
-        $this->Cell(40, 6, '', 0, 0, 'R');
-        $this->Cell(40, 6, '0.00', 0, 1, 'R');
-        
-        $this->Line(25, $this->GetY(), 185, $this->GetY());
-        
-        // Total Charges
-        $this->SetFont('helvetica', 'B', 10);
-        $this->Cell(140, 8, 'TOTAL CHARGES', 0, 0, 'R');
-        $this->Cell(40, 8, number_format($fees['total'], 2), 0, 1, 'R');
-        
-        $this->Ln(4);
-        
-        // ============================================
-        // NET AMOUNT
-        // ============================================
-        $consideration = $executed_value > 0 ? $executed_value : $order_value;
-        $is_sell = ($trade_side === 'SELL');
-        
-        if ($is_sell) {
-            $net_amount = $consideration - $fees['total'];
-            $net_label = 'NET AMOUNT RECEIVABLE';
-        } else {
-            $net_amount = $consideration + $fees['total'];
-            $net_label = 'NET AMOUNT PAYABLE';
-        }
-        
-        $this->SetLineWidth(0.5);
-        $this->Line(25, $this->GetY() + 2, 185, $this->GetY() + 2);
-        $this->Ln(4);
-        
-        $this->SetFont('helvetica', 'B', 12);
-        $this->Cell(120, 8, $net_label, 0, 0, 'R');
-        $this->SetFont('helvetica', 'B', 12);
-        $this->SetTextColor(0, 100, 0);
-        $this->Cell(40, 8, 'TZS ' . number_format($net_amount, 2), 0, 1, 'R');
-        $this->SetTextColor(0, 0, 0);
-        
-        $this->Ln(8);
-        
-        // ============================================
-        // REMARKS
-        // ============================================
-        if (!empty($sheet['remarks'])) {
-            $this->SetFont('helvetica', 'B', 10);
-            $this->Cell(0, 6, 'Remarks:', 0, 1);
-            $this->SetFont('helvetica', '', 9);
-            $this->MultiCell(0, 5, $sheet['remarks'], 0, 'L');
-            $this->Ln(4);
-        }
-        
-        // ============================================
-        // SIGNATURES
-        // ============================================
-        $this->SetFont('helvetica', 'B', 9);
-        $this->Cell(0, 6, 'Dealer Name:', 0, 0);
-        $this->SetFont('helvetica', '', 9);
-        $this->Cell(0, 6, $sheet['dealer_name'] ?? $exportedByName, 0, 1);
-        $this->Ln(4);
-        
-        $this->SetFont('helvetica', 'B', 9);
-        $this->Cell(80, 6, 'Prepared By:', 0, 0);
-        $this->Cell(80, 6, 'Checked By:', 0, 0);
-        $this->Cell(0, 6, 'Approved By:', 0, 1);
-        
-        $this->SetLineWidth(0.2);
-        $this->Line(25, $this->GetY() + 8, 65, $this->GetY() + 8);
-        $this->Line(90, $this->GetY() + 8, 130, $this->GetY() + 8);
-        $this->Line(150, $this->GetY() + 8, 185, $this->GetY() + 8);
-        
-        $this->SetFont('helvetica', 'I', 7);
-        $this->Cell(80, 12, $exportedByName, 0, 0, 'L');
-        $this->Cell(80, 12, '__________________', 0, 0, 'L');
-        $this->Cell(0, 12, '__________________', 0, 1, 'L');
-        
-        $this->Ln(8);
-        
-        // ============================================
-        // DISCLAIMER
-        // ============================================
-        $this->SetFont('helvetica', 'I', 6);
-        $this->SetTextColor(120, 120, 120);
-        $disclaimer = "This Dealing Sheet is for internal use only. It does not constitute a contract note or official trade confirmation. " .
-                      "All trades are subject to the Rules, Regulations and Customs of the Dar es Salaam Stock Exchange.";
-        $this->MultiCell(0, 3, $disclaimer, 0, 'C');
-        $this->SetTextColor(0, 0, 0);
+    if ($consideration <= 10000000) {
+        return $consideration * ($rate1 / 100);
+    } elseif ($consideration <= 50000000) {
+        return 10000000 * ($rate1 / 100) + ($consideration - 10000000) * ($rate2 / 100);
+    } else {
+        return 10000000 * ($rate1 / 100) + 40000000 * ($rate2 / 100) + ($consideration - 50000000) * ($rate3 / 100);
     }
 }
 
+// Equity: Liberty tier override (first 10M standard, excess liberty)
+function calculateEquityBrokerageWithLibertyTierOverride($consideration, $liberty_rate) {
+    $standard_rate = 1.7000;
+    $standard_rate_decimal = $standard_rate / 100;
+    $liberty_rate_decimal = $liberty_rate / 100;
+    
+    if ($consideration <= 10000000) {
+        return $consideration * $standard_rate_decimal;
+    } else {
+        $first_tier = 10000000 * $standard_rate_decimal;
+        $excess = ($consideration - 10000000) * $liberty_rate_decimal;
+        return $first_tier + $excess;
+    }
+}
+
+// Equity: Liberty replaces entire calculation
+function calculateEquityBrokerageWithLibertyReplaceAll($consideration, $liberty_rate) {
+    return $consideration * ($liberty_rate / 100);
+}
+
 // ============================================
-// FEES CALCULATION FUNCTION
+// MAIN COMMISSION CALCULATION FUNCTION
 // ============================================
-function calculateDealingSheetFees($asset_class, $consideration, $quantity, $price) {
+
+function calculateFullFees($trade, $effective_rate, $liberty_mode = 'replace_all', $is_liberty = false) {
+    $is_bond = ($trade['asset_class'] === 'bond' || $trade['asset_class'] === 'treasury_bond');
+    $consideration = floatval($trade['consideration']);
+    $quantity = floatval($trade['quantity']);
+    $price = floatval($trade['price']);
+    $face_value = $quantity;
+    
     $fees = [];
     $fees['tier_details'] = [];
     
-    $is_bond = ($asset_class === 'bond');
-    
     if ($is_bond) {
-        // BOND FEES
-        $face_value = $quantity;
-        
-        // Brokerage: 0.063132% on first 100M, 0.035% on excess
-        $brokerage_first_100m = min($face_value, 100000000) * (0.063132 / 100);
-        $brokerage_excess = max($face_value - 100000000, 0) * (0.035 / 100);
-        $fees['brokerage'] = $brokerage_first_100m + $brokerage_excess;
-        
-        if ($face_value <= 100000000) {
-            $fees['tier_details'][] = [
-                'fee' => $brokerage_first_100m,
-                'label' => number_format($face_value/1000000, 2) . 'M @ 0.063132%'
-            ];
+        // --- BOND CALCULATION ---
+        if ($is_liberty && $effective_rate > 0) {
+            if ($liberty_mode === 'excess_only') {
+                // Liberty on excess only
+                $brokerage_first_100m = min($face_value, 100000000) * (0.063132 / 100);
+                $brokerage_excess = max($face_value - 100000000, 0) * ($effective_rate / 100);
+                $fees['brokerage'] = $brokerage_first_100m + $brokerage_excess;
+                
+                if ($face_value > 100000000) {
+                    $fees['tier_details'][] = [
+                        'amount' => 100000000,
+                        'rate' => 0.063132,
+                        'fee' => $brokerage_first_100m,
+                        'label' => 'First 100M @ 0.063132%'
+                    ];
+                    $fees['tier_details'][] = [
+                        'amount' => $face_value - 100000000,
+                        'rate' => $effective_rate,
+                        'fee' => $brokerage_excess,
+                        'label' => 'Excess @ ' . number_format($effective_rate, 4) . '% (Liberty)'
+                    ];
+                } else {
+                    $fees['tier_details'][] = [
+                        'amount' => $face_value,
+                        'rate' => 0.063132,
+                        'fee' => $brokerage_first_100m,
+                        'label' => 'Full Amount @ 0.063132%'
+                    ];
+                }
+            } else {
+                // Liberty replace all
+                $fees['brokerage'] = $face_value * ($effective_rate / 100);
+                $fees['tier_details'][] = [
+                    'amount' => $face_value,
+                    'rate' => $effective_rate,
+                    'fee' => $fees['brokerage'],
+                    'label' => 'Full Amount @ ' . number_format($effective_rate, 4) . '% (Liberty)'
+                ];
+            }
         } else {
-            $fees['tier_details'][] = [
-                'fee' => $brokerage_first_100m,
-                'label' => 'First 100M @ 0.063132%'
-            ];
-            $fees['tier_details'][] = [
-                'fee' => $brokerage_excess,
-                'label' => 'Excess ' . number_format(($face_value - 100000000)/1000000, 2) . 'M @ 0.035%'
-            ];
+            // Standard bond calculation
+            $brokerage_first_100m = min($face_value, 100000000) * (0.063132 / 100);
+            $brokerage_excess = max($face_value - 100000000, 0) * (0.035 / 100);
+            $fees['brokerage'] = $brokerage_first_100m + $brokerage_excess;
+            
+            if ($face_value <= 100000000) {
+                $fees['tier_details'][] = [
+                    'amount' => $face_value,
+                    'rate' => 0.063132,
+                    'fee' => $brokerage_first_100m,
+                    'label' => 'Full Amount @ 0.063132%'
+                ];
+            } else {
+                $fees['tier_details'][] = [
+                    'amount' => 100000000,
+                    'rate' => 0.063132,
+                    'fee' => $brokerage_first_100m,
+                    'label' => 'First 100M @ 0.063132%'
+                ];
+                $fees['tier_details'][] = [
+                    'amount' => $face_value - 100000000,
+                    'rate' => 0.035,
+                    'fee' => $brokerage_excess,
+                    'label' => 'Excess @ 0.035%'
+                ];
+            }
         }
         
-        $fees['vat'] = $fees['brokerage'] * 0.18;
-        $fees['cmsa'] = $consideration * (0.0100 / 100);
-        $fees['csd'] = $face_value * (0.0118 / 100);
-        $fees['dse'] = $face_value * (0.02006 / 100);
-        $fees['fidelity'] = 0;
+        // Bond other fees
+        $fees['vat'] = $fees['brokerage'] * 0.18; // 18% VAT on brokerage
+        $fees['cmsa'] = $consideration * (0.01 / 100); // 0.01% of consideration
+        $fees['dse'] = $face_value * (0.02006 / 100); // 0.02006% of face value (VAT inclusive)
+        $fees['csd'] = $face_value * (0.0118 / 100); // 0.0118% of face value (VAT inclusive)
+        $fees['fidelity'] = 0.00;
         
     } else {
-        // EQUITY/ETF FEES
-        $total_brokerage = 0;
-        
-        if ($consideration <= 10000000) {
-            $brokerage_fee = $consideration * (1.7000 / 100);
-            $fees['tier_details'][] = [
-                'fee' => $brokerage_fee,
-                'label' => 'Up to 10M @ 1.7000%'
-            ];
-            $total_brokerage = $brokerage_fee;
-        } elseif ($consideration <= 50000000) {
-            $tier1_fee = 10000000 * (1.7000 / 100);
-            $tier2_fee = ($consideration - 10000000) * (1.5000 / 100);
-            $fees['tier_details'][] = [
-                'fee' => $tier1_fee,
-                'label' => 'First 10M @ 1.7000%'
-            ];
-            $fees['tier_details'][] = [
-                'fee' => $tier2_fee,
-                'label' => 'Next ' . number_format(($consideration - 10000000)/1000000, 1) . 'M @ 1.5000%'
-            ];
-            $total_brokerage = $tier1_fee + $tier2_fee;
+        // --- EQUITY / ETF CALCULATION ---
+        if ($is_liberty && $effective_rate > 0) {
+            if ($liberty_mode === 'tier_override') {
+                // Tier override: first 10M standard, excess liberty
+                $standard_rate = 1.7000;
+                $standard_rate_decimal = $standard_rate / 100;
+                $liberty_rate_decimal = $effective_rate / 100;
+                
+                if ($consideration <= 10000000) {
+                    $fees['brokerage'] = $consideration * $standard_rate_decimal;
+                    $fees['tier_details'][] = [
+                        'amount' => $consideration,
+                        'rate' => $standard_rate,
+                        'fee' => $fees['brokerage'],
+                        'label' => 'Up to 10M @ ' . number_format($standard_rate, 4) . '% (Standard)'
+                    ];
+                } else {
+                    $first_tier = 10000000 * $standard_rate_decimal;
+                    $excess = ($consideration - 10000000) * $liberty_rate_decimal;
+                    $fees['brokerage'] = $first_tier + $excess;
+                    
+                    $fees['tier_details'][] = [
+                        'amount' => 10000000,
+                        'rate' => $standard_rate,
+                        'fee' => $first_tier,
+                        'label' => 'First 10M @ ' . number_format($standard_rate, 4) . '% (Standard)'
+                    ];
+                    $fees['tier_details'][] = [
+                        'amount' => $consideration - 10000000,
+                        'rate' => $effective_rate,
+                        'fee' => $excess,
+                        'label' => 'Excess @ ' . number_format($effective_rate, 4) . '% (Liberty)'
+                    ];
+                }
+            } else {
+                // Liberty replace all
+                $fees['brokerage'] = $consideration * ($effective_rate / 100);
+                $fees['tier_details'][] = [
+                    'amount' => $consideration,
+                    'rate' => $effective_rate,
+                    'fee' => $fees['brokerage'],
+                    'label' => 'Full Consideration @ ' . number_format($effective_rate, 4) . '% (Liberty)'
+                ];
+            }
         } else {
-            $tier1_fee = 10000000 * (1.7000 / 100);
-            $tier2_fee = 40000000 * (1.5000 / 100);
-            $tier3_fee = ($consideration - 50000000) * (0.8000 / 100);
-            $fees['tier_details'][] = [
-                'fee' => $tier1_fee,
-                'label' => 'First 10M @ 1.7000%'
-            ];
-            $fees['tier_details'][] = [
-                'fee' => $tier2_fee,
-                'label' => 'Next 40M @ 1.5000%'
-            ];
-            $fees['tier_details'][] = [
-                'fee' => $tier3_fee,
-                'label' => 'Excess ' . number_format(($consideration - 50000000)/1000000, 1) . 'M @ 0.8000%'
-            ];
-            $total_brokerage = $tier1_fee + $tier2_fee + $tier3_fee;
+            // Standard equity tiered calculation
+            $rate1 = 1.7000; // First 10M
+            $rate2 = 1.5000; // Next 40M
+            $rate3 = 0.8000; // Excess over 50M
+
+            if ($consideration <= 10000000) {
+                $fees['brokerage'] = $consideration * ($rate1 / 100);
+                $fees['tier_details'][] = [
+                    'amount' => $consideration,
+                    'rate' => $rate1,
+                    'fee' => $fees['brokerage'],
+                    'label' => 'Up to 10M @ ' . number_format($rate1, 4) . '%'
+                ];
+            } elseif ($consideration <= 50000000) {
+                $tier1 = 10000000 * ($rate1 / 100);
+                $tier2 = ($consideration - 10000000) * ($rate2 / 100);
+                $fees['brokerage'] = $tier1 + $tier2;
+
+                $fees['tier_details'][] = [
+                    'amount' => 10000000,
+                    'rate' => $rate1,
+                    'fee' => $tier1,
+                    'label' => 'First 10M @ ' . number_format($rate1, 4) . '%'
+                ];
+                $fees['tier_details'][] = [
+                    'amount' => $consideration - 10000000,
+                    'rate' => $rate2,
+                    'fee' => $tier2,
+                    'label' => 'Next ' . number_format(($consideration - 10000000)/1000000, 1) . 'M @ ' . number_format($rate2, 4) . '%'
+                ];
+            } else {
+                $tier1 = 10000000 * ($rate1 / 100);
+                $tier2 = 40000000 * ($rate2 / 100);
+                $tier3 = ($consideration - 50000000) * ($rate3 / 100);
+                $fees['brokerage'] = $tier1 + $tier2 + $tier3;
+
+                $fees['tier_details'][] = [
+                    'amount' => 10000000,
+                    'rate' => $rate1,
+                    'fee' => $tier1,
+                    'label' => 'First 10M @ ' . number_format($rate1, 4) . '%'
+                ];
+                $fees['tier_details'][] = [
+                    'amount' => 40000000,
+                    'rate' => $rate2,
+                    'fee' => $tier2,
+                    'label' => 'Next 40M @ ' . number_format($rate2, 4) . '%'
+                ];
+                $fees['tier_details'][] = [
+                    'amount' => $consideration - 50000000,
+                    'rate' => $rate3,
+                    'fee' => $tier3,
+                    'label' => 'Excess @ ' . number_format($rate3, 4) . '%'
+                ];
+            }
         }
         
-        $fees['brokerage'] = $total_brokerage;
-        $fees['vat'] = $fees['brokerage'] * 0.18;
-        $fees['cmsa'] = $consideration * (0.1400 / 100);
-        $fees['dse'] = $consideration * (0.1652 / 100);
-        $fees['fidelity'] = $consideration * (0.0200 / 100);
-        $fees['csd'] = $consideration * (0.0708 / 100);
+        // Equity other fees
+        $fees['vat'] = $fees['brokerage'] * 0.18; // 18% VAT on brokerage
+        $fees['cmsa'] = $consideration * (0.1400 / 100); // 0.14% of consideration
+        $fees['dse'] = $consideration * (0.1652 / 100); // 0.1652% of consideration (VAT inclusive)
+        $fees['fidelity'] = $consideration * (0.0200 / 100); // 0.02% of consideration
+        $fees['csd'] = $consideration * (0.0708 / 100); // 0.0708% of consideration (VAT inclusive)
     }
     
-    $fees['total'] = $fees['brokerage'] + $fees['vat'] + $fees['cmsa'] + $fees['dse'] + $fees['fidelity'] + $fees['csd'];
+    // Calculate total
+    $fees['total'] = array_sum([
+        $fees['brokerage'],
+        $fees['vat'],
+        $fees['cmsa'],
+        $fees['dse'],
+        $fees['fidelity'] ?? 0,
+        $fees['csd']
+    ]);
+    
+    // Determine if deducted or included based on trade side
+    $trade_side = strtolower($trade['trade_side'] ?? 'buy');
+    $fees['is_deducted'] = ($trade_side === 'sell');
+    $fees['operation'] = $fees['is_deducted'] ? 'deducted' : 'added';
+    $fees['label'] = $fees['is_deducted'] ? 'Proceeds - Commission' : 'Cost + Commission';
+    $fees['net_amount'] = $fees['is_deducted'] ? 
+        $consideration - $fees['total'] : 
+        $consideration + $fees['total'];
+    
+    // Add rate info for display
+    $fees['effective_rate'] = $effective_rate;
+    $fees['is_liberty'] = $is_liberty;
+    $fees['liberty_mode'] = $liberty_mode;
+    $fees['asset_class'] = $is_bond ? 'bond' : 'equity';
     
     return $fees;
 }
 
 // ============================================
-// PDF EXPORT HANDLER - MUST BE FIRST
+// TABLE SETUP
 // ============================================
-if (isset($_GET['export_pdf']) && isset($_GET['id'])) {
-    // Clean output buffers
-    while (ob_get_level() > 0) {
-        ob_end_clean();
-    }
+try {
+    $db->exec("CREATE TABLE IF NOT EXISTS numeric_trade_receipts (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        trade_id INT NOT NULL,
+        trade_type VARCHAR(50) DEFAULT 'trade',
+        payment_receipt TEXT,
+        commission_receipt TEXT,
+        comment TEXT,
+        is_approved TINYINT DEFAULT 0,
+        approved_by VARCHAR(100),
+        approved_at DATETIME,
+        uploaded_by VARCHAR(100),
+        created_at DATETIME,
+        updated_at DATETIME,
+        INDEX idx_trade_id (trade_id)
+    )");
     
-    $sheet_id = (int) $_GET['id'];
-    $sheet = dealingSheetGetById($db, $sheet_id);
+    $db->exec("CREATE TABLE IF NOT EXISTS receipt_files (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        trade_id INT NOT NULL,
+        receipt_type VARCHAR(20) NOT NULL DEFAULT 'payment',
+        file_data LONGBLOB NOT NULL,
+        file_name VARCHAR(255) NOT NULL,
+        file_size INT NOT NULL DEFAULT 0,
+        mime_type VARCHAR(100) NOT NULL DEFAULT '',
+        uploaded_by VARCHAR(100),
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        KEY trade_id (trade_id)
+    )");
     
-    if (!$sheet) {
-        die('Dealing sheet not found.');
-    }
+    $db->exec("ALTER TABLE numeric_trade_receipts ADD COLUMN IF NOT EXISTS commission_receipt TEXT AFTER payment_receipt");
+    $db->exec("ALTER TABLE numeric_trade_receipts ADD COLUMN IF NOT EXISTS comment TEXT AFTER commission_receipt");
+    $db->exec("ALTER TABLE trades ADD COLUMN IF NOT EXISTS approval_status ENUM('pending','approved','rejected') DEFAULT 'pending' AFTER status");
     
-    $company_details = dealingSheetGetCompany($db);
-    $company_name = $company_details['company_name'] ?? 'Victory Financial Services Ltd';
-    
-    // Calculate consideration
-    $executed_qty = floatval($sheet['executed_quantity'] ?? 0);
-    $executed_price = floatval($sheet['executed_price'] ?? 0);
-    $order_qty = floatval($sheet['quantity'] ?? 0);
-    $order_price = floatval($sheet['order_price'] ?? 0);
-    
-    if ($executed_qty > 0 && $executed_price > 0) {
-        $consideration = $executed_qty * $executed_price;
-        $quantity = $executed_qty;
-        $price = $executed_price;
-    } else {
-        $consideration = $order_qty * $order_price;
-        $quantity = $order_qty;
-        $price = $order_price;
-    }
-    
-    $fees = calculateDealingSheetFees($sheet['asset_class'], $consideration, $quantity, $price);
-    
-    $pdf = new DealingSheetPDF('P', 'mm', 'A4', true, 'UTF-8', false);
-    $pdf->setCompanyName($company_name);
-    $pdf->setWatermarkEnabled(true);
-    $pdf->SetCreator($company_name);
-    $pdf->SetAuthor($sheet['dealer_name'] ?? 'System');
-    $pdf->SetTitle('Dealing Sheet - ' . ($sheet['sheet_reference'] ?? ''));
-    $pdf->SetMargins(25, 25, 25);
-    $pdf->SetHeaderMargin(5);
-    $pdf->SetFooterMargin(10);
-    $pdf->SetAutoPageBreak(true, 20);
-    
-    $exportedByName = dealingSheetGetCurrentUserDisplayName($current_user);
-    $pdf->addDealingSheet($sheet, $fees, $exportedByName);
-    
-    $filename = 'dealing_sheet_' . preg_replace('/[^a-zA-Z0-9_-]/', '_', $sheet['sheet_reference'] ?? 'export') . '.pdf';
-    $pdf->Output($filename, 'I');
-    exit;
+} catch (Exception $e) {
+    error_log("Table setup error: " . $e->getMessage());
 }
 
 // ============================================
-// POST HANDLER FOR AJAX SAVE
+// RECEIPT HELPERS
 // ============================================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_POST['ajax_action'] === 'save_order') {
-    while (ob_get_level() > 0) {
-        ob_end_clean();
+function getReceiptUrl($ref) {
+    if (empty($ref)) return '';
+    if (strpos($ref, 'db_') === 0) {
+        $id = (int)substr($ref, 3);
+        return 'serve_receipt.php?id=' . $id;
+    }
+    return '../uploads/numeric_receipts/' . $ref;
+}
+
+function isImageReceipt($ref) {
+    if (empty($ref)) return false;
+    $ext = strtolower(pathinfo($ref, PATHINFO_EXTENSION));
+    return in_array($ext, ['jpg', 'jpeg', 'png', 'gif']);
+}
+
+// ============================================
+// HANDLE UPLOAD
+// ============================================
+if (isset($_POST['upload_receipt'])) {
+    $trade_id = (int)$_POST['trade_id'];
+    $receipt_type = $_POST['receipt_type'] ?? 'payment';
+    $comment = trim($_POST['receipt_comment'] ?? '');
+    $errors = [];
+    $uploaded = [];
+    
+    $stmt = $db->prepare("SELECT payment_receipt, commission_receipt, comment FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+    $stmt->execute([$trade_id]);
+    $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    $existing_payment = !empty($existing['payment_receipt']) ? explode(',', $existing['payment_receipt']) : [];
+    $existing_commission = !empty($existing['commission_receipt']) ? explode(',', $existing['commission_receipt']) : [];
+    $existing_comment = $existing['comment'] ?? '';
+    
+    if (isset($_FILES['receipt_files']) && !empty($_FILES['receipt_files']['name'][0])) {
+        $files = $_FILES['receipt_files'];
+        $allowed = ['jpg', 'jpeg', 'png', 'gif', 'pdf'];
+        $max_size = 5 * 1024 * 1024;
+        
+        for ($i = 0; $i < count($files['name']); $i++) {
+            if ($files['error'][$i] !== UPLOAD_ERR_OK) {
+                $errors[] = "Error uploading: " . $files['name'][$i];
+                continue;
+            }
+            
+            $ext = strtolower(pathinfo($files['name'][$i], PATHINFO_EXTENSION));
+            if (!in_array($ext, $allowed)) {
+                $errors[] = "Invalid type: " . $files['name'][$i];
+                continue;
+            }
+            
+            if ($files['size'][$i] > $max_size) {
+                $errors[] = "File too large: " . $files['name'][$i];
+                continue;
+            }
+            
+            $stmt = $db->prepare("INSERT INTO receipt_files (trade_id, receipt_type, file_data, file_name, file_size, mime_type, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?)");
+            $stmt->execute([
+                $trade_id,
+                $receipt_type,
+                file_get_contents($files['tmp_name'][$i]),
+                $files['name'][$i],
+                $files['size'][$i],
+                $files['type'][$i] ?: 'application/octet-stream',
+                $user_name
+            ]);
+            
+            $file_id = $db->lastInsertId();
+            $uploaded[] = 'db_' . $file_id . '.' . $ext;
+        }
     }
     
-    header('Content-Type: application/json');
+    $full_comment = $existing_comment;
+    if (!empty($comment)) {
+        $timestamp = date('Y-m-d H:i:s');
+        $new_entry = "[" . $timestamp . "] " . $user_name . ": " . $comment;
+        $full_comment = $existing_comment ? $existing_comment . "\n---\n" . $new_entry : $new_entry;
+    }
     
-    try {
-        $data = $_POST;
-        
-        $required_fields = ['client_name', 'security_id', 'quantity', 'order_price'];
-        foreach ($required_fields as $field) {
-            if (empty($data[$field])) {
-                throw new Exception('Missing required field: ' . $field);
-            }
-        }
-        
-        if (empty($data['id'])) {
-            $prefix = 'DS' . date('Ymd');
-            $stmt = $db->prepare("SELECT COUNT(*) FROM dealing_sheets WHERE sheet_reference LIKE ?");
-            $stmt->execute([$prefix . '%']);
-            $count = $stmt->fetchColumn() + 1;
-            $data['sheet_reference'] = $prefix . str_pad($count, 4, '0', STR_PAD_LEFT);
-        }
-        
-        // Map priority
-        $priority_map = ['normal' => 'Normal', 'urgent' => 'Urgent', 'most_important' => 'Most Important'];
-        $data['priority'] = $priority_map[$data['priority'] ?? 'normal'] ?? 'Normal';
-        
-        // Calculate order value
-        $data['order_value'] = floatval($data['quantity']) * floatval($data['order_price']);
-        
-        if (!empty($data['id'])) {
-            // Update existing
-            $sql = "UPDATE dealing_sheets SET 
-                client_name = :client_name,
-                client_cds_account = :client_cds_account,
-                security_id = :security_id,
-                security_name = :security_name,
-                order_type = :order_type,
-                asset_class = :asset_class,
-                quantity = :quantity,
-                order_price = :order_price,
-                order_value = :order_value,
-                order_date = :order_date,
-                order_time = :order_time,
-                priority = :priority,
-                remarks = :remarks,
-                broker_code = :broker_code,
-                executed_quantity = :executed_quantity,
-                executed_price = :executed_price,
-                trade_date = :trade_date,
-                settlement_date = :settlement_date,
-                execution_time = :execution_time,
-                updated_at = NOW()
-                WHERE id = :id";
-            
-            $stmt = $db->prepare($sql);
-            $stmt->execute([
-                ':id' => $data['id'],
-                ':client_name' => $data['client_name'],
-                ':client_cds_account' => $data['client_cds_account'] ?? '',
-                ':security_id' => $data['security_id'],
-                ':security_name' => $data['security_name'] ?? '',
-                ':order_type' => $data['order_type'] ?? 'buy',
-                ':asset_class' => $data['asset_class'] ?? 'equity',
-                ':quantity' => $data['quantity'],
-                ':order_price' => $data['order_price'],
-                ':order_value' => $data['order_value'],
-                ':order_date' => $data['order_date'] ?? date('Y-m-d'),
-                ':order_time' => $data['order_time'] ?? date('H:i:s'),
-                ':priority' => $data['priority'],
-                ':remarks' => $data['remarks'] ?? '',
-                ':broker_code' => $data['broker_code'] ?? '',
-                ':executed_quantity' => !empty($data['executed_quantity']) ? $data['executed_quantity'] : null,
-                ':executed_price' => !empty($data['executed_price']) ? $data['executed_price'] : null,
-                ':trade_date' => !empty($data['trade_date']) ? $data['trade_date'] : null,
-                ':settlement_date' => !empty($data['settlement_date']) ? $data['settlement_date'] : null,
-                ':execution_time' => !empty($data['execution_time']) ? $data['execution_time'] : null
-            ]);
+    if (!empty($uploaded)) {
+        if ($receipt_type === 'commission') {
+            $all = array_merge($existing_commission, $uploaded);
+            $field = 'commission_receipt';
         } else {
-            // Insert new
-            $sql = "INSERT INTO dealing_sheets (
-                sheet_reference, client_name, client_cds_account, security_id, security_name,
-                order_type, asset_class, quantity, order_price, order_value, order_date, order_time,
-                priority, remarks, broker_code, executed_quantity, executed_price,
-                trade_date, settlement_date, execution_time, lifecycle_stage, execution_status,
-                recorded_at, created_at, dealer_name
-            ) VALUES (
-                :sheet_reference, :client_name, :client_cds_account, :security_id, :security_name,
-                :order_type, :asset_class, :quantity, :order_price, :order_value, :order_date, :order_time,
-                :priority, :remarks, :broker_code, :executed_quantity, :executed_price,
-                :trade_date, :settlement_date, :execution_time, 'order', 'pending',
-                NOW(), NOW(), :dealer_name
-            )";
-            
-            $stmt = $db->prepare($sql);
-            $stmt->execute([
-                ':sheet_reference' => $data['sheet_reference'],
-                ':client_name' => $data['client_name'],
-                ':client_cds_account' => $data['client_cds_account'] ?? '',
-                ':security_id' => $data['security_id'],
-                ':security_name' => $data['security_name'] ?? '',
-                ':order_type' => $data['order_type'] ?? 'buy',
-                ':asset_class' => $data['asset_class'] ?? 'equity',
-                ':quantity' => $data['quantity'],
-                ':order_price' => $data['order_price'],
-                ':order_value' => $data['order_value'],
-                ':order_date' => $data['order_date'] ?? date('Y-m-d'),
-                ':order_time' => $data['order_time'] ?? date('H:i:s'),
-                ':priority' => $data['priority'],
-                ':remarks' => $data['remarks'] ?? '',
-                ':broker_code' => $data['broker_code'] ?? '',
-                ':executed_quantity' => !empty($data['executed_quantity']) ? $data['executed_quantity'] : null,
-                ':executed_price' => !empty($data['executed_price']) ? $data['executed_price'] : null,
-                ':trade_date' => !empty($data['trade_date']) ? $data['trade_date'] : null,
-                ':settlement_date' => !empty($data['settlement_date']) ? $data['settlement_date'] : null,
-                ':execution_time' => !empty($data['execution_time']) ? $data['execution_time'] : null,
-                ':dealer_name' => dealingSheetGetCurrentUserDisplayName($current_user)
-            ]);
+            $all = array_merge($existing_payment, $uploaded);
+            $field = 'payment_receipt';
         }
         
-        echo json_encode(['success' => true, 'message' => 'Order saved successfully']);
-    } catch (Exception $e) {
-        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        $receipts_str = implode(',', $all);
+        
+        if ($existing) {
+            $stmt = $db->prepare("UPDATE numeric_trade_receipts SET $field = ?, comment = ?, updated_at = NOW(), uploaded_by = ? WHERE trade_id = ? AND trade_type = 'trade'");
+            $stmt->execute([$receipts_str, $full_comment, $user_name, $trade_id]);
+        } else {
+            $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, $field, comment, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, ?, NOW(), NOW())");
+            $stmt->execute([$trade_id, $receipts_str, $full_comment, $user_name]);
+        }
+        
+        $_SESSION['alert'] = ['Receipt(s) uploaded successfully!', 'success'];
+    } elseif (!empty($comment)) {
+        if ($existing) {
+            $stmt = $db->prepare("UPDATE numeric_trade_receipts SET comment = ?, updated_at = NOW() WHERE trade_id = ? AND trade_type = 'trade'");
+            $stmt->execute([$full_comment, $trade_id]);
+        } else {
+            $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, comment, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, NOW(), NOW())");
+            $stmt->execute([$trade_id, $full_comment, $user_name]);
+        }
+        $_SESSION['alert'] = ['Comment added successfully!', 'success'];
+    } else {
+        $_SESSION['alert'] = ['No files selected.', 'warning'];
     }
+    
+    $redirect = 'dealing_sheet.php?' . http_build_query(array_filter([
+        'filter' => $_GET['filter'] ?? 'pending',
+        'asset_class' => $_GET['asset_class'] ?? 'all',
+        'search' => $_GET['search'] ?? ''
+    ]));
+    header('Location: ' . $redirect);
     exit;
 }
 
 // ============================================
-// ORDER ACTION HANDLERS
+// HANDLE DELETE & APPROVAL
 // ============================================
-if (isset($_GET['action']) && isset($_GET['id'])) {
-    $sheet_id = (int) $_GET['id'];
+if (isset($_GET['delete_receipt'])) {
+    $trade_id = (int)$_GET['trade_id'];
+    $file_to_delete = $_GET['file'];
     
-    if ($_GET['action'] === 'delete_order') {
-        $db->prepare("DELETE FROM dealing_sheets WHERE id = ?")->execute([$sheet_id]);
-        $_SESSION['alert'] = ['Order deleted successfully.', 'success'];
-        header('Location: dealing_sheet.php?view=' . urlencode($view));
-        exit;
-    }
+    $stmt = $db->prepare("SELECT is_approved FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+    $stmt->execute([$trade_id]);
+    $record = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    if ($_GET['action'] === 'cancel_order') {
-        $db->prepare("UPDATE dealing_sheets SET lifecycle_stage = 'cancelled', execution_status = 'cancelled', updated_at = NOW() WHERE id = ?")->execute([$sheet_id]);
-        $_SESSION['alert'] = ['Order cancelled successfully.', 'warning'];
-        header('Location: dealing_sheet.php?view=' . urlencode($view));
-        exit;
-    }
-    
-    if ($_GET['action'] === 'mark_executed') {
-        $db->prepare("UPDATE dealing_sheets SET lifecycle_stage = 'executed', execution_status = 'executed', updated_at = NOW() WHERE id = ?")->execute([$sheet_id]);
-        $_SESSION['alert'] = ['Order marked as executed successfully.', 'success'];
-        header('Location: dealing_sheet.php?view=' . urlencode($view));
-        exit;
-    }
-}
-
-// ============================================
-// AJAX HANDLERS FOR SEARCH
-// ============================================
-if (isset($_GET['ajax_action'])) {
-    header('Content-Type: application/json');
-    
-    if ($_GET['ajax_action'] === 'get_securities') {
-        $asset_class = $_GET['asset_class'] ?? 'equity';
-        $search = $_GET['search'] ?? '';
+    if ($record && $record['is_approved'] == 1) {
+        $_SESSION['alert'] = ['Cannot delete approved receipts.', 'warning'];
+    } else {
+        if (strpos($file_to_delete, 'db_') === 0) {
+            $parts = explode('.', $file_to_delete);
+            $file_id = (int)substr($parts[0], 3);
+            $db->prepare("DELETE FROM receipt_files WHERE id = ? AND trade_id = ?")->execute([$file_id, $trade_id]);
+        }
         
-        try {
-            if ($asset_class === 'equity') {
-                $sql = "SELECT security_id, stock_name as security_name, company_name, sector FROM equities WHERE status = 'active'";
-                if ($search) $sql .= " AND (security_id LIKE :search OR stock_name LIKE :search)";
-                $sql .= " LIMIT 50";
-            } elseif ($asset_class === 'bond') {
-                $sql = "SELECT security_id, bond_name as security_name, issuer, coupon_rate, maturity_date FROM bonds WHERE status = 'active'";
-                if ($search) $sql .= " AND (security_id LIKE :search OR bond_name LIKE :search)";
-                $sql .= " LIMIT 50";
-            } else {
-                $sql = "SELECT etf_code as security_id, name as security_name FROM etf WHERE status = 'active'";
-                if ($search) $sql .= " AND (etf_code LIKE :search OR name LIKE :search)";
-                $sql .= " LIMIT 50";
+        $stmt = $db->prepare("SELECT payment_receipt, commission_receipt FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+        $stmt->execute([$trade_id]);
+        $record = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($record) {
+            foreach (['payment_receipt', 'commission_receipt'] as $field) {
+                if (!empty($record[$field])) {
+                    $list = explode(',', $record[$field]);
+                    if (($key = array_search($file_to_delete, $list)) !== false) {
+                        unset($list[$key]);
+                        $new_str = !empty($list) ? implode(',', $list) : null;
+                        $db->prepare("UPDATE numeric_trade_receipts SET $field = ? WHERE trade_id = ? AND trade_type = 'trade'")->execute([$new_str, $trade_id]);
+                        $_SESSION['alert'] = ['Receipt deleted.', 'success'];
+                        break;
+                    }
+                }
             }
-            
-            $stmt = $db->prepare($sql);
-            if ($search) $stmt->bindValue(':search', "%$search%");
-            $stmt->execute();
-            echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
-        } catch (Exception $e) {
-            echo json_encode([]);
         }
-        exit;
     }
     
-    if ($_GET['ajax_action'] === 'search_clients') {
-        $search = $_GET['search'] ?? '';
-        try {
-            $stmt = $db->prepare("SELECT DISTINCT client_name, client_cds_account FROM trades WHERE client_name LIKE :search LIMIT 30");
-            $stmt->bindValue(':search', "%$search%");
-            $stmt->execute();
-            $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            if (empty($results)) {
-                $stmt = $db->prepare("SELECT client_name, cds_account as client_cds_account FROM clients WHERE client_name LIKE :search LIMIT 30");
-                $stmt->bindValue(':search', "%$search%");
-                $stmt->execute();
-                $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            }
-            echo json_encode($results);
-        } catch (Exception $e) {
-            echo json_encode([]);
-        }
-        exit;
+    header('Location: dealing_sheet.php?' . http_build_query(array_filter([
+        'filter' => $_GET['filter'] ?? 'pending',
+        'asset_class' => $_GET['asset_class'] ?? 'all',
+        'search' => $_GET['search'] ?? ''
+    ])));
+    exit;
+}
+
+if (isset($_POST['approve_trade'])) {
+    $trade_id = (int)$_POST['trade_id'];
+    $action = $_POST['approve_action'] ?? 'approve';
+    $is_approved = ($action === 'approve') ? 1 : 2;
+    
+    $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+    $stmt->execute([$trade_id]);
+    
+    if ($stmt->fetch()) {
+        $stmt = $db->prepare("UPDATE numeric_trade_receipts SET is_approved = ?, approved_by = ?, approved_at = NOW() WHERE trade_id = ? AND trade_type = 'trade'");
+        $stmt->execute([$is_approved, $user_name, $trade_id]);
+    } else {
+        $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, is_approved, approved_by, approved_at) VALUES (?, 'trade', ?, ?, NOW())");
+        $stmt->execute([$trade_id, $is_approved, $user_name]);
     }
+    
+    $status = ($action === 'approve') ? 'approved' : 'rejected';
+    $db->prepare("UPDATE trades SET approval_status = ? WHERE id = ?")->execute([$status, $trade_id]);
+    
+    $_SESSION['alert'] = [ucfirst($action) . 'd successfully!', 'success'];
+    header('Location: dealing_sheet.php?' . http_build_query(array_filter([
+        'filter' => $_GET['filter'] ?? 'pending',
+        'asset_class' => $_GET['asset_class'] ?? 'all',
+        'search' => $_GET['search'] ?? ''
+    ])));
+    exit;
 }
 
 // ============================================
-// GET DATA FOR DISPLAY
+// GET DATA
 // ============================================
+$filter = $_GET['filter'] ?? 'pending';
+$asset_class_filter = $_GET['asset_class'] ?? 'all';
+$search = $_GET['search'] ?? '';
 
-// Simple list function if not in helper
-if (!function_exists('dealingSheetList')) {
-    function dealingSheetList($db, $filters) {
-        $sql = "SELECT * FROM dealing_sheets ORDER BY 
-            CASE priority 
-                WHEN 'Most Important' THEN 1 
-                WHEN 'Urgent' THEN 2 
-                ELSE 3 
-            END,
-            created_at DESC";
-        
-        // Apply basic filters
-        if ($filters['view'] === 'orders') {
-            $sql = "SELECT * FROM dealing_sheets WHERE lifecycle_stage = 'order' OR execution_status = 'pending' ORDER BY created_at DESC";
-        } elseif ($filters['view'] === 'execution') {
-            $sql = "SELECT * FROM dealing_sheets WHERE lifecycle_stage = 'execution' OR execution_status = 'executed' ORDER BY created_at DESC";
-        } elseif ($filters['view'] === 'approved') {
-            $sql = "SELECT * FROM dealing_sheets WHERE lifecycle_stage = 'approved' ORDER BY created_at DESC";
-        } elseif ($filters['view'] === 'settled') {
-            $sql = "SELECT * FROM dealing_sheets WHERE lifecycle_stage = 'settled' ORDER BY created_at DESC";
-        }
-        
-        return $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
-    }
+$sql = "
+    SELECT 
+        t.id,
+        t.trade_reference,
+        t.asset_class,
+        t.security_id,
+        t.security_name,
+        t.client_name,
+        t.trade_side,
+        t.quantity,
+        t.price,
+        t.consideration,
+        t.trade_date,
+        t.additional_reference,
+        t.brokerage_fee_type,
+        t.custom_brokerage_fee,
+        t.liberty_mode,
+        t.final_brokerage_fee,
+        tr.payment_receipt,
+        tr.commission_receipt,
+        tr.comment as receipt_comment,
+        tr.is_approved,
+        cl.fee_type as client_fee_type,
+        cl.default_brokerage_fee,
+        cl.liberty_mode as client_liberty_mode
+    FROM trades t
+    LEFT JOIN numeric_trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
+    LEFT JOIN clients cl ON t.client_cds_account = cl.cds_account
+    WHERE t.additional_reference REGEXP '^[0-9]+$'
+    AND t.additional_reference IS NOT NULL
+    AND t.additional_reference != ''
+";
+
+$params = [];
+
+if ($asset_class_filter === 'all') {
+    $sql .= " AND ((t.asset_class = 'bond') OR (t.asset_class IN ('equity', 'Exchange Traded Funds') AND LOWER(t.trade_side) = 'buy'))";
+} elseif ($asset_class_filter === 'bond') {
+    $sql .= " AND t.asset_class = 'bond'";
+} elseif ($asset_class_filter === 'equity') {
+    $sql .= " AND t.asset_class = 'equity' AND LOWER(t.trade_side) = 'buy'";
+} elseif ($asset_class_filter === 'etf') {
+    $sql .= " AND t.asset_class = 'Exchange Traded Funds' AND LOWER(t.trade_side) = 'buy'";
 }
 
-if (!function_exists('dealingSheetOverview')) {
-    function dealingSheetOverview($db) {
-        $total = $db->query("SELECT COUNT(*) FROM dealing_sheets")->fetchColumn();
-        $orders = $db->query("SELECT COUNT(*) FROM dealing_sheets WHERE lifecycle_stage = 'order' OR execution_status = 'pending'")->fetchColumn();
-        $execution = $db->query("SELECT COUNT(*) FROM dealing_sheets WHERE lifecycle_stage = 'execution' OR execution_status = 'executed'")->fetchColumn();
-        $settled = $db->query("SELECT COUNT(*) FROM dealing_sheets WHERE lifecycle_stage = 'settled'")->fetchColumn();
-        $total_executed_value = $db->query("SELECT COALESCE(SUM(executed_value), 0) FROM dealing_sheets WHERE execution_status = 'executed'")->fetchColumn();
-        
-        return [
-            'total' => $total,
-            'orders' => $orders,
-            'execution' => $execution,
-            'settled' => $settled,
-            'total_executed_value' => $total_executed_value
+if ($filter === 'pending') {
+    $sql .= " AND (tr.is_approved IS NULL OR tr.is_approved = 0)";
+} elseif ($filter === 'approved') {
+    $sql .= " AND tr.is_approved = 1";
+} elseif ($filter === 'rejected') {
+    $sql .= " AND tr.is_approved = 2";
+}
+
+if (!empty($search)) {
+    $sql .= " AND (t.client_name LIKE ? OR t.security_id LIKE ? OR t.additional_reference LIKE ?)";
+    $search_param = "%$search%";
+    $params = array_merge($params, [$search_param, $search_param, $search_param]);
+}
+
+$sql .= " ORDER BY t.trade_date DESC, t.id DESC LIMIT 500";
+
+$stmt = $db->prepare($sql);
+$stmt->execute($params);
+$trades = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Group trades manually in PHP
+$grouped_trades = [];
+foreach ($trades as $trade) {
+    $group_key = ($trade['client_name'] ?? '') . '|' . ($trade['security_id'] ?? '') . '|' . ($trade['trade_date'] ?? '');
+    
+    if (!isset($grouped_trades[$group_key])) {
+        $grouped_trades[$group_key] = [
+            'id' => $trade['id'] ?? 0,
+            'trade_reference' => $trade['trade_reference'] ?? '',
+            'asset_class' => $trade['asset_class'] ?? '',
+            'security_id' => $trade['security_id'] ?? '',
+            'security_name' => $trade['security_name'] ?? '',
+            'client_name' => $trade['client_name'] ?? '',
+            'trade_side' => $trade['trade_side'] ?? '',
+            'quantity' => 0,
+            'price' => 0,
+            'consideration' => 0,
+            'trade_date' => $trade['trade_date'] ?? '',
+            'additional_reference' => $trade['additional_reference'] ?? '',
+            'brokerage_fee_type' => $trade['brokerage_fee_type'] ?? 'normal',
+            'custom_brokerage_fee' => $trade['custom_brokerage_fee'] ?? null,
+            'liberty_mode' => $trade['liberty_mode'] ?? $trade['client_liberty_mode'] ?? 'replace_all',
+            'final_brokerage_fee' => 0,
+            'payment_receipt' => $trade['payment_receipt'] ?? '',
+            'commission_receipt' => $trade['commission_receipt'] ?? '',
+            'receipt_comment' => $trade['receipt_comment'] ?? '',
+            'is_approved' => $trade['is_approved'] ?? 0,
+            'client_fee_type' => $trade['client_fee_type'] ?? 'normal',
+            'client_default_brokerage_fee' => $trade['default_brokerage_fee'] ?? null,
+            'trade_count' => 0,
+            'price_sum' => 0,
+            'price_count' => 0,
+            'fee_sum' => 0
         ];
     }
-}
-
-if (!function_exists('dealingSheetGetById')) {
-    function dealingSheetGetById($db, $id) {
-        $stmt = $db->prepare("SELECT * FROM dealing_sheets WHERE id = ?");
-        $stmt->execute([$id]);
-        return $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    // Aggregate
+    $grouped_trades[$group_key]['quantity'] += (float)($trade['quantity'] ?? 0);
+    $grouped_trades[$group_key]['consideration'] += (float)($trade['consideration'] ?? 0);
+    $grouped_trades[$group_key]['price_sum'] += (float)($trade['price'] ?? 0);
+    $grouped_trades[$group_key]['price_count']++;
+    $grouped_trades[$group_key]['trade_count']++;
+    $grouped_trades[$group_key]['fee_sum'] += (float)($trade['final_brokerage_fee'] ?? 0);
+    
+    // Keep the most recent receipt info and fee type
+    if (!empty($trade['payment_receipt'])) {
+        $grouped_trades[$group_key]['payment_receipt'] = $trade['payment_receipt'];
+    }
+    if (!empty($trade['commission_receipt'])) {
+        $grouped_trades[$group_key]['commission_receipt'] = $trade['commission_receipt'];
+    }
+    if (!empty($trade['receipt_comment'])) {
+        $grouped_trades[$group_key]['receipt_comment'] = $trade['receipt_comment'];
+    }
+    if (($trade['is_approved'] ?? 0) > ($grouped_trades[$group_key]['is_approved'] ?? 0)) {
+        $grouped_trades[$group_key]['is_approved'] = $trade['is_approved'];
     }
 }
 
-if (!function_exists('dealingSheetGetCurrentUserDisplayName')) {
-    function dealingSheetGetCurrentUserDisplayName($user) {
-        if (isset($user['first_name']) && isset($user['last_name'])) {
-            return $user['first_name'] . ' ' . $user['last_name'];
-        }
-        return $user['username'] ?? 'System User';
+// Calculate averages and fees
+$final_trades = [];
+foreach ($grouped_trades as $group) {
+    $group['price'] = $group['price_count'] > 0 ? $group['price_sum'] / $group['price_count'] : 0;
+    unset($group['price_sum'], $group['price_count']);
+    
+    // Determine effective rate
+    $is_liberty = false;
+    $effective_rate = 0;
+    $liberty_mode = $group['liberty_mode'] ?? 'replace_all';
+    
+    if ($group['brokerage_fee_type'] === 'liberty' || $group['brokerage_fee_type'] === 'this_trade') {
+        $is_liberty = true;
+        // Use custom rate or client default
+        $effective_rate = $group['custom_brokerage_fee'] ?? $group['client_default_brokerage_fee'] ?? 1.5;
     }
+    
+    // Calculate full fees
+    $group['fees'] = calculateFullFees($group, $effective_rate, $liberty_mode, $is_liberty);
+    
+    $final_trades[] = $group;
 }
 
-$filters = [
-    'view' => $view,
-    'search' => $_GET['search'] ?? '',
-    'stage' => $_GET['stage'] ?? 'all',
-    'asset_class' => $_GET['asset_class'] ?? 'all',
-    'payment_status' => $_GET['payment_status'] ?? 'all',
-    'date_from' => $_GET['date_from'] ?? '',
-    'date_to' => $_GET['date_to'] ?? '',
-];
-$sheets = dealingSheetList($db, $filters);
-$overview = dealingSheetOverview($db);
+// Sort by trade date descending
+usort($final_trades, function($a, $b) {
+    return strtotime($b['trade_date'] ?? '1970-01-01') - strtotime($a['trade_date'] ?? '1970-01-01');
+});
 
-$page_title = $view === 'orders' ? 'Order Intake Sheet' : 'Dealing Sheet Lifecycle';
+// Get stats
+$stats = ['total' => 0, 'pending' => 0, 'approved' => 0, 'rejected' => 0];
+try {
+    $stmt = $db->query("
+        SELECT 
+            COUNT(DISTINCT CONCAT(client_name, '|', security_id, '|', DATE(trade_date))) as total,
+            SUM(CASE WHEN tr.is_approved IS NULL OR tr.is_approved = 0 THEN 1 ELSE 0 END) as pending,
+            SUM(CASE WHEN tr.is_approved = 1 THEN 1 ELSE 0 END) as approved,
+            SUM(CASE WHEN tr.is_approved = 2 THEN 1 ELSE 0 END) as rejected
+        FROM trades t
+        LEFT JOIN numeric_trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
+        WHERE t.additional_reference REGEXP '^[0-9]+$'
+        AND t.additional_reference IS NOT NULL
+        AND t.additional_reference != ''
+    ");
+    $stats = $stmt->fetch(PDO::FETCH_ASSOC) ?: $stats;
+} catch (Exception $e) {
+    error_log("Stats error: " . $e->getMessage());
+}
+
+// Helper function for safe htmlspecialchars
+function safeHtml($string) {
+    return htmlspecialchars($string ?? '', ENT_QUOTES, 'UTF-8');
+}
+
+$page_title = 'Receipt Upload';
 include '../includes/header.php';
 ?>
 
 <style>
-    .modal-xl { max-width: 900px; }
-    .priority-Normal { background-color: #e8f5e9; }
-    .priority-Urgent { background-color: #fff3e0; border-left: 4px solid #ff9800 !important; }
-    .priority-Most\ Important { background-color: #ffebee; border-left: 4px solid #f44336 !important; }
-    .old-order { background-color: #ffcdd2 !important; color: #c62828 !important; }
-    .old-order td { color: #c62828 !important; }
-    .client-search-dropdown, .security-search-dropdown {
-        position: absolute;
-        background: white;
-        border: 1px solid #ddd;
-        max-height: 250px;
-        overflow-y: auto;
-        z-index: 10000;
-        width: 100%;
-        display: none;
-        border-radius: 4px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-    }
-    .client-search-dropdown div, .security-search-dropdown div {
-        padding: 10px 12px;
-        cursor: pointer;
-        border-bottom: 1px solid #eee;
-    }
-    .client-search-dropdown div:hover, .security-search-dropdown div:hover {
-        background-color: #f0f0f0;
-    }
-    .security-info { font-size: 11px; color: #6c757d; margin-top: 4px; }
-    .position-relative { position: relative; }
-    .btn-group-sm .btn { padding: 0.25rem 0.5rem; font-size: 0.75rem; }
-    .table-responsive { overflow-x: auto; }
+.receipt-thumbnails {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+.thumbnail {
+    position: relative;
+    width: 45px;
+    height: 45px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    overflow: hidden;
+    cursor: pointer;
+    background: #f8f9fa;
+}
+.thumbnail img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+.thumbnail .file-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    font-size: 20px;
+    color: #666;
+}
+.thumbnail .delete-btn {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    background: #dc3545;
+    color: white;
+    border-radius: 50%;
+    width: 17px;
+    height: 17px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    text-decoration: none;
+    z-index: 2;
+}
+.thumbnail .delete-btn:hover {
+    transform: scale(1.1);
+    color: white;
+}
+.thumbnail .view-overlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.2s;
+    color: white;
+}
+.thumbnail:hover .view-overlay {
+    opacity: 1;
+}
+.more-badge {
+    background: #6c757d;
+    color: white;
+    border-radius: 50%;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: bold;
+}
+.badge-status {
+    font-size: 11px;
+    padding: 2px 10px;
+    border-radius: 12px;
+}
+.badge-status.pending {
+    background: #fff3cd;
+    color: #856404;
+}
+.badge-status.approved {
+    background: #d4edda;
+    color: #155724;
+}
+.badge-status.rejected {
+    background: #f8d7da;
+    color: #721c24;
+}
+.badge-asset {
+    font-size: 10px;
+    padding: 1px 8px;
+    border-radius: 3px;
+    background: #e9ecef;
+}
+.stat-box {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 6px;
+    padding: 8px 12px;
+    text-align: center;
+}
+.stat-box .stat-number {
+    font-size: 20px;
+    font-weight: 600;
+}
+.stat-box .stat-label {
+    font-size: 11px;
+    color: #666;
+}
+.comment-display {
+    background: #f8f9fa;
+    border-left: 2px solid #6c757d;
+    padding: 4px 8px;
+    border-radius: 3px;
+    font-size: 12px;
+    max-width: 180px;
+    margin-top: 4px;
+}
+.comment-display .comment-text {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 50px;
+    overflow-y: auto;
+}
+.filter-section {
+    background: #f8f9fa;
+    padding: 12px 15px;
+    border-radius: 6px;
+    margin-bottom: 15px;
+}
+.filter-section .form-label {
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 2px;
+}
+.commission-display {
+    font-size: 11px;
+    padding: 2px 0;
+}
+.commission-display .badge {
+    font-size: 9px;
+    padding: 2px 6px;
+}
+.commission-details {
+    font-size: 9px;
+    color: #6c757d;
+    margin-top: 2px;
+    line-height: 1.3;
+}
+.commission-details .tier-row {
+    padding-left: 8px;
+    border-left: 2px solid #dee2e6;
+    margin: 1px 0;
+}
+.commission-total {
+    font-weight: 600;
+    font-size: 12px;
+    margin-top: 3px;
+    padding-top: 3px;
+    border-top: 1px solid #dee2e6;
+}
 </style>
 
-<!-- Modal for Order Entry -->
-<div class="modal fade" id="orderModal" tabindex="-1" aria-labelledby="orderModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-xl">
-        <div class="modal-content">
-            <div class="modal-header bg-primary text-white">
-                <h5 class="modal-title"><i class="bi bi-plus-circle me-2"></i>New Order</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+<div class="container-fluid">
+
+    <!-- Header -->
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+            <h4 class="mb-0"><i class="bi bi-receipt"></i> Receipt Upload</h4>
+            <small class="text-muted">Numeric Reference Trades with Full Fee Calculation</small>
+        </div>
+        <div>
+            <span class="badge bg-secondary"><?php echo count($final_trades); ?> trades</span>
+        </div>
+    </div>
+
+    <!-- Alert -->
+    <?php if (isset($_SESSION['alert'])): ?>
+        <div class="alert alert-<?php echo safeHtml($_SESSION['alert'][1]); ?> alert-dismissible fade show">
+            <?php echo safeHtml($_SESSION['alert'][0]); ?>
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+        <?php unset($_SESSION['alert']); ?>
+    <?php endif; ?>
+
+    <!-- Stats -->
+    <div class="row g-2 mb-3">
+        <div class="col-3 col-md-2">
+            <div class="stat-box">
+                <div class="stat-number"><?php echo (int)($stats['total'] ?? 0); ?></div>
+                <div class="stat-label">Total</div>
             </div>
-            <form id="orderForm">
+        </div>
+        <div class="col-3 col-md-2">
+            <div class="stat-box">
+                <div class="stat-number" style="color:#856404;"><?php echo (int)($stats['pending'] ?? 0); ?></div>
+                <div class="stat-label">Pending</div>
+            </div>
+        </div>
+        <div class="col-3 col-md-2">
+            <div class="stat-box">
+                <div class="stat-number" style="color:#155724;"><?php echo (int)($stats['approved'] ?? 0); ?></div>
+                <div class="stat-label">Approved</div>
+            </div>
+        </div>
+        <div class="col-3 col-md-2">
+            <div class="stat-box">
+                <div class="stat-number" style="color:#721c24;"><?php echo (int)($stats['rejected'] ?? 0); ?></div>
+                <div class="stat-label">Rejected</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="filter-section">
+        <form method="GET" class="row g-2">
+            <div class="col-6 col-md-3">
+                <label class="form-label">Status</label>
+                <select class="form-select form-select-sm" name="filter" onchange="this.form.submit()">
+                    <option value="pending" <?php echo $filter === 'pending' ? 'selected' : ''; ?>>Pending</option>
+                    <option value="approved" <?php echo $filter === 'approved' ? 'selected' : ''; ?>>Approved</option>
+                    <option value="rejected" <?php echo $filter === 'rejected' ? 'selected' : ''; ?>>Rejected</option>
+                    <option value="all" <?php echo $filter === 'all' ? 'selected' : ''; ?>>All</option>
+                </select>
+            </div>
+            <div class="col-6 col-md-3">
+                <label class="form-label">Asset</label>
+                <select class="form-select form-select-sm" name="asset_class" onchange="this.form.submit()">
+                    <option value="all" <?php echo $asset_class_filter === 'all' ? 'selected' : ''; ?>>All</option>
+                    <option value="bond" <?php echo $asset_class_filter === 'bond' ? 'selected' : ''; ?>>Bond</option>
+                    <option value="equity" <?php echo $asset_class_filter === 'equity' ? 'selected' : ''; ?>>Equity</option>
+                    <option value="etf" <?php echo $asset_class_filter === 'etf' ? 'selected' : ''; ?>>ETF</option>
+                </select>
+            </div>
+            <div class="col-6 col-md-4">
+                <label class="form-label">Search</label>
+                <input type="text" class="form-control form-control-sm" name="search" placeholder="Client, Security, Ref..." value="<?php echo safeHtml($search); ?>">
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="form-label">&nbsp;</label>
+                <button type="submit" class="btn btn-secondary btn-sm w-100">Apply</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Trades Table -->
+    <div class="card">
+        <div class="card-header">
+            <h6 class="mb-0"><i class="bi bi-table"></i> Trades with Fee Breakdown</h6>
+        </div>
+        <div class="card-body p-0">
+            <?php if (empty($final_trades)): ?>
+                <div class="text-center py-5">
+                    <i class="bi bi-inbox" style="font-size:40px;color:#dee2e6;"></i>
+                    <p class="text-muted mt-2">No trades found.</p>
+                </div>
+            <?php else: ?>
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>Client</th>
+                                <th>Security</th>
+                                <th>Side</th>
+                                <th class="text-end">Qty</th>
+                                <th class="text-end">Value</th>
+                                <th class="text-end" style="min-width:180px;">Fees Breakdown</th>
+                                <th>Receipts</th>
+                                <th>Status</th>
+                                <th class="text-end">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($final_trades as $trade): 
+                                $isBond = ($trade['asset_class'] ?? '') === 'bond';
+                                $payment_receipts = !empty($trade['payment_receipt']) ? explode(',', $trade['payment_receipt']) : [];
+                                $commission_receipts = !empty($trade['commission_receipt']) ? explode(',', $trade['commission_receipt']) : [];
+                                $hasPayment = !empty($payment_receipts[0]);
+                                $hasCommission = $isBond && !empty($commission_receipts[0]);
+                                $isApproved = isset($trade['is_approved']) ? (int)$trade['is_approved'] : 0;
+                                $statusText = $isApproved === 1 ? 'Approved' : ($isApproved === 2 ? 'Rejected' : 'Pending');
+                                $statusClass = $isApproved === 1 ? 'approved' : ($isApproved === 2 ? 'rejected' : 'pending');
+                                
+                                $displayQty = $isBond ? 'TZS ' . number_format($trade['quantity'] ?? 0, 2) : number_format($trade['quantity'] ?? 0);
+                                $displayValue = 'TZS ' . number_format($trade['consideration'] ?? 0, 2);
+                                
+                                $fees = $trade['fees'] ?? [];
+                                $isSell = strtolower($trade['trade_side'] ?? '') === 'sell';
+                            ?>
+                                <tr>
+                                    <td><?php echo safeHtml($trade['client_name'] ?? ''); ?></td>
+                                    <td>
+                                        <?php echo safeHtml($trade['security_id'] ?? ''); ?>
+                                        <span class="badge-asset"><?php echo $isBond ? 'Bond' : ucfirst($trade['asset_class'] ?? ''); ?></span>
+                                        <?php if ($trade['brokerage_fee_type'] !== 'normal'): ?>
+                                            <span class="badge bg-warning ms-1" style="font-size:8px;">LIBERTY</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <span class="badge <?php echo $isSell ? 'bg-danger' : 'bg-success'; ?>">
+                                            <?php echo strtoupper($trade['trade_side'] ?? ''); ?>
+                                        </span>
+                                    </td>
+                                    <td class="text-end"><?php echo $displayQty; ?></td>
+                                    <td class="text-end fw-bold"><?php echo $displayValue; ?></td>
+                                    <td class="text-end">
+                                        <?php if (!empty($fees) && isset($fees['total'])): ?>
+                                            <div class="commission-display">
+                                                <span class="badge <?php echo $fees['is_deducted'] ? 'bg-danger' : 'bg-success'; ?>">
+                                                    <?php echo $fees['is_deducted'] ? '➖ Deducted' : '➕ Included'; ?>
+                                                    <?php if ($fees['is_liberty'] ?? false): ?>
+                                                        <i class="bi bi-star-fill ms-1"></i>
+                                                    <?php endif; ?>
+                                                </span>
+                                                <div class="fw-bold mt-1">
+                                                    TZS <?php echo number_format($fees['total'], 2); ?>
+                                                </div>
+                                                <div class="commission-details">
+                                                    <?php if (!empty($fees['tier_details'])): ?>
+                                                        <?php foreach ($fees['tier_details'] as $tier): ?>
+                                                            <div class="tier-row">
+                                                                <?php echo safeHtml($tier['label']); ?>:
+                                                                TZS <?php echo number_format($tier['fee'], 2); ?>
+                                                            </div>
+                                                        <?php endforeach; ?>
+                                                    <?php endif; ?>
+                                                    <div>VAT: TZS <?php echo number_format($fees['vat'] ?? 0, 2); ?></div>
+                                                    <div>CMSA: TZS <?php echo number_format($fees['cmsa'] ?? 0, 2); ?></div>
+                                                    <div>DSE: TZS <?php echo number_format($fees['dse'] ?? 0, 2); ?></div>
+                                                    <?php if (isset($fees['fidelity']) && $fees['fidelity'] > 0): ?>
+                                                        <div>Fidelity: TZS <?php echo number_format($fees['fidelity'], 2); ?></div>
+                                                    <?php endif; ?>
+                                                    <div>CDS: TZS <?php echo number_format($fees['csd'] ?? 0, 2); ?></div>
+                                                    <div class="commission-total">
+                                                        Net: TZS <?php echo number_format($fees['net_amount'] ?? 0, 2); ?>
+                                                        <br>
+                                                        <small class="text-muted">(<?php echo $fees['label'] ?? ''; ?>)</small>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        <?php else: ?>
+                                            <span class="text-muted">-</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <!-- Payment Receipts -->
+                                        <?php if ($hasPayment): ?>
+                                            <div class="receipt-thumbnails">
+                                                <?php 
+                                                $count = 0;
+                                                foreach ($payment_receipts as $file):
+                                                    $file = trim($file);
+                                                    if (empty($file) || $count >= 3) continue;
+                                                    $count++;
+                                                    $url = getReceiptUrl($file);
+                                                    $isImg = isImageReceipt($file);
+                                                ?>
+                                                    <div class="thumbnail" onclick="viewReceipt('<?php echo $url; ?>')">
+                                                        <?php if ($isImg): ?>
+                                                            <img src="<?php echo $url; ?>" alt="receipt">
+                                                        <?php else: ?>
+                                                            <div class="file-icon"><i class="bi bi-file-pdf"></i></div>
+                                                        <?php endif; ?>
+                                                        <div class="view-overlay"><i class="bi bi-eye"></i></div>
+                                                        <?php if ($isApproved !== 1): ?>
+                                                            <a href="dealing_sheet.php?delete_receipt=1&trade_id=<?php echo $trade['id']; ?>&file=<?php echo urlencode($file); ?>&filter=<?php echo urlencode($filter); ?>&asset_class=<?php echo urlencode($asset_class_filter); ?>&search=<?php echo urlencode($search); ?>" 
+                                                               class="delete-btn" onclick="event.stopPropagation(); return confirm('Delete?')">
+                                                                <i class="bi bi-x"></i>
+                                                            </a>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                <?php endforeach; ?>
+                                                <?php if (count($payment_receipts) > 3): ?>
+                                                    <div class="more-badge">+<?php echo count($payment_receipts) - 3; ?></div>
+                                                <?php endif; ?>
+                                            </div>
+                                            <small class="text-muted">Payment</small>
+                                        <?php endif; ?>
+                                        
+                                        <!-- Commission Receipts (Bonds only) -->
+                                        <?php if ($hasCommission): ?>
+                                            <div class="receipt-thumbnails mt-1">
+                                                <?php 
+                                                $count = 0;
+                                                foreach ($commission_receipts as $file):
+                                                    $file = trim($file);
+                                                    if (empty($file) || $count >= 3) continue;
+                                                    $count++;
+                                                    $url = getReceiptUrl($file);
+                                                    $isImg = isImageReceipt($file);
+                                                ?>
+                                                    <div class="thumbnail" onclick="viewReceipt('<?php echo $url; ?>')">
+                                                        <?php if ($isImg): ?>
+                                                            <img src="<?php echo $url; ?>" alt="receipt">
+                                                        <?php else: ?>
+                                                            <div class="file-icon"><i class="bi bi-file-pdf"></i></div>
+                                                        <?php endif; ?>
+                                                        <div class="view-overlay"><i class="bi bi-eye"></i></div>
+                                                        <?php if ($isApproved !== 1): ?>
+                                                            <a href="dealing_sheet.php?delete_receipt=1&trade_id=<?php echo $trade['id']; ?>&file=<?php echo urlencode($file); ?>&filter=<?php echo urlencode($filter); ?>&asset_class=<?php echo urlencode($asset_class_filter); ?>&search=<?php echo urlencode($search); ?>" 
+                                                               class="delete-btn" onclick="event.stopPropagation(); return confirm('Delete?')">
+                                                                <i class="bi bi-x"></i>
+                                                            </a>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                <?php endforeach; ?>
+                                                <?php if (count($commission_receipts) > 3): ?>
+                                                    <div class="more-badge">+<?php echo count($commission_receipts) - 3; ?></div>
+                                                <?php endif; ?>
+                                            </div>
+                                            <small class="text-muted">Commission</small>
+                                        <?php endif; ?>
+                                        
+                                        <!-- Comment -->
+                                        <?php if (!empty($trade['receipt_comment'])): ?>
+                                            <div class="comment-display">
+                                                <div class="comment-text"><?php echo nl2br(safeHtml($trade['receipt_comment'])); ?></div>
+                                            </div>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <span class="badge-status <?php echo $statusClass; ?>"><?php echo $statusText; ?></span>
+                                    </td>
+                                    <td class="text-end">
+                                        <div class="btn-group btn-group-sm">
+                                            <?php if ($isApproved !== 1): ?>
+                                                <button class="btn btn-outline-secondary" onclick="openUpload(<?php echo $trade['id']; ?>, 'payment')" title="Upload Payment">
+                                                    <i class="bi bi-cash"></i>
+                                                </button>
+                                                <?php if ($isBond): ?>
+                                                    <button class="btn btn-outline-secondary" onclick="openUpload(<?php echo $trade['id']; ?>, 'commission')" title="Upload Commission">
+                                                        <i class="bi bi-percent"></i>
+                                                    </button>
+                                                <?php endif; ?>
+                                            <?php endif; ?>
+                                            <?php if ($user_role === 'finance_officer' && $isApproved !== 1): ?>
+                                                <form method="POST" style="display:inline" onsubmit="return confirm('Approve?')">
+                                                    <input type="hidden" name="trade_id" value="<?php echo $trade['id']; ?>">
+                                                    <input type="hidden" name="approve_trade" value="1">
+                                                    <input type="hidden" name="approve_action" value="approve">
+                                                    <button type="submit" class="btn btn-outline-success" title="Approve">
+                                                        <i class="bi bi-check-lg"></i>
+                                                    </button>
+                                                </form>
+                                                <form method="POST" style="display:inline" onsubmit="return confirm('Reject?')">
+                                                    <input type="hidden" name="trade_id" value="<?php echo $trade['id']; ?>">
+                                                    <input type="hidden" name="approve_trade" value="1">
+                                                    <input type="hidden" name="approve_action" value="reject">
+                                                    <button type="submit" class="btn btn-outline-danger" title="Reject">
+                                                        <i class="bi bi-x-lg"></i>
+                                                    </button>
+                                                </form>
+                                            <?php endif; ?>
+                                        </div>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+</div>
+
+<!-- Upload Modal -->
+<div class="modal fade" id="uploadModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-upload"></i> Upload Receipt</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" enctype="multipart/form-data">
                 <div class="modal-body">
-                    <input type="hidden" name="id" id="order_id" value="">
-                    <input type="hidden" name="ajax_action" value="save_order">
+                    <input type="hidden" name="trade_id" id="modal_trade_id" value="">
+                    <input type="hidden" name="upload_receipt" value="1">
+                    <input type="hidden" name="receipt_type" id="modal_receipt_type" value="payment">
+                    <input type="hidden" name="filter" value="<?php echo safeHtml($filter); ?>">
+                    <input type="hidden" name="asset_class" value="<?php echo safeHtml($asset_class_filter); ?>">
+                    <input type="hidden" name="search" value="<?php echo safeHtml($search); ?>">
                     
-                    <div class="row g-3">
-                        <div class="col-md-3">
-                            <label class="form-label fw-semibold">Order Type <span class="text-danger">*</span></label>
-                            <select class="form-select" name="order_type" id="order_type" required>
-                                <option value="buy">BUY</option>
-                                <option value="sell">SELL</option>
-                            </select>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label fw-semibold">Priority</label>
-                            <select class="form-select" name="priority" id="priority">
-                                <option value="normal">Normal</option>
-                                <option value="urgent">Urgent</option>
-                                <option value="most_important">Most Important</option>
-                            </select>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label fw-semibold">Asset Class <span class="text-danger">*</span></label>
-                            <select class="form-select" name="asset_class" id="asset_class" required>
-                                <option value="equity">Equity / Shares</option>
-                                <option value="bond">Bond</option>
-                                <option value="etf">ETF</option>
-                            </select>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label fw-semibold">Order Date</label>
-                            <input type="date" class="form-control" name="order_date" id="order_date" value="<?php echo date('Y-m-d'); ?>">
-                        </div>
-                        
-                        <div class="col-md-6 position-relative">
-                            <label class="form-label fw-semibold">Client <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control" id="client_search" placeholder="Type to search..." autocomplete="off">
-                            <input type="hidden" name="client_name" id="client_name">
-                            <input type="hidden" name="client_cds_account" id="client_cds_account">
-                            <div id="client_search_dropdown" class="client-search-dropdown"></div>
-                        </div>
-                        
-                        <div class="col-md-6 position-relative">
-                            <label class="form-label fw-semibold">Security <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control" id="security_search" placeholder="Type to search..." autocomplete="off">
-                            <input type="hidden" name="security_id" id="security_id">
-                            <input type="hidden" name="security_name" id="security_name">
-                            <div id="security_search_dropdown" class="security-search-dropdown"></div>
-                            <div id="security_info" class="security-info"></div>
-                        </div>
-                        
-                        <div class="col-md-3">
-                            <label class="form-label fw-semibold">Quantity <span class="text-danger">*</span></label>
-                            <input type="number" class="form-control" name="quantity" id="quantity" step="1" min="1" required>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label fw-semibold">Price (TZS) <span class="text-danger">*</span></label>
-                            <input type="number" class="form-control" name="order_price" id="order_price" step="0.0001" min="0" required>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label fw-semibold">Order Time</label>
-                            <input type="time" class="form-control" name="order_time" id="order_time" value="<?php echo date('H:i:s'); ?>">
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label fw-semibold">Broker Code</label>
-                            <input class="form-control" name="broker_code" id="broker_code" value="<?php echo htmlspecialchars($company['company_code'] ?? ''); ?>">
-                        </div>
-                        
-                        <div class="col-12"><hr><h6 class="fw-semibold">Execution Details (Optional)</h6></div>
-                        <div class="col-md-3"><label class="form-label">Executed Quantity</label><input type="number" class="form-control" name="executed_quantity" id="executed_quantity" step="1" min="0"></div>
-                        <div class="col-md-3"><label class="form-label">Executed Price</label><input type="number" class="form-control" name="executed_price" id="executed_price" step="0.0001" min="0"></div>
-                        <div class="col-md-3"><label class="form-label">Trade Date</label><input type="date" class="form-control" name="trade_date" id="trade_date" value="<?php echo date('Y-m-d'); ?>"></div>
-                        <div class="col-md-3"><label class="form-label">Settlement Date</label><input type="date" class="form-control" name="settlement_date" id="settlement_date" value="<?php echo date('Y-m-d', strtotime('+2 days')); ?>"></div>
-                        <div class="col-md-3"><label class="form-label">Execution Time</label><input type="time" class="form-control" name="execution_time" id="execution_time" value="<?php echo date('H:i:s'); ?>"></div>
-                        
-                        <div class="col-12"><label class="form-label">Remarks</label><textarea class="form-control" name="remarks" id="remarks" rows="2"></textarea></div>
+                    <div class="alert alert-info">
+                        <strong id="modal_receipt_label">Payment Receipt</strong>
+                        <span class="text-muted">- Upload confirmation</span>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Select Files</label>
+                        <input type="file" class="form-control" name="receipt_files[]" accept="image/*,.pdf" multiple>
+                        <div class="form-text">JPG, PNG, GIF, PDF (Max 5MB each)</div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Comment (Optional)</label>
+                        <textarea class="form-control" name="receipt_comment" rows="2" placeholder="Add a note..."></textarea>
                     </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Save Order</button>
+                    <button type="submit" class="btn btn-secondary">Upload</button>
                 </div>
             </form>
         </div>
     </div>
 </div>
 
-<div class="page-header">
-    <div class="container-fluid">
-        <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
-            <div>
-                <h1 class="page-title mb-1"><?php echo htmlspecialchars($page_title); ?></h1>
-                <p class="page-subtitle mb-0">Capture orders, execute trades, and track settlement in one workflow.</p>
+<!-- Receipt Viewer Modal -->
+<div class="modal fade" id="viewerModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Receipt</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <div class="d-flex gap-2 flex-wrap">
-                <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#orderModal" onclick="resetOrderForm()">
-                    <i class="bi bi-plus-circle me-2"></i>New Order
-                </button>
-                <a href="trades.php" class="btn btn-outline-dark"><i class="bi bi-list-ul me-2"></i>All Trades</a>
-            </div>
-        </div>
-    </div>
-</div>
-
-<div class="container-fluid">
-    <?php if (isset($_SESSION['alert'])): ?>
-        <div class="alert alert-<?php echo $_SESSION['alert'][1]; ?> alert-dismissible fade show"><?php echo htmlspecialchars($_SESSION['alert'][0]); ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
-        <?php unset($_SESSION['alert']); ?>
-    <?php endif; ?>
-
-    <div class="d-flex flex-wrap gap-2 mb-4">
-        <?php foreach (['all' => 'All Sheets', 'orders' => 'Order Intake', 'execution' => 'Execution Queue', 'approved' => 'Approved', 'settled' => 'Settled'] as $viewKey => $viewLabel): ?>
-            <a href="dealing_sheet.php?view=<?php echo urlencode($viewKey); ?>" class="btn <?php echo $view === $viewKey ? 'btn-primary' : 'btn-outline-secondary'; ?>"><?php echo htmlspecialchars($viewLabel); ?></a>
-        <?php endforeach; ?>
-    </div>
-
-    <div class="row g-4 mb-4">
-        <div class="col-lg-3 col-md-6"><div class="card bg-primary text-white"><div class="card-body"><div class="small">Total Sheets</div><div class="fs-3 fw-bold"><?php echo number_format($overview['total']); ?></div></div></div></div>
-        <div class="col-lg-3 col-md-6"><div class="card bg-warning text-dark"><div class="card-body"><div class="small">Open Orders</div><div class="fs-3 fw-bold"><?php echo number_format($overview['orders']); ?></div></div></div></div>
-        <div class="col-lg-3 col-md-6"><div class="card bg-info text-white"><div class="card-body"><div class="small">Awaiting Review</div><div class="fs-3 fw-bold"><?php echo number_format($overview['execution']); ?></div></div></div></div>
-        <div class="col-lg-3 col-md-6"><div class="card bg-success text-white"><div class="card-body"><div class="small">Settled</div><div class="fs-3 fw-bold"><?php echo number_format($overview['settled']); ?></div></div></div></div>
-    </div>
-
-    <div class="card dashboard-card">
-        <div class="card-header bg-transparent border-0 pb-0">
-            <h6 class="mb-1 fw-semibold">Order Register</h6>
-            <div class="small text-muted"><?php echo number_format(count($sheets)); ?> orders matching current view</div>
-        </div>
-        <div class="card-body">
-            <div class="table-responsive">
-                <table class="table table-hover align-middle">
-                    <thead>
-                        <tr>
-                            <th>Reference</th>
-                            <th>Priority</th>
-                            <th>Client</th>
-                            <th>Security</th>
-                            <th class="text-end">Qty</th>
-                            <th class="text-end">Price</th>
-                            <th class="text-end">Value</th>
-                            <th>Date</th>
-                            <th>Status</th>
-                            <th class="text-end">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php if (empty($sheets)): ?>
-                            <tr><td colspan="10" class="text-center py-5 text-muted">No orders found</td></tr>
-                        <?php else: ?>
-                            <?php foreach ($sheets as $sheet): 
-                                $isOldOrder = strtotime($sheet['order_date'] ?? '') < strtotime(date('Y-m-d'));
-                                $rowClass = '';
-                                if ($isOldOrder) $rowClass = 'old-order';
-                                elseif (($sheet['priority'] ?? '') === 'Urgent') $rowClass = 'priority-Urgent';
-                                elseif (($sheet['priority'] ?? '') === 'Most Important') $rowClass = 'priority-Most Important';
-                            ?>
-                                <tr class="<?php echo $rowClass; ?>">
-                                    <td><span class="fw-semibold"><?php echo htmlspecialchars($sheet['sheet_reference'] ?? 'N/A'); ?></span></td>
-                                    <td><?php echo htmlspecialchars($sheet['priority'] ?? 'Normal'); ?></td>
-                                    <td><?php echo htmlspecialchars($sheet['client_name'] ?? ''); ?></td>
-                                    <td><?php echo htmlspecialchars($sheet['security_id'] ?? ''); ?></td>
-                                    <td class="text-end"><?php echo number_format(floatval($sheet['quantity'] ?? 0)); ?></td>
-                                    <td class="text-end"><?php echo number_format(floatval($sheet['order_price'] ?? 0), 2); ?></td>
-                                    <td class="text-end"><?php echo number_format(floatval($sheet['order_value'] ?? 0), 2); ?></td>
-                                    <td><?php echo htmlspecialchars($sheet['order_date'] ?? ''); ?></td>
-                                    <td>
-                                        <?php if (($sheet['execution_status'] ?? '') === 'executed'): ?>
-                                            <span class="badge bg-success">Executed</span>
-                                        <?php elseif (($sheet['lifecycle_stage'] ?? '') === 'cancelled'): ?>
-                                            <span class="badge bg-secondary">Cancelled</span>
-                                        <?php else: ?>
-                                            <span class="badge bg-warning">Pending</span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td class="text-end">
-                                        <div class="btn-group btn-group-sm">
-                                            <button class="btn btn-outline-primary" onclick='editOrder(<?php echo json_encode($sheet); ?>)'><i class="bi bi-pencil"></i></button>
-<a href="export_dealing_sheet_pdf.php?id=<?php echo $sheet['id']; ?>" target="_blank" class="btn btn-outline-danger btn-sm">
-    <i class="bi bi-file-pdf"></i> PDF
-</a>                                            <button class="btn btn-outline-warning" onclick="confirmAction(<?php echo $sheet['id']; ?>, 'cancel_order')"><i class="bi bi-x-circle"></i></button>
-                                            <button class="btn btn-outline-success" onclick="confirmAction(<?php echo $sheet['id']; ?>, 'mark_executed')"><i class="bi bi-check-circle"></i></button>
-                                            <button class="btn btn-outline-danger" onclick="confirmAction(<?php echo $sheet['id']; ?>, 'delete_order')"><i class="bi bi-trash"></i></button>
-                                        </div>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        <?php endif; ?>
-                    </tbody>
-                </table>
+            <div class="modal-body text-center" id="viewerContent">
+                <div class="py-3">Loading...</div>
             </div>
         </div>
     </div>
 </div>
 
 <script>
-let securityData = [];
-
-function resetOrderForm() {
-    document.getElementById('orderForm').reset();
-    document.getElementById('order_id').value = '';
-    document.getElementById('client_name').value = '';
-    document.getElementById('client_cds_account').value = '';
-    document.getElementById('client_search').value = '';
-    document.getElementById('security_id').value = '';
-    document.getElementById('security_name').value = '';
-    document.getElementById('security_search').value = '';
-    document.getElementById('security_info').innerHTML = '';
-    document.getElementById('order_date').value = '<?php echo date('Y-m-d'); ?>';
-    document.getElementById('trade_date').value = '<?php echo date('Y-m-d'); ?>';
-    document.getElementById('settlement_date').value = '<?php echo date('Y-m-d', strtotime('+2 days')); ?>';
-    hideDropdowns();
-}
-
-function hideDropdowns() {
-    const clientDropdown = document.getElementById('client_search_dropdown');
-    const securityDropdown = document.getElementById('security_search_dropdown');
-    if (clientDropdown) clientDropdown.style.display = 'none';
-    if (securityDropdown) securityDropdown.style.display = 'none';
-}
-
-function editOrder(sheet) {
-    resetOrderForm();
-    document.getElementById('order_id').value = sheet.id || '';
-    document.getElementById('client_name').value = sheet.client_name || '';
-    document.getElementById('client_cds_account').value = sheet.client_cds_account || '';
-    document.getElementById('client_search').value = sheet.client_name || '';
-    document.getElementById('security_id').value = sheet.security_id || '';
-    document.getElementById('security_name').value = sheet.security_name || '';
-    document.getElementById('security_search').value = sheet.security_name || '';
-    document.getElementById('order_type').value = sheet.order_type || 'buy';
-    document.getElementById('asset_class').value = sheet.asset_class || 'equity';
-    let priorityVal = 'normal';
-    if (sheet.priority === 'Urgent') priorityVal = 'urgent';
-    else if (sheet.priority === 'Most Important') priorityVal = 'most_important';
-    document.getElementById('priority').value = priorityVal;
-    document.getElementById('quantity').value = sheet.quantity || '';
-    document.getElementById('order_price').value = sheet.order_price || '';
-    document.getElementById('order_date').value = sheet.order_date || '<?php echo date('Y-m-d'); ?>';
-    document.getElementById('order_time').value = sheet.order_time || '<?php echo date('H:i:s'); ?>';
-    document.getElementById('executed_quantity').value = sheet.executed_quantity || '';
-    document.getElementById('executed_price').value = sheet.executed_price || '';
-    document.getElementById('trade_date').value = sheet.trade_date || '<?php echo date('Y-m-d'); ?>';
-    document.getElementById('settlement_date').value = sheet.settlement_date || '<?php echo date('Y-m-d', strtotime('+2 days')); ?>';
-    document.getElementById('execution_time').value = sheet.execution_time || '<?php echo date('H:i:s'); ?>';
-    document.getElementById('remarks').value = sheet.remarks || '';
-    document.getElementById('broker_code').value = sheet.broker_code || '<?php echo htmlspecialchars($company['company_code'] ?? ''); ?>';
+// View receipt
+function viewReceipt(url) {
+    const content = document.getElementById('viewerContent');
+    const isImage = url.match(/\.(jpg|jpeg|png|gif)$/i);
     
-    const modal = new bootstrap.Modal(document.getElementById('orderModal'));
-    modal.show();
-}
-
-function confirmAction(id, action) {
-    let msg = '';
-    if (action === 'delete_order') msg = 'Delete this order? This cannot be undone.';
-    else if (action === 'cancel_order') msg = 'Cancel this order?';
-    else if (action === 'mark_executed') msg = 'Mark this order as executed?';
-    if (confirm(msg)) {
-        window.location.href = 'dealing_sheet.php?action=' + action + '&id=' + id + '&view=' + encodeURIComponent('<?php echo $view; ?>');
+    if (isImage) {
+        content.innerHTML = `<img src="${url}" class="img-fluid" style="max-height:70vh;object-fit:contain;">`;
+    } else {
+        content.innerHTML = `
+            <div class="py-4">
+                <i class="bi bi-file-pdf" style="font-size:48px;color:#dc3545;"></i>
+                <p class="mt-2">PDF Document</p>
+                <a href="${url}" target="_blank" class="btn btn-danger">View PDF</a>
+            </div>
+        `;
     }
+    
+    new bootstrap.Modal(document.getElementById('viewerModal')).show();
 }
 
-// Client search
-document.getElementById('client_search')?.addEventListener('input', function() {
-    const search = this.value;
-    if (search.length < 2) { document.getElementById('client_search_dropdown').style.display = 'none'; return; }
-    fetch('dealing_sheet.php?ajax_action=search_clients&search=' + encodeURIComponent(search))
-        .then(r => r.json()).then(data => {
-            const dropdown = document.getElementById('client_search_dropdown');
-            dropdown.innerHTML = '';
-            if (data.length) {
-                data.forEach(c => {
-                    const div = document.createElement('div');
-                    div.innerHTML = `<strong>${escapeHtml(c.client_name)}</strong><br><small>CDS: ${escapeHtml(c.client_cds_account)}</small>`;
-                    div.onclick = () => {
-                        document.getElementById('client_name').value = c.client_name;
-                        document.getElementById('client_cds_account').value = c.client_cds_account;
-                        document.getElementById('client_search').value = c.client_name;
-                        dropdown.style.display = 'none';
-                    };
-                    dropdown.appendChild(div);
-                });
-                dropdown.style.display = 'block';
-            } else dropdown.style.display = 'none';
-        });
-});
+// Open upload modal
+function openUpload(tradeId, type) {
+    document.getElementById('modal_trade_id').value = tradeId;
+    document.getElementById('modal_receipt_type').value = type;
+    
+    const label = document.getElementById('modal_receipt_label');
+    if (type === 'commission') {
+        label.textContent = 'Commission Receipt';
+    } else {
+        label.textContent = 'Payment Receipt';
+    }
+    
+    new bootstrap.Modal(document.getElementById('uploadModal')).show();
+}
 
-// Security search
-document.getElementById('security_search')?.addEventListener('input', function() {
-    const search = this.value;
-    const assetClass = document.getElementById('asset_class').value;
-    if (search.length < 2) { document.getElementById('security_search_dropdown').style.display = 'none'; return; }
-    fetch('dealing_sheet.php?ajax_action=get_securities&asset_class=' + encodeURIComponent(assetClass) + '&search=' + encodeURIComponent(search))
-        .then(r => r.json()).then(data => {
-            const dropdown = document.getElementById('security_search_dropdown');
-            dropdown.innerHTML = '';
-            if (data.length) {
-                data.forEach(s => {
-                    const div = document.createElement('div');
-                    div.innerHTML = `<strong>${escapeHtml(s.security_id)}</strong> - ${escapeHtml(s.security_name)}`;
-                    div.onclick = () => {
-                        document.getElementById('security_id').value = s.security_id;
-                        document.getElementById('security_name').value = s.security_name;
-                        document.getElementById('security_search').value = s.security_name;
-                        dropdown.style.display = 'none';
-                        let info = '';
-                        if (s.company_name) info += `<strong>Company:</strong> ${escapeHtml(s.company_name)}<br>`;
-                        if (s.coupon_rate) info += `<strong>Coupon:</strong> ${s.coupon_rate}%<br>`;
-                        document.getElementById('security_info').innerHTML = info;
-                    };
-                    dropdown.appendChild(div);
-                });
-                dropdown.style.display = 'block';
-            } else dropdown.style.display = 'none';
-        });
-});
-
-// Form submit
-document.getElementById('orderForm')?.addEventListener('submit', function(e) {
-    e.preventDefault();
-    const btn = this.querySelector('button[type="submit"]');
-    const original = btn.innerHTML;
-    btn.disabled = true;
-    btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Saving...';
-    fetch(window.location.href, { method: 'POST', body: new FormData(this) })
-        .then(r => r.json()).then(data => {
-            if (data.success) {
-                bootstrap.Modal.getInstance(document.getElementById('orderModal'))?.hide();
-                location.reload();
-            } else alert('Error: ' + data.message);
-        }).catch(err => alert('Error saving order')).finally(() => {
-            btn.disabled = false;
-            btn.innerHTML = original;
-        });
-});
-
-function escapeHtml(text) { if (!text) return ''; return text.replace(/[&<>]/g, function(m) { if (m === '&') return '&amp;'; if (m === '<') return '&lt;'; if (m === '>') return '&gt;'; return m; }); }
-
-document.addEventListener('click', function(e) {
-    if (!document.getElementById('client_search')?.contains(e.target)) document.getElementById('client_search_dropdown').style.display = 'none';
-    if (!document.getElementById('security_search')?.contains(e.target)) document.getElementById('security_search_dropdown').style.display = 'none';
+// Auto-dismiss alerts
+document.querySelectorAll('.alert').forEach(el => {
+    setTimeout(() => {
+        const bsAlert = bootstrap.Alert.getOrCreateInstance(el);
+        if (bsAlert) bsAlert.close();
+    }, 5000);
 });
 </script>
 

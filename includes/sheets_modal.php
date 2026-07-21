@@ -230,7 +230,7 @@ $orders = getOrdersPlaceholder($db);
                 <button type="button" class="btn btn-primary" onclick="printSheet()">
                     <i class="bi bi-printer me-2"></i>Print
                 </button>
-                <a href="<?php echo BASE_URL; ?>/trader/dealing_sheet.php" class="btn btn-info">
+                <a href="<?php echo BASE_URL; ?>/trader/order_sheet.php" class="btn btn-info">
                     <i class="bi bi-fullscreen me-2"></i>Full View
                 </a>
             </div>
