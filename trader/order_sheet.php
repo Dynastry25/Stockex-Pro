@@ -21,16 +21,6 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// Detect if POST data was truncated due to exceeding post_max_size
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && empty($_POST) && empty($_FILES)) {
-    $content_length = $_SERVER['CONTENT_LENGTH'] ?? 0;
-    $post_max_size = ini_get('post_max_size');
-    $_SESSION['alert'] = ["Upload failed: The uploaded file ($content_length bytes) exceeds the server's maximum upload size ($post_max_size).", 'danger'];
-    session_write_close();
-    header('Location: order_sheet.php');
-    exit;
-}
-
 // Check user permissions - finance, admin, and traders can access
 $user_role = $_SESSION['role'] ?? '';
 $allowed_roles = ['finance_officer', 'system_admin', 'trader'];
@@ -222,7 +212,6 @@ if (isset($_POST['approve_trade']) && isset($_POST['trade_id'])) {
         $_SESSION['alert'] = ['Error processing approval', 'danger'];
     }
     
-    session_write_close();
     header('Location: order_sheet.php' . (!empty($_SERVER['QUERY_STRING']) ? '?' . $_SERVER['QUERY_STRING'] : ''));
     exit;
 }
@@ -233,7 +222,6 @@ if (isset($_POST['approve_trade']) && isset($_POST['trade_id'])) {
 
 // Handle Receipt Upload
 if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
-    error_log("Upload handler entered for trade_id=" . $_POST['trade_id'] . ", files=" . print_r($_FILES['payment_receipts']['name'] ?? [], true));
     try {
         $trade_id = (int) $_POST['trade_id'];
         $uploaded_files = [];
@@ -360,7 +348,6 @@ if (isset($_POST['upload_receipt']) && isset($_POST['trade_id'])) {
         $_SESSION['alert'] = ['Upload error: ' . $e->getMessage(), 'danger'];
         error_log("Receipt upload error: " . $e->getMessage());
     }
-    session_write_close();
     header('Location: order_sheet.php?' . http_build_query(array_filter([
         'filter' => $_GET['filter'] ?? 'pending',
         'asset_class' => $_GET['asset_class'] ?? 'all',
@@ -380,7 +367,6 @@ if (isset($_GET['delete_receipt']) && isset($_GET['trade_id']) && isset($_GET['f
     
     if ($record && $record['is_approved'] == 1) {
         $_SESSION['alert'] = ['Cannot delete approved receipts. Please contact finance officer.', 'warning'];
-        session_write_close();
         header('Location: order_sheet.php?' . http_build_query(array_filter([
             'filter' => $_GET['filter'] ?? 'pending',
             'asset_class' => $_GET['asset_class'] ?? 'all',
@@ -435,7 +421,6 @@ if (isset($_GET['delete_receipt']) && isset($_GET['trade_id']) && isset($_GET['f
             }
         }
     }
-    session_write_close();
     header('Location: order_sheet.php?' . http_build_query(array_filter([
         'filter' => $_GET['filter'] ?? 'pending',
         'asset_class' => $_GET['asset_class'] ?? 'all',
@@ -453,7 +438,6 @@ if (isset($_GET['delete_comment']) && isset($_GET['trade_id'])) {
         $_SESSION['alert'] = ['Comment deleted successfully.', 'success'];
     }
     
-    session_write_close();
     header('Location: order_sheet.php?' . http_build_query(array_filter([
         'filter' => $_GET['filter'] ?? 'pending',
         'asset_class' => $_GET['asset_class'] ?? 'all',
