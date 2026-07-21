@@ -182,6 +182,12 @@
                             <span>Client Management</span>
                         </a>
                     </li>
+                        <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/agent_management.php">
+                            <i class="bi bi-graph-up"></i>
+                            <span>Agent Management</span>
+                        </a>
+                    </li>
                     <li class="nav-item">
                         <a class="nav-link" href="<?php echo BASE_URL; ?>trader/send_contract_notes">
                             <i class="bi bi-graph-up"></i>
