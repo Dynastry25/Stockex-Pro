@@ -1,6 +1,6 @@
 <?php
 /**
- * Agent Management System
+ * Agent Management System - COMPLETE FIXED VERSION
  * Location: /finance/agent_management.php
  * Access: Finance Officers, Operations, and Traders
  */
@@ -81,7 +81,7 @@ try {
         INDEX idx_status (status)
     )");
     
-    // 2. Agent clients linking table (one client per agent)
+    // 2. Agent clients linking table
     $db->exec("CREATE TABLE IF NOT EXISTS agent_clients (
         id INT AUTO_INCREMENT PRIMARY KEY,
         agent_id INT NOT NULL,
@@ -96,7 +96,20 @@ try {
         FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
     )");
     
-    // 3. Agent commission ledger
+    // 3. Agent trades selection table
+    $db->exec("CREATE TABLE IF NOT EXISTS agent_trades_selection (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        agent_id INT NOT NULL,
+        trade_id INT NOT NULL,
+        selected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        selected_by VARCHAR(100),
+        UNIQUE KEY unique_trade (trade_id),
+        INDEX idx_agent_id (agent_id),
+        INDEX idx_trade_id (trade_id),
+        FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+    )");
+    
+    // 4. Agent commission ledger
     $db->exec("CREATE TABLE IF NOT EXISTS agent_commission_ledger (
         id INT AUTO_INCREMENT PRIMARY KEY,
         agent_id INT NOT NULL,
@@ -121,7 +134,7 @@ try {
         INDEX idx_payment_id (payment_id)
     )");
     
-    // 4. Agent payments table
+    // 5. Agent payments table
     $db->exec("CREATE TABLE IF NOT EXISTS agent_payments (
         id INT AUTO_INCREMENT PRIMARY KEY,
         payment_no VARCHAR(50) UNIQUE NOT NULL,
@@ -147,20 +160,6 @@ try {
         INDEX idx_payment_no (payment_no),
         INDEX idx_status (status)
     )");
-    
-    // 5. Add columns to trades table
-    try {
-        $check = $db->query("SHOW COLUMNS FROM trades LIKE 'agent_id'");
-        if ($check->rowCount() == 0) {
-            $db->exec("ALTER TABLE trades ADD COLUMN agent_id INT DEFAULT NULL");
-            $db->exec("ALTER TABLE trades ADD COLUMN agent_commission_calculated TINYINT DEFAULT 0");
-            $db->exec("ALTER TABLE trades ADD COLUMN agent_commission_amount DECIMAL(15,2) DEFAULT 0.00");
-            $db->exec("ALTER TABLE trades ADD COLUMN agent_commission_rate DECIMAL(5,4) DEFAULT 0.0000");
-            $db->exec("ALTER TABLE trades ADD COLUMN is_first_agent_trade TINYINT DEFAULT 0");
-        }
-    } catch (Exception $e) {
-        error_log("Trades table migration warning: " . $e->getMessage());
-    }
     
     // 6. Add columns to clients table
     try {
@@ -252,10 +251,6 @@ function calculateBrokerageCommission($trade) {
     }
 }
 
-function calculateAgentCommissionFromBrokerage($brokerage_commission, $agent_rate) {
-    return $brokerage_commission * $agent_rate;
-}
-
 function getAgentCommissionRate($db, $agent_id, $is_first_trade = false) {
     $stmt = $db->prepare("SELECT first_trade_commission_rate, commission_rate FROM agents WHERE id = ? AND status = 'active'");
     $stmt->execute([$agent_id]);
@@ -279,17 +274,6 @@ function getAgentUnpaidBalance($db, $agent_id) {
     return $result['total_due'] ?? 0;
 }
 
-function getAgentTotalPaid($db, $agent_id) {
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(total_amount), 0) as total_paid
-        FROM agent_payments
-        WHERE agent_id = ? AND status = 'paid'
-    ");
-    $stmt->execute([$agent_id]);
-    $result = $stmt->fetch();
-    return $result['total_paid'] ?? 0;
-}
-
 function getAgentLedgerSummary($db, $agent_id) {
     $stmt = $db->prepare("
         SELECT 
@@ -307,102 +291,114 @@ function getAgentLedgerSummary($db, $agent_id) {
 }
 
 // =====================================================
-// PROCESS AGENT COMMISSION CALCULATION
+// PROCESS AGENT COMMISSION FOR SELECTED TRADES
 // =====================================================
 
-function processAgentCommission($db, $trade_id, $agent_id) {
+function processSelectedTradesCommission($db, $agent_id, $trade_ids) {
     try {
-        // Get trade details
-        $stmt = $db->prepare("
-            SELECT t.*, c.linked_to_agent, c.agent_id as client_agent_id
-            FROM trades t
-            INNER JOIN clients c ON t.client_cds_account = c.cds_account
-            WHERE t.id = ? AND t.status = 'active'
-        ");
-        $stmt->execute([$trade_id]);
-        $trade = $stmt->fetch();
+        $db->beginTransaction();
         
-        if (!$trade) {
-            error_log("Trade $trade_id not found or not active");
-            return false;
+        $calculated = 0;
+        $errors = [];
+        
+        foreach ($trade_ids as $trade_id) {
+            // Get trade details
+            $stmt = $db->prepare("
+                SELECT t.*, c.linked_to_agent, c.agent_id as client_agent_id
+                FROM trades t
+                INNER JOIN clients c ON t.client_cds_account = c.cds_account
+                WHERE t.id = ? AND t.status = 'active'
+            ");
+            $stmt->execute([$trade_id]);
+            $trade = $stmt->fetch();
+            
+            if (!$trade) {
+                $errors[] = "Trade $trade_id not found";
+                continue;
+            }
+            
+            // Verify client is linked to this agent
+            if ($trade['client_agent_id'] != $agent_id || $trade['linked_to_agent'] != 1) {
+                $errors[] = "Client {$trade['client_cds_account']} is not linked to agent $agent_id";
+                continue;
+            }
+            
+            // Check if already in ledger
+            $stmt = $db->prepare("SELECT id FROM agent_commission_ledger WHERE trade_id = ? AND agent_id = ?");
+            $stmt->execute([$trade_id, $agent_id]);
+            if ($stmt->fetch()) {
+                $errors[] = "Trade $trade_id already has commission calculated";
+                continue;
+            }
+            
+            // Check if this is the first trade for this agent
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as count 
+                FROM agent_commission_ledger 
+                WHERE agent_id = ? AND is_paid = 0
+            ");
+            $stmt->execute([$agent_id]);
+            $existing = $stmt->fetch();
+            $is_first_trade = ($existing['count'] == 0);
+            
+            // Get agent commission rate
+            $rate = getAgentCommissionRate($db, $agent_id, $is_first_trade);
+            
+            // Calculate brokerage commission
+            $brokerage_commission = calculateBrokerageCommission($trade);
+            $agent_commission = $brokerage_commission * $rate;
+            
+            // Save to ledger
+            $stmt = $db->prepare("
+                INSERT INTO agent_commission_ledger (
+                    agent_id, trade_id, trade_reference, client_cds_account,
+                    trade_date, trade_consideration, brokerage_commission,
+                    agent_commission, commission_rate, is_first_trade, is_paid
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            ");
+            $stmt->execute([
+                $agent_id,
+                $trade_id,
+                $trade['trade_reference'],
+                $trade['client_cds_account'],
+                $trade['trade_date'],
+                $trade['consideration'],
+                $brokerage_commission,
+                $agent_commission,
+                $rate,
+                $is_first_trade ? 1 : 0
+            ]);
+            
+            // Add to agent_trades_selection
+            $stmt = $db->prepare("
+                INSERT IGNORE INTO agent_trades_selection (agent_id, trade_id, selected_by)
+                VALUES (?, ?, ?)
+            ");
+            $stmt->execute([$agent_id, $trade_id, $_SESSION['username'] ?? 'system']);
+            
+            $calculated++;
         }
         
-        // Verify client is linked to this agent
-        if ($trade['client_agent_id'] != $agent_id || $trade['linked_to_agent'] != 1) {
-            error_log("Client {$trade['client_cds_account']} is not linked to agent $agent_id");
-            return false;
-        }
+        $db->commit();
         
-        // Check if already calculated
-        if ($trade['agent_commission_calculated'] == 1) {
-            error_log("Trade $trade_id already has commission calculated");
-            return true;
-        }
-        
-        // Check if this is the first trade for this agent
-        $stmt = $db->prepare("
-            SELECT COUNT(*) as count 
-            FROM agent_commission_ledger 
-            WHERE agent_id = ? AND is_paid = 0
-        ");
-        $stmt->execute([$agent_id]);
-        $existing = $stmt->fetch();
-        $is_first_trade = ($existing['count'] == 0);
-        
-        // Get agent commission rate
-        $rate = getAgentCommissionRate($db, $agent_id, $is_first_trade);
-        
-        // Calculate brokerage commission
-        $brokerage_commission = calculateBrokerageCommission($trade);
-        $agent_commission = calculateAgentCommissionFromBrokerage($brokerage_commission, $rate);
-        
-        error_log("Trade $trade_id - First Trade: " . ($is_first_trade ? 'YES' : 'NO') . 
-                  ", Rate: $rate, Brokerage: $brokerage_commission, Agent Commission: $agent_commission");
-        
-        // Update trade record
-        $stmt = $db->prepare("
-            UPDATE trades 
-            SET agent_id = ?, 
-                agent_commission_calculated = 1,
-                agent_commission_amount = ?,
-                agent_commission_rate = ?,
-                is_first_agent_trade = ?
-            WHERE id = ?
-        ");
-        $stmt->execute([$agent_id, $agent_commission, $rate, $is_first_trade ? 1 : 0, $trade_id]);
-        
-        // Save to ledger
-        $stmt = $db->prepare("
-            INSERT INTO agent_commission_ledger (
-                agent_id, trade_id, trade_reference, client_cds_account,
-                trade_date, trade_consideration, brokerage_commission,
-                agent_commission, commission_rate, is_first_trade, is_paid
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-        ");
-        $stmt->execute([
-            $agent_id,
-            $trade_id,
-            $trade['trade_reference'],
-            $trade['client_cds_account'],
-            $trade['trade_date'],
-            $trade['consideration'],
-            $brokerage_commission,
-            $agent_commission,
-            $rate,
-            $is_first_trade ? 1 : 0
-        ]);
-        
-        error_log("Successfully calculated commission for trade $trade_id");
-        return true;
+        return [
+            'success' => true,
+            'calculated' => $calculated,
+            'errors' => $errors
+        ];
         
     } catch (Exception $e) {
-        error_log("Agent commission calculation error: " . $e->getMessage());
-        return false;
+        $db->rollBack();
+        error_log("Commission calculation error: " . $e->getMessage());
+        return [
+            'success' => false,
+            'error' => $e->getMessage()
+        ];
     }
 }
 
 // =====================================================
-// PROCESS PAYMENT
+// PROCESS PAYMENT WITH GENERAL LEDGER INTEGRATION
 // =====================================================
 
 function processAgentPayment($db, $data) {
@@ -460,53 +456,72 @@ function processAgentPayment($db, $data) {
         ");
         $stmt->execute(array_merge([$payment_id, $payment_no], $ids));
         
-        // Create journal entry for the payment
-        $bank_account = getBankAccountDetails($db, $data['bank_account_id']);
+        // =====================================================
+        // CREATE JOURNAL ENTRY - INTEGRATE WITH GENERAL LEDGER
+        // =====================================================
         
-        if (isset($data['record_in_financial']) && $data['record_in_financial'] == 'yes') {
-            // DR - Agent Commission Payable
-            createJournalEntry($db, [
-                'transaction_date' => $data['payment_date'],
-                'reference_no' => $payment_no,
-                'reference_type' => 'agent_commission',
-                'description' => "Agent Commission Payment - {$data['agent_name']} ({$payment_no})",
-                'account_code' => '2127', // Agent Commissions Payable
-                'debit_amount' => $data['total_amount'],
-                'credit_amount' => 0,
-                'currency' => 'Tsh',
-                'entity_id' => $data['agent_id'],
-                'entity_name' => $data['agent_name'],
-                'entity_type' => 'agent',
-                'bank_account_id' => $data['bank_account_id'],
-                'bank_name' => $bank_account['bank_name'],
-                'bank_account_number' => $bank_account['account_number']
-            ]);
-            
-            // CR - Bank Account
-            createJournalEntry($db, [
-                'transaction_date' => $data['payment_date'],
-                'reference_no' => $payment_no,
-                'reference_type' => 'agent_commission',
-                'description' => "Agent Commission Payment - {$data['agent_name']} ({$payment_no})",
-                'account_code' => $bank_account['code'],
-                'debit_amount' => 0,
-                'credit_amount' => $data['total_amount'],
-                'currency' => 'Tsh',
-                'entity_id' => $data['agent_id'],
-                'entity_name' => $data['agent_name'],
-                'entity_type' => 'agent',
-                'bank_account_id' => $data['bank_account_id'],
-                'bank_name' => $bank_account['bank_name'],
-                'bank_account_number' => $bank_account['account_number']
-            ]);
-        }
+        $bank_account = getBankAccountDetails($db, $data['bank_account_id']);
+        $agent_name = $data['agent_name'];
+        $total_amount = $data['total_amount'];
+        $payment_date = $data['payment_date'];
+        $user_id = $_SESSION['user_id'] ?? null;
+        $username = $_SESSION['username'] ?? 'system';
+        
+        // Create Journal Entry
+        $journal_no = generateJournalNo($db);
+        $fiscal_year = date('Y', strtotime($payment_date));
+        $fiscal_period = date('m', strtotime($payment_date));
+        
+        // Get the agent commission payable account (2127)
+        $payable_account = getValidAccountCode($db, '2127', '2110');
+        $bank_account_code = $bank_account['code'] ?? getValidAccountCode($db, '1110', '1110');
+        
+        // Journal Entry 1: DR - Agent Commission Payable
+        $journal1 = createJournalEntry($db, [
+            'transaction_date' => $payment_date,
+            'reference_no' => $payment_no,
+            'reference_type' => 'agent_commission',
+            'description' => "Agent Commission Payment - $agent_name ($payment_no)",
+            'account_code' => $payable_account,
+            'debit_amount' => $total_amount,
+            'credit_amount' => 0,
+            'currency' => 'Tsh',
+            'entity_id' => $data['agent_id'],
+            'entity_name' => $agent_name,
+            'entity_type' => 'agent',
+            'bank_account_id' => $data['bank_account_id'],
+            'bank_name' => $bank_account['bank_name'] ?? '',
+            'bank_account_number' => $bank_account['account_number'] ?? ''
+        ]);
+        
+        // Journal Entry 2: CR - Bank Account
+        $journal2 = createJournalEntry($db, [
+            'transaction_date' => $payment_date,
+            'reference_no' => $payment_no,
+            'reference_type' => 'agent_commission',
+            'description' => "Agent Commission Payment - $agent_name ($payment_no)",
+            'account_code' => $bank_account_code,
+            'debit_amount' => 0,
+            'credit_amount' => $total_amount,
+            'currency' => 'Tsh',
+            'entity_id' => $data['agent_id'],
+            'entity_name' => $agent_name,
+            'entity_type' => 'agent',
+            'bank_account_id' => $data['bank_account_id'],
+            'bank_name' => $bank_account['bank_name'] ?? '',
+            'bank_account_number' => $bank_account['account_number'] ?? ''
+        ]);
+        
+        // Update bank balance
+        updateBankBalance($db, $data['bank_account_id'], $total_amount);
         
         $db->commit();
         
         return [
             'success' => true,
             'payment_no' => $payment_no,
-            'payment_id' => $payment_id
+            'payment_id' => $payment_id,
+            'journal_no' => $journal1
         ];
         
     } catch (Exception $e) {
@@ -523,17 +538,68 @@ function processAgentPayment($db, $data) {
 if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_unlinked_clients') {
     header('Content-Type: application/json');
     try {
-        $stmt = $db->query("
+        $search = isset($_GET['search']) ? '%' . $_GET['search'] . '%' : '%';
+        
+        $sql = "
             SELECT cds_account, client_name 
             FROM clients 
             WHERE status = 'active' 
             AND is_active = 1 
             AND (linked_to_agent = 0 OR linked_to_agent IS NULL)
             AND (agent_id IS NULL)
+            AND (client_name LIKE ? OR cds_account LIKE ?)
             ORDER BY client_name
-        ");
+            LIMIT 50
+        ";
+        
+        $stmt = $db->prepare($sql);
+        $stmt->execute([$search, $search]);
         $clients = $stmt->fetchAll();
+        
         echo json_encode(['success' => true, 'clients' => $clients]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_client_trades') {
+    header('Content-Type: application/json');
+    $cds_account = $_GET['cds_account'] ?? '';
+    $agent_id = isset($_GET['agent_id']) ? (int)$_GET['agent_id'] : 0;
+    
+    try {
+        // Get all trades for this client
+        $sql = "
+            SELECT id, trade_reference, trade_date, security_id, trade_side, 
+                   quantity, price, consideration, final_brokerage_fee,
+                   asset_class, brokerage_fee_type, custom_brokerage_fee, liberty_mode
+            FROM trades 
+            WHERE client_cds_account = ? 
+            AND status = 'active'
+            AND (agent_commission_calculated = 0 OR agent_commission_calculated IS NULL)
+            ORDER BY trade_date DESC
+        ";
+        
+        $stmt = $db->prepare($sql);
+        $stmt->execute([$cds_account]);
+        $trades = $stmt->fetchAll();
+        
+        // Check which ones are already selected for this agent
+        if ($agent_id > 0) {
+            $selected_ids = [];
+            $stmt = $db->prepare("SELECT trade_id FROM agent_trades_selection WHERE agent_id = ?");
+            $stmt->execute([$agent_id]);
+            while ($row = $stmt->fetch()) {
+                $selected_ids[] = $row['trade_id'];
+            }
+            
+            foreach ($trades as &$trade) {
+                $trade['is_selected'] = in_array($trade['id'], $selected_ids);
+            }
+        }
+        
+        echo json_encode(['success' => true, 'trades' => $trades]);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'error' => $e->getMessage()]);
     }
@@ -559,56 +625,69 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_agent_ledger') {
     exit;
 }
 
-if (isset($_GET['ajax']) && $_GET['ajax'] == 'calculate_trade_commission') {
+if (isset($_GET['ajax']) && $_GET['ajax'] == 'calculate_selected_trades') {
     header('Content-Type: application/json');
     $agent_id = (int)$_GET['agent_id'] ?? 0;
-    $trade_id = (int)$_GET['trade_id'] ?? 0;
+    $trade_ids = isset($_GET['trade_ids']) ? explode(',', $_GET['trade_ids']) : [];
+    
+    if (empty($trade_ids)) {
+        echo json_encode(['success' => false, 'error' => 'No trades selected']);
+        exit;
+    }
     
     try {
-        $result = processAgentCommission($db, $trade_id, $agent_id);
-        echo json_encode([
-            'success' => $result,
-            'message' => $result ? 'Commission calculated successfully' : 'Failed to calculate commission'
-        ]);
+        $result = processSelectedTradesCommission($db, $agent_id, $trade_ids);
+        
+        if ($result['success']) {
+            $message = "Calculated commissions for {$result['calculated']} trade(s)";
+            if (!empty($result['errors'])) {
+                $message .= " (Errors: " . implode(', ', $result['errors']) . ")";
+            }
+            echo json_encode([
+                'success' => true,
+                'calculated' => $result['calculated'],
+                'errors' => $result['errors'],
+                'message' => $message
+            ]);
+        } else {
+            echo json_encode([
+                'success' => false,
+                'error' => $result['error'] ?? 'Failed to calculate commissions'
+            ]);
+        }
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'error' => $e->getMessage()]);
     }
     exit;
 }
 
-if (isset($_GET['ajax']) && $_GET['ajax'] == 'calculate_all_commissions') {
+if (isset($_GET['ajax']) && $_GET['ajax'] == 'save_trade_selection') {
     header('Content-Type: application/json');
     $agent_id = (int)$_GET['agent_id'] ?? 0;
+    $trade_ids = isset($_GET['trade_ids']) ? explode(',', $_GET['trade_ids']) : [];
+    $action = $_GET['action'] ?? 'add';
     
     try {
-        // Get all trades for clients linked to this agent
-        $stmt = $db->prepare("
-            SELECT t.id 
-            FROM trades t
-            INNER JOIN clients c ON t.client_cds_account = c.cds_account
-            WHERE c.agent_id = ?
-            AND c.linked_to_agent = 1
-            AND t.status = 'active'
-            AND (t.agent_commission_calculated = 0 OR t.agent_commission_calculated IS NULL)
-            ORDER BY t.trade_date ASC
-        ");
-        $stmt->execute([$agent_id]);
-        $trades = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        $db->beginTransaction();
         
-        $calculated = 0;
-        foreach ($trades as $trade_id) {
-            if (processAgentCommission($db, $trade_id, $agent_id)) {
-                $calculated++;
+        if ($action === 'remove') {
+            $placeholders = implode(',', array_fill(0, count($trade_ids), '?'));
+            $stmt = $db->prepare("DELETE FROM agent_trades_selection WHERE agent_id = ? AND trade_id IN ($placeholders)");
+            $stmt->execute(array_merge([$agent_id], $trade_ids));
+        } else {
+            foreach ($trade_ids as $trade_id) {
+                $stmt = $db->prepare("
+                    INSERT IGNORE INTO agent_trades_selection (agent_id, trade_id, selected_by)
+                    VALUES (?, ?, ?)
+                ");
+                $stmt->execute([$agent_id, $trade_id, $_SESSION['username'] ?? 'system']);
             }
         }
         
-        echo json_encode([
-            'success' => true,
-            'calculated' => $calculated,
-            'total' => count($trades),
-            'message' => "Calculated commissions for $calculated out of " . count($trades) . " trades"
-        ]);
+        $db->commit();
+        echo json_encode(['success' => true]);
     } catch (Exception $e) {
+        $db->rollBack();
         echo json_encode(['success' => false, 'error' => $e->getMessage()]);
     }
     exit;
@@ -825,16 +904,28 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             }
         }
         
-        // ============ PAY COMMISSIONS ============
+        // ============ PAY COMMISSIONS - FIXED ============
         if (isset($_POST['pay_commissions']) && $can_pay_commissions) {
             $agent_id = (int)$_POST['agent_id'] ?? 0;
-            $commission_ids = $_POST['commission_ids'] ?? [];
+            $commission_ids = isset($_POST['commission_ids']) ? $_POST['commission_ids'] : [];
+            
+            // Handle both array and single value
+            if (is_array($commission_ids)) {
+                $commission_ids = array_filter($commission_ids);
+            } else {
+                $commission_ids = array_filter([$commission_ids]);
+            }
+            
             $payment_date = $_POST['payment_date'] ?? date('Y-m-d');
             $payment_mode = (int)($_POST['payment_mode'] ?? 0);
             $bank_account_id = (int)($_POST['ac_credit'] ?? 0);
             $transaction_reference = trim($_POST['transaction_reference'] ?? '');
             $notes = trim($_POST['payment_notes'] ?? '');
-            $record_in_financial = $_POST['record_in_financial'] ?? 'yes';
+            
+            error_log("=== PAY COMMISSIONS DEBUG ===");
+            error_log("Agent ID: $agent_id");
+            error_log("Commission IDs: " . print_r($commission_ids, true));
+            error_log("Bank Account ID: $bank_account_id");
             
             if (empty($commission_ids)) {
                 $error_message = "Please select at least one commission to pay.";
@@ -845,7 +936,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     // Get commission details
                     $placeholders = implode(',', array_fill(0, count($commission_ids), '?'));
                     $stmt = $db->prepare("
-                        SELECT l.*, a.name as agent_name
+                        SELECT l.*, a.name as agent_name, a.bank_name as agent_bank_name,
+                               a.bank_account_number as agent_bank_account,
+                               a.bank_account_name as agent_account_name
                         FROM agent_commission_ledger l
                         INNER JOIN agents a ON l.agent_id = a.id
                         WHERE l.id IN ($placeholders)
@@ -853,6 +946,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     ");
                     $stmt->execute($commission_ids);
                     $commissions = $stmt->fetchAll();
+                    
+                    error_log("Found " . count($commissions) . " commissions to pay");
                     
                     if (empty($commissions)) {
                         $error_message = "No unpaid commissions found to pay.";
@@ -867,36 +962,45 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                         $agent_name = $commissions[0]['agent_name'];
                         
                         // Get bank details
-                        $stmt = $db->prepare("SELECT bank_name, account_number FROM banks_accounts WHERE id = ?");
+                        $stmt = $db->prepare("SELECT bank_name, account_number, code FROM banks_accounts WHERE id = ?");
                         $stmt->execute([$bank_account_id]);
                         $bank = $stmt->fetch();
                         
-                        $payment_data = [
-                            'agent_id' => $agent_id,
-                            'agent_name' => $agent_name,
-                            'total_amount' => $total_amount,
-                            'commission_ids' => $commission_id_string,
-                            'trade_count' => $trade_count,
-                            'first_trade_count' => $first_trade_count,
-                            'regular_trade_count' => $regular_trade_count,
-                            'payment_date' => $payment_date,
-                            'payment_mode' => $payment_mode,
-                            'bank_account_id' => $bank_account_id,
-                            'bank_name' => $bank['bank_name'] ?? '',
-                            'bank_account_number' => $bank['account_number'] ?? '',
-                            'transaction_reference' => $transaction_reference,
-                            'notes' => $notes,
-                            'record_in_financial' => $record_in_financial
-                        ];
-                        
-                        $result = processAgentPayment($db, $payment_data);
-                        
-                        if ($result['success']) {
-                            $success_message = "Commission payment processed successfully! Payment No: {$result['payment_no']}";
-                            $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+                        if (!$bank) {
+                            $error_message = "Bank account not found.";
+                        } else {
+                            error_log("Total amount to pay: $total_amount");
+                            
+                            $payment_data = [
+                                'agent_id' => $agent_id,
+                                'agent_name' => $agent_name,
+                                'total_amount' => $total_amount,
+                                'commission_ids' => $commission_id_string,
+                                'trade_count' => $trade_count,
+                                'first_trade_count' => $first_trade_count,
+                                'regular_trade_count' => $regular_trade_count,
+                                'payment_date' => $payment_date,
+                                'payment_mode' => $payment_mode,
+                                'bank_account_id' => $bank_account_id,
+                                'bank_name' => $bank['bank_name'] ?? '',
+                                'bank_account_number' => $bank['account_number'] ?? '',
+                                'transaction_reference' => $transaction_reference,
+                                'notes' => $notes
+                            ];
+                            
+                            $result = processAgentPayment($db, $payment_data);
+                            
+                            if ($result['success']) {
+                                $success_message = "Commission payment processed successfully!<br>";
+                                $success_message .= "Payment No: <strong>{$result['payment_no']}</strong><br>";
+                                $success_message .= "Journal No: <strong>{$result['journal_no']}</strong><br>";
+                                $success_message .= "Amount: <strong>Tsh " . number_format($total_amount, 2) . "</strong>";
+                                $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+                            }
                         }
                     }
                 } catch (Exception $e) {
+                    error_log("Payment error: " . $e->getMessage());
                     $error_message = "Error processing payment: " . $e->getMessage();
                 }
             }
@@ -926,6 +1030,7 @@ $agent_ledger_summary = null;
 $unpaid_balance = 0;
 $payment_methods = [];
 $bank_accounts = [];
+$selected_trade_ids = [];
 
 if ($selected_agent_id > 0) {
     try {
@@ -958,6 +1063,11 @@ if ($selected_agent_id > 0) {
             $agent_ledger_summary = getAgentLedgerSummary($db, $selected_agent_id);
             $unpaid_balance = getAgentUnpaidBalance($db, $selected_agent_id);
             
+            // Get selected trade IDs for this agent
+            $stmt = $db->prepare("SELECT trade_id FROM agent_trades_selection WHERE agent_id = ?");
+            $stmt->execute([$selected_agent_id]);
+            $selected_trade_ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
+            
             // Get payment methods
             if ($can_pay_commissions) {
                 $stmt = $db->query("SELECT id, code, description FROM payment_methods WHERE status = 'active' ORDER BY priority");
@@ -983,6 +1093,7 @@ try {
         AND (linked_to_agent = 0 OR linked_to_agent IS NULL)
         AND (agent_id IS NULL)
         ORDER BY client_name
+        LIMIT 100
     ");
     $unlinked_clients = $stmt->fetchAll();
 } catch (Exception $e) {
@@ -1093,6 +1204,81 @@ include '../includes/header.php';
 }
 .permission-badge.finance { background: #cce5ff; color: #004085; }
 .permission-badge.ops { background: #d4edda; color: #155724; }
+
+.client-select-row {
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.client-select-row:hover {
+    background: #f0f4ff;
+}
+.client-select-row.selected {
+    background: #d4edda;
+}
+
+.trade-select-row {
+    cursor: pointer;
+}
+.trade-select-row.selected {
+    background: #cce5ff;
+}
+.trade-select-row:hover {
+    background: #f8f9fa;
+}
+
+/* Searchable dropdown for clients */
+.client-search-wrapper {
+    position: relative;
+}
+.client-search-wrapper .form-control {
+    padding-right: 35px;
+}
+.client-search-wrapper .clear-search {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    cursor: pointer;
+    color: #6c757d;
+    z-index: 10;
+    background: transparent;
+    border: none;
+}
+.client-search-wrapper .clear-search:hover {
+    color: #dc3545;
+}
+.client-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    max-height: 300px;
+    overflow-y: auto;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    z-index: 1000;
+    display: none;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+.client-dropdown .client-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid #f0f0f0;
+    transition: background 0.2s;
+}
+.client-dropdown .client-item:hover {
+    background: #f0f4ff;
+}
+.client-dropdown .client-item .client-cds {
+    font-size: 11px;
+    color: #6c757d;
+}
+.client-dropdown .no-results {
+    padding: 12px;
+    text-align: center;
+    color: #6c757d;
+}
 </style>
 
 <div class="container-fluid">
@@ -1101,13 +1287,13 @@ include '../includes/header.php';
     <?php if ($can_pay_commissions): ?>
         <div class="alert alert-success">
             <i class="bi bi-check-circle me-2"></i>
-            <strong>Full Access:</strong> You can manage agents, link clients, calculate commissions, and process payments.
+            <strong>Full Access:</strong> You can manage agents, link clients, select trades, calculate commissions, and process payments.
             <span class="permission-badge finance">Finance Access</span>
         </div>
     <?php else: ?>
         <div class="alert alert-info">
             <i class="bi bi-info-circle me-2"></i>
-            <strong>Management Access:</strong> You can manage agents, link clients, and calculate commissions.
+            <strong>Management Access:</strong> You can manage agents, link clients, select trades, and calculate commissions.
             <span class="permission-badge ops">Ops Access</span>
             <span class="text-warning ms-2">Commission payments require Finance approval.</span>
         </div>
@@ -1136,7 +1322,7 @@ include '../includes/header.php';
             <div class="d-flex justify-content-between align-items-center">
                 <div>
                     <h4 class="mb-0"><i class="bi bi-person-badge text-primary me-2"></i>Agent Management</h4>
-                    <small class="text-muted">Manage agents, link clients, track commissions</small>
+                    <small class="text-muted">Manage agents, link clients, select trades, track commissions</small>
                 </div>
                 <div>
                     <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#agentModal">
@@ -1190,8 +1376,8 @@ include '../includes/header.php';
                                 <button class="btn btn-outline-success btn-sm" data-bs-toggle="modal" data-bs-target="#linkClientModal">
                                     <i class="bi bi-link-45deg me-1"></i>Link Client
                                 </button>
-                                <button class="btn btn-outline-warning btn-sm" onclick="calculateAllCommissions(<?php echo $selected_agent_id; ?>)">
-                                    <i class="bi bi-calculator me-1"></i>Calculate Commissions
+                                <button class="btn btn-outline-info btn-sm" data-bs-toggle="modal" data-bs-target="#selectTradesModal">
+                                    <i class="bi bi-check2-square me-1"></i>Select Trades
                                 </button>
                             <?php endif; ?>
                         </div>
@@ -1319,7 +1505,12 @@ include '../includes/header.php';
                                                     echo date('d/m/Y H:i', strtotime($link_data['linked_at'] ?? 'now')); 
                                                     ?>
                                                 </td>
-                                                <td><?php echo $client['total_trades'] ?? 0; ?></td>
+                                                <td>
+                                                    <?php echo $client['total_trades'] ?? 0; ?>
+                                                    <button class="btn btn-outline-info btn-sm ms-1" onclick="viewClientTrades('<?php echo htmlspecialchars($client['cds_account']); ?>')" title="View Trades">
+                                                        <i class="bi bi-eye"></i>
+                                                    </button>
+                                                </td>
                                                 <td>
                                                     <form method="POST" style="display:inline;" onsubmit="return confirm('Unlink this client?')">
                                                         <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
@@ -1355,8 +1546,8 @@ include '../includes/header.php';
                                 </small>
                             </div>
                             <div class="col-md-4 text-end">
-                                <button class="btn btn-warning btn-sm" onclick="calculateAllCommissions(<?php echo $selected_agent_id; ?>)">
-                                    <i class="bi bi-calculator me-1"></i>Calculate All
+                                <button class="btn btn-warning btn-sm" onclick="calculateSelectedTrades()">
+                                    <i class="bi bi-calculator me-1"></i>Calculate Selected
                                 </button>
                             </div>
                         </div>
@@ -1365,8 +1556,8 @@ include '../includes/header.php';
                             <div class="text-center py-4">
                                 <i class="bi bi-book" style="font-size: 48px; color: #dee2e6;"></i>
                                 <p class="text-muted mt-2">No commission entries yet.</p>
-                                <button class="btn btn-warning btn-sm" onclick="calculateAllCommissions(<?php echo $selected_agent_id; ?>)">
-                                    <i class="bi bi-calculator me-1"></i>Calculate Commissions
+                                <button class="btn btn-warning btn-sm" onclick="calculateSelectedTrades()">
+                                    <i class="bi bi-calculator me-1"></i>Calculate Selected Trades
                                 </button>
                             </div>
                         <?php else: ?>
@@ -1869,7 +2060,7 @@ include '../includes/header.php';
     </div>
 </div>
 
-<!-- Link Client Modal -->
+<!-- Link Client Modal - WITH SEARCHABLE DROPDOWN -->
 <div class="modal fade" id="linkClientModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
@@ -1889,32 +2080,88 @@ include '../includes/header.php';
                         Each client can only be linked to ONE agent.
                     </div>
                     
-                    <?php if (empty($unlinked_clients)): ?>
-                        <div class="text-center py-4">
-                            <i class="bi bi-check-circle" style="font-size: 48px; color: #28a745;"></i>
-                            <p class="text-success mt-2">All clients are already linked to agents!</p>
-                        </div>
-                    <?php else: ?>
-                        <div class="mb-3">
-                            <label class="form-label fw-semibold">Select Client <span class="text-danger">*</span></label>
-                            <select class="form-select" name="client_cds" required>
-                                <option value="">Select Client</option>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Search Client</label>
+                        <div class="client-search-wrapper">
+                            <input type="text" class="form-control" id="clientSearchInput" 
+                                   placeholder="Type to search clients by name or CDS..." 
+                                   autocomplete="off"
+                                   onkeyup="filterClients()"
+                                   onfocus="showClientDropdown()">
+                            <button type="button" class="clear-search" onclick="clearClientSearch()" style="display:none;" id="clearClientSearchBtn">
+                                <i class="bi bi-x-circle"></i>
+                            </button>
+                            <div id="clientDropdown" class="client-dropdown">
                                 <?php foreach ($unlinked_clients as $client): ?>
+                                    <div class="client-item" onclick="selectClient('<?php echo htmlspecialchars($client['cds_account']); ?>', '<?php echo htmlspecialchars($client['client_name']); ?>')">
+                                        <strong><?php echo htmlspecialchars($client['client_name']); ?></strong>
+                                        <span class="client-cds">(<?php echo htmlspecialchars($client['cds_account']); ?>)</span>
+                                    </div>
+                                <?php endforeach; ?>
+                                <?php if (empty($unlinked_clients)): ?>
+                                    <div class="no-results">No unlinked clients available.</div>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                        <input type="hidden" name="client_cds" id="selectedClientCds" value="">
+                        <div id="selectedClientDisplay" class="mt-2 text-muted" style="display:none;">
+                            <span class="badge bg-success">Selected:</span>
+                            <span id="selectedClientName"></span>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success" id="linkClientBtn" disabled>Link Client</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Select Trades Modal -->
+<div class="modal fade" id="selectTradesModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header bg-info text-white">
+                <h5 class="modal-title"><i class="bi bi-check2-square me-2"></i>Select Trades for Commission</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Select Client</label>
+                            <select class="form-select" id="clientSelectForTrades" onchange="loadClientTrades()">
+                                <option value="">Select a client</option>
+                                <?php foreach ($agent_clients as $client): ?>
                                     <option value="<?php echo htmlspecialchars($client['cds_account']); ?>">
-                                        <?php echo htmlspecialchars($client['client_name'] . ' (' . $client['cds_account'] . ')'); ?>
+                                        <?php echo htmlspecialchars($client['client_name']); ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
-                    <?php endif; ?>
+                    </div>
+                    <div class="col-md-6 text-end">
+                        <button class="btn btn-warning btn-sm" onclick="calculateSelectedTrades()">
+                            <i class="bi bi-calculator me-1"></i>Calculate Selected
+                        </button>
+                        <button class="btn btn-success btn-sm" onclick="saveTradeSelection()">
+                            <i class="bi bi-save me-1"></i>Save Selection
+                        </button>
+                    </div>
                 </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <?php if (!empty($unlinked_clients)): ?>
-                        <button type="submit" class="btn btn-success">Link Client</button>
-                    <?php endif; ?>
+                
+                <div id="tradesListContainer">
+                    <div class="text-center py-4">
+                        <i class="bi bi-inbox" style="font-size: 48px; color: #dee2e6;"></i>
+                        <p class="text-muted mt-2">Select a client to view their trades.</p>
+                    </div>
                 </div>
-            </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
         </div>
     </div>
 </div>
@@ -2055,13 +2302,19 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('selectedAgentId').value = '<?php echo $selected_agent_id; ?>';
     <?php endif; ?>
     
+    // Close dropdowns when clicking outside
     document.addEventListener('click', function(e) {
-        const wrapper = document.querySelector('.agent-search-wrapper');
-        if (wrapper && !wrapper.contains(e.target)) {
+        const agentWrapper = document.querySelector('.agent-search-wrapper');
+        if (agentWrapper && !agentWrapper.contains(e.target)) {
             document.getElementById('agentDropdown').style.display = 'none';
+        }
+        const clientWrapper = document.querySelector('.client-search-wrapper');
+        if (clientWrapper && !clientWrapper.contains(e.target)) {
+            document.getElementById('clientDropdown').style.display = 'none';
         }
     });
     
+    // Commission checkboxes for payment
     document.querySelectorAll('.commission-checkbox').forEach(cb => {
         cb.addEventListener('change', updateSelectedCommissionSummary);
     });
@@ -2133,18 +2386,320 @@ function selectAgent(agentId, agentName, agentCode) {
 }
 
 // =====================================================
-// COMMISSION FUNCTIONS
+// CLIENT SEARCH FUNCTIONS FOR LINKING
 // =====================================================
 
-function calculateAllCommissions(agentId) {
-    if (!confirm('Calculate commissions for all linked clients? This may take a moment.')) return;
+function showClientDropdown() {
+    document.getElementById('clientDropdown').style.display = 'block';
+    filterClients();
+}
+
+function filterClients() {
+    const input = document.getElementById('clientSearchInput');
+    const filter = input.value.toLowerCase().trim();
+    const dropdown = document.getElementById('clientDropdown');
+    const items = dropdown.querySelectorAll('.client-item');
+    const clearBtn = document.getElementById('clearClientSearchBtn');
     
-    const btn = event.target;
-    const originalHtml = btn.innerHTML;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Calculating...';
-    btn.disabled = true;
+    let hasResults = false;
     
-    fetch(`?ajax=calculate_all_commissions&agent_id=${agentId}`)
+    items.forEach(item => {
+        const text = item.textContent.toLowerCase();
+        if (text.includes(filter) || filter === '') {
+            item.style.display = 'block';
+            hasResults = true;
+        } else {
+            item.style.display = 'none';
+        }
+    });
+    
+    clearBtn.style.display = filter.length > 0 ? 'block' : 'none';
+    
+    let noResults = dropdown.querySelector('.no-results');
+    if (!hasResults) {
+        if (!noResults) {
+            noResults = document.createElement('div');
+            noResults.className = 'no-results';
+            noResults.textContent = 'No clients found matching "' + filter + '"';
+            dropdown.appendChild(noResults);
+        }
+        noResults.style.display = 'block';
+    } else if (noResults) {
+        noResults.style.display = 'none';
+    }
+    
+    dropdown.style.display = 'block';
+}
+
+function clearClientSearch() {
+    document.getElementById('clientSearchInput').value = '';
+    document.getElementById('clearClientSearchBtn').style.display = 'none';
+    document.getElementById('selectedClientCds').value = '';
+    document.getElementById('selectedClientDisplay').style.display = 'none';
+    document.getElementById('linkClientBtn').disabled = true;
+    filterClients();
+}
+
+function selectClient(cdsAccount, clientName) {
+    document.getElementById('clientSearchInput').value = clientName;
+    document.getElementById('selectedClientCds').value = cdsAccount;
+    document.getElementById('clientDropdown').style.display = 'none';
+    document.getElementById('clearClientSearchBtn').style.display = 'block';
+    document.getElementById('selectedClientDisplay').style.display = 'block';
+    document.getElementById('selectedClientName').textContent = clientName + ' (' + cdsAccount + ')';
+    document.getElementById('linkClientBtn').disabled = false;
+}
+
+// =====================================================
+// TRADE SELECTION FUNCTIONS
+// =====================================================
+
+let currentClientTrades = [];
+let selectedTrades = [];
+
+function loadClientTrades() {
+    const clientSelect = document.getElementById('clientSelectForTrades');
+    const cdsAccount = clientSelect.value;
+    const container = document.getElementById('tradesListContainer');
+    
+    if (!cdsAccount) {
+        container.innerHTML = `
+            <div class="text-center py-4">
+                <i class="bi bi-inbox" style="font-size: 48px; color: #dee2e6;"></i>
+                <p class="text-muted mt-2">Select a client to view their trades.</p>
+            </div>
+        `;
+        return;
+    }
+    
+    container.innerHTML = `
+        <div class="text-center py-4">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="text-muted mt-2">Loading trades...</p>
+        </div>
+    `;
+    
+    fetch(`?ajax=get_client_trades&cds_account=${encodeURIComponent(cdsAccount)}&agent_id=<?php echo $selected_agent_id; ?>`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                currentClientTrades = data.trades;
+                renderTradesTable(data.trades);
+            } else {
+                container.innerHTML = `<div class="alert alert-danger">${data.error || 'Error loading trades'}</div>`;
+            }
+        })
+        .catch(error => {
+            container.innerHTML = `<div class="alert alert-danger">Failed to load trades: ${error}</div>`;
+        });
+}
+
+function renderTradesTable(trades) {
+    const container = document.getElementById('tradesListContainer');
+    
+    if (trades.length === 0) {
+        container.innerHTML = `
+            <div class="text-center py-4">
+                <i class="bi bi-inbox" style="font-size: 48px; color: #dee2e6;"></i>
+                <p class="text-muted mt-2">No trades found for this client.</p>
+            </div>
+        `;
+        return;
+    }
+    
+    let html = `
+        <div class="mb-3">
+            <span class="text-muted">Found <strong>${trades.length}</strong> trades. Select trades to calculate commission.</span>
+            <button class="btn btn-sm btn-outline-primary ms-2" onclick="selectAllTrades()">Select All</button>
+            <button class="btn btn-sm btn-outline-secondary ms-1" onclick="deselectAllTrades()">Deselect All</button>
+            <span class="ms-3 text-muted" id="selectedTradesCount">0 selected</span>
+        </div>
+        <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+            <table class="table table-sm table-hover">
+                <thead class="sticky-top bg-white">
+                    <tr>
+                        <th style="width:40px;"><input type="checkbox" id="selectAllTradesCheckbox" onchange="toggleAllTrades()"></th>
+                        <th>Trade Ref</th>
+                        <th>Date</th>
+                        <th>Security</th>
+                        <th>Side</th>
+                        <th class="text-end">Qty</th>
+                        <th class="text-end">Price</th>
+                        <th class="text-end">Consideration</th>
+                        <th class="text-end">Brokerage</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+    `;
+    
+    trades.forEach((trade, index) => {
+        const isSelected = trade.is_selected || false;
+        const isCalculated = false; // Check if in ledger
+        const rowId = 'trade_' + index;
+        
+        html += `
+            <tr id="${rowId}" class="trade-select-row ${isSelected ? 'selected' : ''}" onclick="toggleTradeSelection('${rowId}')">
+                <td>
+                    <input type="checkbox" class="trade-checkbox" value="${trade.id}" 
+                           onclick="event.stopPropagation();" 
+                           ${isSelected ? 'checked' : ''}>
+                </td>
+                <td><code>${escapeHtml(trade.trade_reference)}</code></td>
+                <td>${escapeHtml(trade.trade_date)}</td>
+                <td>${escapeHtml(trade.security_id)}</td>
+                <td><span class="badge ${trade.trade_side === 'buy' ? 'bg-success' : 'bg-danger'}">${escapeHtml(trade.trade_side)}</span></td>
+                <td class="text-end">${Number(trade.quantity).toLocaleString()}</td>
+                <td class="text-end">${Number(trade.price).toFixed(2)}</td>
+                <td class="text-end">Tsh ${Number(trade.consideration).toLocaleString()}</td>
+                <td class="text-end">Tsh ${Number(trade.final_brokerage_fee || 0).toFixed(2)}</td>
+                <td>
+                    ${isSelected ? '<span class="badge bg-info">Selected</span>' : '<span class="badge bg-secondary">Not Selected</span>'}
+                </td>
+            </tr>
+        `;
+    });
+    
+    html += `
+                </tbody>
+            </table>
+        </div>
+    `;
+    
+    container.innerHTML = html;
+    updateSelectedTradesCount();
+}
+
+function toggleTradeSelection(rowId) {
+    const row = document.getElementById(rowId);
+    if (!row) return;
+    
+    const checkbox = row.querySelector('.trade-checkbox');
+    if (!checkbox) return;
+    
+    checkbox.checked = !checkbox.checked;
+    if (checkbox.checked) {
+        row.classList.add('selected');
+    } else {
+        row.classList.remove('selected');
+    }
+    
+    updateSelectedTradesCount();
+    updateSelectAllTradesState();
+}
+
+function toggleAllTrades() {
+    const selectAll = document.getElementById('selectAllTradesCheckbox');
+    if (!selectAll) return;
+    
+    const checkboxes = document.querySelectorAll('.trade-checkbox');
+    checkboxes.forEach(cb => {
+        cb.checked = selectAll.checked;
+        const row = cb.closest('tr');
+        if (row) {
+            if (selectAll.checked) {
+                row.classList.add('selected');
+            } else {
+                row.classList.remove('selected');
+            }
+        }
+    });
+    
+    updateSelectedTradesCount();
+}
+
+function selectAllTrades() {
+    const checkboxes = document.querySelectorAll('.trade-checkbox');
+    checkboxes.forEach(cb => {
+        cb.checked = true;
+        const row = cb.closest('tr');
+        if (row) row.classList.add('selected');
+    });
+    updateSelectedTradesCount();
+    updateSelectAllTradesState();
+}
+
+function deselectAllTrades() {
+    const checkboxes = document.querySelectorAll('.trade-checkbox');
+    checkboxes.forEach(cb => {
+        cb.checked = false;
+        const row = cb.closest('tr');
+        if (row) row.classList.remove('selected');
+    });
+    updateSelectedTradesCount();
+    updateSelectAllTradesState();
+}
+
+function updateSelectedTradesCount() {
+    const count = document.querySelectorAll('.trade-checkbox:checked').length;
+    const display = document.getElementById('selectedTradesCount');
+    if (display) display.textContent = count + ' selected';
+}
+
+function updateSelectAllTradesState() {
+    const selectAll = document.getElementById('selectAllTradesCheckbox');
+    if (!selectAll) return;
+    
+    const checkboxes = document.querySelectorAll('.trade-checkbox');
+    if (checkboxes.length === 0) {
+        selectAll.checked = false;
+        selectAll.indeterminate = false;
+        return;
+    }
+    
+    const checkedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
+    
+    if (checkedCount === checkboxes.length) {
+        selectAll.checked = true;
+        selectAll.indeterminate = false;
+    } else if (checkedCount === 0) {
+        selectAll.checked = false;
+        selectAll.indeterminate = false;
+    } else {
+        selectAll.checked = false;
+        selectAll.indeterminate = true;
+    }
+}
+
+function saveTradeSelection() {
+    const checkboxes = document.querySelectorAll('.trade-checkbox:checked');
+    const tradeIds = Array.from(checkboxes).map(cb => cb.value);
+    
+    if (tradeIds.length === 0) {
+        alert('Please select at least one trade.');
+        return;
+    }
+    
+    fetch(`?ajax=save_trade_selection&agent_id=<?php echo $selected_agent_id; ?>&trade_ids=${tradeIds.join(',')}&action=add`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert('Trade selection saved successfully!');
+            } else {
+                alert('Error saving selection: ' + data.error);
+            }
+        })
+        .catch(error => {
+            alert('Error saving selection: ' + error);
+        });
+}
+
+function calculateSelectedTrades() {
+    const checkboxes = document.querySelectorAll('.trade-checkbox:checked');
+    if (checkboxes.length === 0) {
+        alert('Please select at least one trade to calculate commission.');
+        return;
+    }
+    
+    const tradeIds = Array.from(checkboxes).map(cb => cb.value);
+    
+    if (!confirm(`Calculate commission for ${tradeIds.length} trade(s)?`)) {
+        return;
+    }
+    
+    fetch(`?ajax=calculate_selected_trades&agent_id=<?php echo $selected_agent_id; ?>&trade_ids=${tradeIds.join(',')}`)
         .then(response => response.json())
         .then(data => {
             if (data.error) {
@@ -2156,12 +2711,12 @@ function calculateAllCommissions(agentId) {
         })
         .catch(error => {
             alert('Error calculating commissions: ' + error);
-        })
-        .finally(() => {
-            btn.innerHTML = originalHtml;
-            btn.disabled = false;
         });
 }
+
+// =====================================================
+// COMMISSION PAYMENT FUNCTIONS
+// =====================================================
 
 function toggleAllCommissions() {
     const selectAll = document.getElementById('selectAllCommissions');
@@ -2181,8 +2736,11 @@ function updateSelectedCommissionSummary() {
     
     checkboxes.forEach(cb => {
         const row = cb.closest('tr');
-        const amountText = row.querySelector('td:nth-child(4)').textContent.replace('Tsh ', '').replace(/,/g, '');
-        total += parseFloat(amountText) || 0;
+        const cells = row.querySelectorAll('td');
+        if (cells.length >= 4) {
+            const amountText = cells[3].textContent.replace('Tsh ', '').replace(/,/g, '');
+            total += parseFloat(amountText) || 0;
+        }
         ids.push(cb.value);
     });
     
