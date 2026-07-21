@@ -51,13 +51,11 @@ $success_message = '';
 $error_message = '';
 
 // =====================================================
-// DATABASE SETUP - FIXED FOR COMPATIBILITY
+// DATABASE SETUP - CREATE AGENT TABLES
 // =====================================================
 
 try {
-    // ========================================
-    // 1. CREATE AGENTS TABLE
-    // ========================================
+    // 1. Agents table
     $db->exec("CREATE TABLE IF NOT EXISTS agents (
         id INT AUTO_INCREMENT PRIMARY KEY,
         agent_code VARCHAR(50) UNIQUE NOT NULL,
@@ -82,9 +80,7 @@ try {
         INDEX idx_status (status)
     )");
     
-    // ========================================
-    // 2. CREATE AGENT CLIENTS TABLE
-    // ========================================
+    // 2. Agent clients audit table
     $db->exec("CREATE TABLE IF NOT EXISTS agent_clients (
         id INT AUTO_INCREMENT PRIMARY KEY,
         agent_id INT NOT NULL,
@@ -92,16 +88,15 @@ try {
         client_name VARCHAR(255),
         linked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         linked_by VARCHAR(100),
+        unlinked_at DATETIME DEFAULT NULL,
+        unlinked_by VARCHAR(100) DEFAULT NULL,
         status ENUM('active', 'inactive') DEFAULT 'active',
-        UNIQUE KEY unique_agent_client (agent_id, client_cds_account),
         INDEX idx_agent_id (agent_id),
         INDEX idx_client_cds (client_cds_account),
-        FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+        INDEX idx_status (status)
     )");
     
-    // ========================================
-    // 3. CREATE AGENT COMMISSIONS TABLE
-    // ========================================
+    // 3. Agent commissions table
     $db->exec("CREATE TABLE IF NOT EXISTS agent_commissions (
         id INT AUTO_INCREMENT PRIMARY KEY,
         agent_id INT NOT NULL,
@@ -121,13 +116,10 @@ try {
         INDEX idx_agent_id (agent_id),
         INDEX idx_trade_id (trade_id),
         INDEX idx_status (status),
-        INDEX idx_payment_id (payment_id),
-        FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+        INDEX idx_payment_id (payment_id)
     )");
     
-    // ========================================
-    // 4. CREATE AGENT COMMISSION PAYMENTS TABLE
-    // ========================================
+    // 4. Agent commission payments table
     $db->exec("CREATE TABLE IF NOT EXISTS agent_commission_payments (
         id INT AUTO_INCREMENT PRIMARY KEY,
         payment_no VARCHAR(50) UNIQUE NOT NULL,
@@ -154,82 +146,51 @@ try {
         INDEX idx_status (status)
     )");
     
-    // ========================================
-    // 5. ADD COLUMNS TO TRADES TABLE - FIXED
-    // ========================================
+    // 5. Add columns to clients table
+    try {
+        $check = $db->query("SHOW COLUMNS FROM clients LIKE 'linked_to_agent'");
+        if ($check->rowCount() == 0) {
+            $db->exec("ALTER TABLE clients ADD COLUMN linked_to_agent TINYINT(1) DEFAULT 0 AFTER is_active");
+            $db->exec("ALTER TABLE clients ADD COLUMN agent_id INT NULL AFTER linked_to_agent");
+            $db->exec("ALTER TABLE clients ADD INDEX idx_linked_to_agent (linked_to_agent)");
+            $db->exec("ALTER TABLE clients ADD INDEX idx_agent_id (agent_id)");
+            error_log("Added linked_to_agent and agent_id columns to clients table");
+            
+            // Migrate existing data from agent_clients if any
+            $check_tbl = $db->query("SHOW TABLES LIKE 'agent_clients'");
+            if ($check_tbl->rowCount() > 0) {
+                $stmt = $db->query("SELECT DISTINCT agent_id, client_cds_account FROM agent_clients WHERE status = 'active'");
+                $linked = $stmt->fetchAll();
+                foreach ($linked as $link) {
+                    $stmt = $db->prepare("UPDATE clients SET linked_to_agent = 1, agent_id = ? WHERE cds_account = ?");
+                    $stmt->execute([$link['agent_id'], $link['client_cds_account']]);
+                }
+                error_log("Migrated " . count($linked) . " existing agent-client links");
+            }
+        }
+    } catch (Exception $e) {
+        error_log("Migration warning: " . $e->getMessage());
+    }
     
-    // Check if column exists before adding - using simpler approach
+    // 6. Add columns to trades table
     try {
         $check = $db->query("SHOW COLUMNS FROM trades LIKE 'agent_id'");
         if ($check->rowCount() == 0) {
             $db->exec("ALTER TABLE trades ADD COLUMN agent_id INT DEFAULT NULL");
-        }
-    } catch (Exception $e) {
-        // Column might already exist or other error - continue
-        error_log("Note: agent_id column check: " . $e->getMessage());
-    }
-    
-    try {
-        $check = $db->query("SHOW COLUMNS FROM trades LIKE 'agent_commission_calculated'");
-        if ($check->rowCount() == 0) {
             $db->exec("ALTER TABLE trades ADD COLUMN agent_commission_calculated TINYINT DEFAULT 0");
-        }
-    } catch (Exception $e) {
-        error_log("Note: agent_commission_calculated column check: " . $e->getMessage());
-    }
-    
-    try {
-        $check = $db->query("SHOW COLUMNS FROM trades LIKE 'agent_commission_amount'");
-        if ($check->rowCount() == 0) {
             $db->exec("ALTER TABLE trades ADD COLUMN agent_commission_amount DECIMAL(15,2) DEFAULT 0.00");
-        }
-    } catch (Exception $e) {
-        error_log("Note: agent_commission_amount column check: " . $e->getMessage());
-    }
-    
-    try {
-        $check = $db->query("SHOW COLUMNS FROM trades LIKE 'agent_commission_rate'");
-        if ($check->rowCount() == 0) {
             $db->exec("ALTER TABLE trades ADD COLUMN agent_commission_rate DECIMAL(5,4) DEFAULT 0.0000");
-        }
-    } catch (Exception $e) {
-        error_log("Note: agent_commission_rate column check: " . $e->getMessage());
-    }
-    
-    try {
-        $check = $db->query("SHOW COLUMNS FROM trades LIKE 'is_first_agent_trade'");
-        if ($check->rowCount() == 0) {
             $db->exec("ALTER TABLE trades ADD COLUMN is_first_agent_trade TINYINT DEFAULT 0");
-        }
-    } catch (Exception $e) {
-        error_log("Note: is_first_agent_trade column check: " . $e->getMessage());
-    }
-    
-    // ========================================
-    // 6. ADD INDEXES TO TRADES TABLE
-    // ========================================
-    try {
-        // Check if index exists before adding
-        $check = $db->query("SHOW INDEX FROM trades WHERE Key_name = 'idx_agent_id'");
-        if ($check->rowCount() == 0) {
             $db->exec("ALTER TABLE trades ADD INDEX idx_agent_id (agent_id)");
-        }
-    } catch (Exception $e) {
-        error_log("Note: idx_agent_id index check: " . $e->getMessage());
-    }
-    
-    try {
-        $check = $db->query("SHOW INDEX FROM trades WHERE Key_name = 'idx_agent_commission_calculated'");
-        if ($check->rowCount() == 0) {
             $db->exec("ALTER TABLE trades ADD INDEX idx_agent_commission_calculated (agent_commission_calculated)");
         }
     } catch (Exception $e) {
-        error_log("Note: idx_agent_commission_calculated index check: " . $e->getMessage());
+        error_log("Trades table migration warning: " . $e->getMessage());
     }
     
 } catch (Exception $e) {
     error_log("Agent table setup error: " . $e->getMessage());
-    $error_message = "Database setup warning: " . $e->getMessage() . " (Tables may already exist)";
+    $error_message = "Database setup warning: " . $e->getMessage();
 }
 
 // =====================================================
@@ -265,32 +226,56 @@ function calculateAgentCommission($brokerage_commission, $rate) {
     return $brokerage_commission * $rate;
 }
 
-function getAgentClients($db, $agent_id) {
-    $stmt = $db->prepare("
-        SELECT ac.*, 
-               (SELECT COUNT(*) FROM trades WHERE client_cds_account = ac.client_cds_account AND status = 'active') as trade_count
-        FROM agent_clients ac
-        WHERE ac.agent_id = ?
-        AND ac.status = 'active'
-        ORDER BY ac.client_name
-    ");
-    $stmt->execute([$agent_id]);
-    return $stmt->fetchAll();
+function getUnlinkedClients($db) {
+    try {
+        $sql = "
+            SELECT 
+                cds_account, 
+                client_name,
+                status,
+                is_active,
+                linked_to_agent
+            FROM clients 
+            WHERE status = 'active'
+            AND is_active = 1
+            AND (linked_to_agent = 0 OR linked_to_agent IS NULL)
+            ORDER BY client_name
+        ";
+        
+        $stmt = $db->query($sql);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+    } catch (Exception $e) {
+        error_log("Error in getUnlinkedClients: " . $e->getMessage());
+        return [];
+    }
 }
 
-function getUnlinkedClients($db) {
-    $stmt = $db->query("
-        SELECT cds_account, client_name 
-        FROM clients 
-        WHERE status = 'active'
-        AND cds_account NOT IN (
-            SELECT DISTINCT client_cds_account 
-            FROM agent_clients 
-            WHERE status = 'active'
-        )
-        ORDER BY client_name
-    ");
-    return $stmt->fetchAll();
+function getAgentClients($db, $agent_id) {
+    try {
+        $stmt = $db->prepare("
+            SELECT 
+                c.cds_account, 
+                c.client_name,
+                c.linked_to_agent,
+                c.agent_id,
+                (SELECT COUNT(*) FROM trades WHERE client_cds_account = c.cds_account AND status = 'active') as trade_count,
+                ac.linked_at,
+                ac.linked_by
+            FROM clients c
+            LEFT JOIN agent_clients ac ON c.cds_account = ac.client_cds_account AND ac.status = 'active'
+            WHERE c.agent_id = ?
+            AND c.linked_to_agent = 1
+            AND c.status = 'active'
+            AND c.is_active = 1
+            ORDER BY c.client_name
+        ");
+        $stmt->execute([$agent_id]);
+        return $stmt->fetchAll();
+    } catch (Exception $e) {
+        error_log("Error getting agent clients: " . $e->getMessage());
+        return [];
+    }
 }
 
 function getAgentCommissionSummary($db, $agent_id) {
@@ -308,6 +293,135 @@ function getAgentCommissionSummary($db, $agent_id) {
     ");
     $stmt->execute([$agent_id]);
     return $stmt->fetch();
+}
+
+function linkClientsToAgent($db, $agent_id, $client_cds_list) {
+    $linked_count = 0;
+    $errors = [];
+    
+    foreach ($client_cds_list as $cds_account) {
+        if (empty($cds_account)) continue;
+        
+        try {
+            $db->beginTransaction();
+            
+            // Get client details
+            $stmt = $db->prepare("SELECT client_name FROM clients WHERE cds_account = ? AND status = 'active' AND is_active = 1");
+            $stmt->execute([$cds_account]);
+            $client = $stmt->fetch();
+            
+            if (!$client) {
+                $errors[] = "Client $cds_account not found or inactive";
+                $db->rollBack();
+                continue;
+            }
+            
+            // Check if already linked to any agent
+            $stmt = $db->prepare("SELECT linked_to_agent, agent_id FROM clients WHERE cds_account = ?");
+            $stmt->execute([$cds_account]);
+            $check = $stmt->fetch();
+            
+            if ($check && $check['linked_to_agent'] == 1) {
+                if ($check['agent_id'] == $agent_id) {
+                    $db->rollBack();
+                    continue;
+                } else {
+                    $errors[] = "Client $cds_account is already linked to another agent";
+                    $db->rollBack();
+                    continue;
+                }
+            }
+            
+            // Update clients table
+            $stmt = $db->prepare("
+                UPDATE clients 
+                SET linked_to_agent = 1, 
+                    agent_id = ?,
+                    updated_at = NOW()
+                WHERE cds_account = ?
+            ");
+            $stmt->execute([$agent_id, $cds_account]);
+            
+            // Insert into agent_clients for audit trail
+            $stmt = $db->prepare("
+                INSERT INTO agent_clients (agent_id, client_cds_account, client_name, linked_by)
+                VALUES (?, ?, ?, ?)
+            ");
+            $stmt->execute([
+                $agent_id,
+                $cds_account,
+                $client['client_name'],
+                $_SESSION['username'] ?? 'system'
+            ]);
+            
+            $db->commit();
+            $linked_count++;
+            
+        } catch (Exception $e) {
+            $db->rollBack();
+            error_log("Error linking client $cds_account: " . $e->getMessage());
+            $errors[] = "Failed to link $cds_account";
+        }
+    }
+    
+    return [
+        'linked_count' => $linked_count,
+        'errors' => $errors
+    ];
+}
+
+function unlinkClientFromAgent($db, $agent_id, $cds_account) {
+    try {
+        $db->beginTransaction();
+        
+        $stmt = $db->prepare("
+            SELECT cds_account, client_name 
+            FROM clients 
+            WHERE cds_account = ? 
+            AND agent_id = ?
+            AND linked_to_agent = 1
+        ");
+        $stmt->execute([$cds_account, $agent_id]);
+        $client = $stmt->fetch();
+        
+        if (!$client) {
+            throw new Exception("Client not linked to this agent");
+        }
+        
+        // Update clients table
+        $stmt = $db->prepare("
+            UPDATE clients 
+            SET linked_to_agent = 0, 
+                agent_id = NULL,
+                updated_at = NOW()
+            WHERE cds_account = ?
+        ");
+        $stmt->execute([$cds_account]);
+        
+        // Update agent_clients audit trail
+        $stmt = $db->prepare("
+            UPDATE agent_clients 
+            SET status = 'inactive',
+                unlinked_at = NOW(),
+                unlinked_by = ?
+            WHERE agent_id = ? 
+            AND client_cds_account = ?
+            AND status = 'active'
+        ");
+        $stmt->execute([
+            $_SESSION['username'] ?? 'system',
+            $agent_id,
+            $cds_account
+        ]);
+        
+        $db->commit();
+        return true;
+        
+    } catch (Exception $e) {
+        $db->rollBack();
+        error_log("Error unlinking client: " . $e->getMessage());
+        throw $e;
+    }
 }
 
 function calculateAndSaveAgentCommission($db, $trade_id, $agent_id) {
@@ -519,33 +633,21 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 $error_message = "Please select at least one client to link.";
             } else {
                 try {
-                    $linked_count = 0;
-                    foreach ($client_cds_list as $cds_account) {
-                        if (empty($cds_account)) continue;
-                        
-                        $stmt = $db->prepare("SELECT client_name FROM clients WHERE cds_account = ?");
-                        $stmt->execute([$cds_account]);
-                        $client = $stmt->fetch();
-                        
-                        $stmt = $db->prepare("SELECT id FROM agent_clients WHERE agent_id = ? AND client_cds_account = ?");
-                        $stmt->execute([$agent_id, $cds_account]);
-                        
-                        if (!$stmt->fetch()) {
-                            $stmt = $db->prepare("
-                                INSERT INTO agent_clients (agent_id, client_cds_account, client_name, linked_by)
-                                VALUES (?, ?, ?, ?)
-                            ");
-                            $stmt->execute([
-                                $agent_id,
-                                $cds_account,
-                                $client['client_name'] ?? '',
-                                $_SESSION['username'] ?? 'system'
-                            ]);
-                            $linked_count++;
+                    $result = linkClientsToAgent($db, $agent_id, $client_cds_list);
+                    
+                    if ($result['linked_count'] > 0) {
+                        $success_message = $result['linked_count'] . " client(s) linked successfully!";
+                        if (!empty($result['errors'])) {
+                            $success_message .= " (Errors: " . implode(", ", $result['errors']) . ")";
+                        }
+                    } else {
+                        if (empty($result['errors'])) {
+                            $error_message = "No new clients were linked. They may already be linked.";
+                        } else {
+                            $error_message = "Failed to link clients: " . implode(", ", $result['errors']);
                         }
                     }
                     
-                    $success_message = "$linked_count client(s) linked successfully!";
                     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
                 } catch (Exception $e) {
                     $error_message = "Error linking clients: " . $e->getMessage();
@@ -558,13 +660,17 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $agent_id = (int)$_POST['agent_id'] ?? 0;
             $client_cds = $_POST['client_cds'] ?? '';
             
-            try {
-                $stmt = $db->prepare("UPDATE agent_clients SET status = 'inactive' WHERE agent_id = ? AND client_cds_account = ?");
-                $stmt->execute([$agent_id, $client_cds]);
-                $success_message = "Client unlinked successfully!";
-                $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-            } catch (Exception $e) {
-                $error_message = "Error unlinking client: " . $e->getMessage();
+            if (empty($agent_id) || empty($client_cds)) {
+                $error_message = "Invalid request.";
+            } else {
+                try {
+                    if (unlinkClientFromAgent($db, $agent_id, $client_cds)) {
+                        $success_message = "Client unlinked successfully!";
+                    }
+                    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+                } catch (Exception $e) {
+                    $error_message = "Error unlinking client: " . $e->getMessage();
+                }
             }
         }
         
@@ -573,7 +679,13 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $agent_id = (int)$_POST['agent_id'] ?? 0;
             
             try {
-                $stmt = $db->prepare("SELECT client_cds_account FROM agent_clients WHERE agent_id = ? AND status = 'active'");
+                // Get all clients linked to this agent
+                $stmt = $db->prepare("
+                    SELECT cds_account FROM clients 
+                    WHERE agent_id = ? 
+                    AND linked_to_agent = 1
+                    AND status = 'active'
+                ");
                 $stmt->execute([$agent_id]);
                 $clients = $stmt->fetchAll();
                 
@@ -585,7 +697,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                         AND agent_commission_calculated = 0
                         AND status = 'active'
                     ");
-                    $stmt->execute([$client['client_cds_account']]);
+                    $stmt->execute([$client['cds_account']]);
                     $trades = $stmt->fetchAll();
                     
                     foreach ($trades as $trade) {
@@ -683,9 +795,73 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 }
 
 // =====================================================
+// AJAX HANDLERS
+// =====================================================
+
+if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_unlinked_clients') {
+    header('Content-Type: application/json');
+    try {
+        $unlinked = getUnlinkedClients($db);
+        echo json_encode([
+            'success' => true,
+            'count' => count($unlinked),
+            'clients' => $unlinked
+        ]);
+    } catch (Exception $e) {
+        echo json_encode([
+            'success' => false,
+            'error' => $e->getMessage()
+        ]);
+    }
+    exit;
+}
+
+if (isset($_GET['ajax']) && $_GET['ajax'] == 'calculate_commissions') {
+    header('Content-Type: application/json');
+    $agent_id = (int)$_GET['agent_id'] ?? 0;
+    
+    try {
+        $stmt = $db->prepare("SELECT cds_account FROM clients WHERE agent_id = ? AND linked_to_agent = 1 AND status = 'active'");
+        $stmt->execute([$agent_id]);
+        $clients = $stmt->fetchAll();
+        
+        $calculated = 0;
+        foreach ($clients as $client) {
+            $stmt = $db->prepare("
+                SELECT id FROM trades 
+                WHERE client_cds_account = ? 
+                AND agent_commission_calculated = 0
+                AND status = 'active'
+            ");
+            $stmt->execute([$client['cds_account']]);
+            $trades = $stmt->fetchAll();
+            
+            foreach ($trades as $trade) {
+                if (calculateAndSaveAgentCommission($db, $trade['id'], $agent_id)) {
+                    $calculated++;
+                }
+            }
+        }
+        
+        echo json_encode([
+            'success' => true,
+            'calculated' => $calculated,
+            'message' => "Calculated commissions for $calculated trade(s)"
+        ]);
+    } catch (Exception $e) {
+        echo json_encode([
+            'success' => false,
+            'error' => $e->getMessage()
+        ]);
+    }
+    exit;
+}
+
+// =====================================================
 // GET DATA FOR DISPLAY
 // =====================================================
 
+// Get all agents
 $agents = [];
 try {
     $stmt = $db->query("SELECT * FROM agents ORDER BY name");
@@ -694,6 +870,7 @@ try {
     error_log("Error fetching agents: " . $e->getMessage());
 }
 
+// Get selected agent data
 $selected_agent_id = isset($_GET['agent_id']) ? (int)$_GET['agent_id'] : 0;
 $selected_agent = null;
 $agent_clients = [];
@@ -752,8 +929,94 @@ include '../includes/header.php';
 ?>
 
 <!-- ===================================================== -->
-<!-- HTML CONTENT - Same as before -->
+<!-- HTML CONTENT -->
 <!-- ===================================================== -->
+
+<style>
+/* Agent Management Styles */
+.agent-stat {
+    text-align: center;
+    padding: 12px;
+    background: #f8f9fa;
+    border-radius: 8px;
+}
+.agent-stat .number {
+    font-size: 24px;
+    font-weight: bold;
+    color: #0d6efd;
+}
+.agent-stat .label {
+    font-size: 12px;
+    color: #6c757d;
+}
+.commission-status-pending { background: #fff3cd; color: #856404; }
+.commission-status-approved { background: #cce5ff; color: #004085; }
+.commission-status-paid { background: #d4edda; color: #155724; }
+.badge-first-trade { background: #ffc107; color: #212529; }
+.badge-regular-trade { background: #17a2b8; color: white; }
+
+/* Searchable dropdown styles */
+.agent-search-wrapper {
+    position: relative;
+}
+.agent-search-wrapper .form-control {
+    padding-right: 35px;
+}
+.agent-search-wrapper .clear-search {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    cursor: pointer;
+    color: #6c757d;
+    z-index: 10;
+    background: transparent;
+    border: none;
+}
+.agent-search-wrapper .clear-search:hover {
+    color: #dc3545;
+}
+.agent-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    max-height: 300px;
+    overflow-y: auto;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    z-index: 1000;
+    display: none;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+.agent-dropdown .agent-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid #f0f0f0;
+    transition: background 0.2s;
+}
+.agent-dropdown .agent-item:hover {
+    background: #f0f4ff;
+}
+.agent-dropdown .agent-item .agent-code {
+    font-size: 11px;
+    color: #6c757d;
+}
+.agent-dropdown .agent-item .agent-status {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 3px;
+}
+.agent-dropdown .agent-item .agent-status.active { background: #d4edda; color: #155724; }
+.agent-dropdown .agent-item .agent-status.inactive { background: #f8d7da; color: #721c24; }
+.agent-dropdown .agent-item .agent-status.suspended { background: #fff3cd; color: #856404; }
+.agent-dropdown .no-results {
+    padding: 12px;
+    text-align: center;
+    color: #6c757d;
+}
+</style>
 
 <div class="container-fluid">
     
@@ -809,7 +1072,7 @@ include '../includes/header.php';
         </div>
     </div>
 
-    <!-- Agent Selector -->
+    <!-- Agent Selector - SEARCHABLE DROPDOWN -->
     <div class="row mb-4">
         <div class="col-md-8">
             <div class="card">
@@ -817,20 +1080,35 @@ include '../includes/header.php';
                     <div class="row g-3 align-items-end">
                         <div class="col-md-6">
                             <label class="form-label fw-semibold">Select Agent</label>
-                            <select class="form-select" id="agentSelector" onchange="window.location.href='?agent_id='+this.value">
-                                <option value="">-- Select Agent --</option>
-                                <?php foreach ($agents as $agent): ?>
-                                    <option value="<?php echo $agent['id']; ?>" <?php echo $selected_agent_id == $agent['id'] ? 'selected' : ''; ?>>
-                                        <?php echo htmlspecialchars($agent['agent_code'] . ' - ' . $agent['name']); ?>
-                                        <?php if ($agent['status'] !== 'active'): ?>
-                                            (<?php echo $agent['status']; ?>)
-                                        <?php endif; ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
+                            <div class="agent-search-wrapper">
+                                <input type="text" class="form-control" id="agentSearchInput" 
+                                       placeholder="Type to search agents..." 
+                                       autocomplete="off"
+                                       onkeyup="filterAgents()"
+                                       onfocus="showAgentDropdown()">
+                                <button type="button" class="clear-search" onclick="clearAgentSearch()" style="display:none;" id="clearSearchBtn">
+                                    <i class="bi bi-x-circle"></i>
+                                </button>
+                                <div id="agentDropdown" class="agent-dropdown">
+                                    <?php foreach ($agents as $agent): ?>
+                                        <div class="agent-item" data-agent-id="<?php echo $agent['id']; ?>" 
+                                             onclick="selectAgent(<?php echo $agent['id']; ?>, '<?php echo htmlspecialchars($agent['name']); ?>', '<?php echo htmlspecialchars($agent['agent_code']); ?>')">
+                                            <div>
+                                                <strong><?php echo htmlspecialchars($agent['name']); ?></strong>
+                                                <span class="agent-code">(<?php echo htmlspecialchars($agent['agent_code']); ?>)</span>
+                                                <span class="agent-status <?php echo $agent['status']; ?>"><?php echo ucfirst($agent['status']); ?></span>
+                                            </div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                    <?php if (empty($agents)): ?>
+                                        <div class="no-results">No agents found. Create one first.</div>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                            <input type="hidden" id="selectedAgentId" value="<?php echo $selected_agent_id; ?>">
                         </div>
-                        <?php if ($selected_agent_id > 0 && !$view_only_mode): ?>
-                            <div class="col-md-6 text-end">
+                        <div class="col-md-6 text-end">
+                            <?php if ($selected_agent_id > 0 && !$view_only_mode): ?>
                                 <button class="btn btn-outline-primary btn-sm" data-bs-toggle="modal" data-bs-target="#editAgentModal">
                                     <i class="bi bi-pencil me-1"></i>Edit Agent
                                 </button>
@@ -840,8 +1118,8 @@ include '../includes/header.php';
                                 <button class="btn btn-outline-warning btn-sm" onclick="calculateCommissions(<?php echo $selected_agent_id; ?>)">
                                     <i class="bi bi-calculator me-1"></i>Calc Commissions
                                 </button>
-                            </div>
-                        <?php endif; ?>
+                            <?php endif; ?>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -950,16 +1228,16 @@ include '../includes/header.php';
                                         <?php foreach ($agent_clients as $client): ?>
                                             <tr>
                                                 <td><?php echo htmlspecialchars($client['client_name']); ?></td>
-                                                <td><code><?php echo htmlspecialchars($client['client_cds_account']); ?></code></td>
-                                                <td><?php echo date('d/m/Y H:i', strtotime($client['linked_at'])); ?></td>
+                                                <td><code><?php echo htmlspecialchars($client['cds_account']); ?></code></td>
+                                                <td><?php echo date('d/m/Y H:i', strtotime($client['linked_at'] ?? 'now')); ?></td>
                                                 <td><?php echo $client['trade_count'] ?? 0; ?></td>
                                                 <?php if (!$view_only_mode): ?>
                                                     <td>
-                                                        <form method="POST" style="display:inline;" onsubmit="return confirm('Unlink this client?')">
+                                                        <form method="POST" style="display:inline;" onsubmit="return confirm('Unlink this client from the agent?')">
                                                             <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
                                                             <input type="hidden" name="unlink_client" value="1">
                                                             <input type="hidden" name="agent_id" value="<?php echo $selected_agent_id; ?>">
-                                                            <input type="hidden" name="client_cds" value="<?php echo htmlspecialchars($client['client_cds_account']); ?>">
+                                                            <input type="hidden" name="client_cds" value="<?php echo htmlspecialchars($client['cds_account']); ?>">
                                                             <button type="submit" class="btn btn-outline-danger btn-sm">
                                                                 <i class="bi bi-link-45deg"></i> Unlink
                                                             </button>
@@ -1375,53 +1653,18 @@ include '../includes/header.php';
                 <h5 class="modal-title"><i class="bi bi-link-45deg me-2"></i>Link Clients to Agent</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
-            <form method="POST">
-                <div class="modal-body">
-                    <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
-                    <input type="hidden" name="link_clients" value="1">
-                    <input type="hidden" name="agent_id" value="<?php echo $selected_agent_id; ?>">
-                    
-                    <div class="alert alert-info">
-                        <i class="bi bi-info-circle me-2"></i>
-                        Select clients to link to <strong><?php echo htmlspecialchars($selected_agent['name'] ?? ''); ?></strong>.
-                        Once linked, the agent will earn commissions on all trades from these clients.
+            <div class="modal-body" id="linkClientsBody">
+                <div class="text-center py-4">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
                     </div>
-                    
-                    <?php if (empty($all_unlinked_clients)): ?>
-                        <div class="text-center py-4">
-                            <i class="bi bi-check-circle" style="font-size: 48px; color: #28a745;"></i>
-                            <p class="text-success mt-2">All clients are already linked to agents!</p>
-                        </div>
-                    <?php else: ?>
-                        <div class="table-responsive">
-                            <table class="table table-sm table-hover">
-                                <thead>
-                                    <tr>
-                                        <th><input type="checkbox" id="selectAllClients" onchange="toggleAllClients()"></th>
-                                        <th>Client Name</th>
-                                        <th>CDS Account</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php foreach ($all_unlinked_clients as $client): ?>
-                                        <tr>
-                                            <td><input type="checkbox" name="client_cds[]" value="<?php echo htmlspecialchars($client['cds_account']); ?>"></td>
-                                            <td><?php echo htmlspecialchars($client['client_name']); ?></td>
-                                            <td><code><?php echo htmlspecialchars($client['cds_account']); ?></code></td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
-                        </div>
-                    <?php endif; ?>
+                    <p class="text-muted mt-2">Loading available clients...</p>
                 </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <?php if (!empty($all_unlinked_clients)): ?>
-                        <button type="submit" class="btn btn-success">Link Selected Clients</button>
-                    <?php endif; ?>
-                </div>
-            </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-success" id="linkClientsBtn" onclick="submitLinkClients()">Link Selected Clients</button>
+            </div>
         </div>
     </div>
 </div>
@@ -1435,7 +1678,7 @@ include '../includes/header.php';
                 <h5 class="modal-title"><i class="bi bi-cash-coin me-2"></i>Pay Agent Commissions</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form method="POST">
+            <form method="POST" id="payCommissionsForm">
                 <div class="modal-body">
                     <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
                     <input type="hidden" name="pay_commissions" value="1">
@@ -1518,52 +1761,291 @@ include '../includes/header.php';
 </div>
 <?php endif; ?>
 
-<!-- Styles -->
-<style>
-.agent-stat {
-    text-align: center;
-    padding: 12px;
-    background: #f8f9fa;
-    border-radius: 8px;
-}
-.agent-stat .number {
-    font-size: 24px;
-    font-weight: bold;
-    color: #0d6efd;
-}
-.agent-stat .label {
-    font-size: 12px;
-    color: #6c757d;
-}
-.commission-status-pending { background: #fff3cd; color: #856404; }
-.commission-status-approved { background: #cce5ff; color: #004085; }
-.commission-status-paid { background: #d4edda; color: #155724; }
-.badge-first-trade { background: #ffc107; color: #212529; }
-.badge-regular-trade { background: #17a2b8; color: white; }
-</style>
-
 <script>
 // =====================================================
-// JAVASCRIPT
+// JAVASCRIPT - SEARCHABLE AGENT DROPDOWN
 // =====================================================
 
 document.addEventListener('DOMContentLoaded', function() {
-    <?php if (isset($_GET['show_modal']) && $_GET['show_modal'] == 'link'): ?>
-        new bootstrap.Modal(document.getElementById('linkClientsModal')).show();
+    // Set initial selected agent if any
+    <?php if ($selected_agent_id > 0 && $selected_agent): ?>
+        document.getElementById('agentSearchInput').value = '<?php echo htmlspecialchars($selected_agent['name']); ?>';
+        document.getElementById('selectedAgentId').value = '<?php echo $selected_agent_id; ?>';
     <?php endif; ?>
+    
+    // Close dropdown when clicking outside
+    document.addEventListener('click', function(e) {
+        const wrapper = document.querySelector('.agent-search-wrapper');
+        if (wrapper && !wrapper.contains(e.target)) {
+            document.getElementById('agentDropdown').style.display = 'none';
+        }
+    });
+    
+    // Link clients modal - load clients when opened
+    const linkModal = document.getElementById('linkClientsModal');
+    if (linkModal) {
+        linkModal.addEventListener('show.bs.modal', function() {
+            refreshUnlinkedClients();
+        });
+    }
+    
+    // Commission checkboxes
+    document.addEventListener('change', function(e) {
+        if (e.target.classList.contains('commission-checkbox')) {
+            updateSelectedCommissionSummary();
+        }
+    });
 });
+
+// =====================================================
+// AGENT SEARCH FUNCTIONS
+// =====================================================
+
+function showAgentDropdown() {
+    document.getElementById('agentDropdown').style.display = 'block';
+    filterAgents();
+}
+
+function filterAgents() {
+    const input = document.getElementById('agentSearchInput');
+    const filter = input.value.toLowerCase().trim();
+    const dropdown = document.getElementById('agentDropdown');
+    const items = dropdown.querySelectorAll('.agent-item');
+    const clearBtn = document.getElementById('clearSearchBtn');
+    
+    let hasResults = false;
+    
+    items.forEach(item => {
+        const text = item.textContent.toLowerCase();
+        if (text.includes(filter) || filter === '') {
+            item.style.display = 'block';
+            hasResults = true;
+        } else {
+            item.style.display = 'none';
+        }
+    });
+    
+    // Show/hide clear button
+    clearBtn.style.display = filter.length > 0 ? 'block' : 'none';
+    
+    // Show/hide no results message
+    let noResults = dropdown.querySelector('.no-results');
+    if (!hasResults) {
+        if (!noResults) {
+            noResults = document.createElement('div');
+            noResults.className = 'no-results';
+            noResults.textContent = 'No agents found matching "' + filter + '"';
+            dropdown.appendChild(noResults);
+        }
+        noResults.style.display = 'block';
+    } else if (noResults) {
+        noResults.style.display = 'none';
+    }
+    
+    dropdown.style.display = 'block';
+}
+
+function clearAgentSearch() {
+    document.getElementById('agentSearchInput').value = '';
+    document.getElementById('clearSearchBtn').style.display = 'none';
+    document.getElementById('selectedAgentId').value = '';
+    filterAgents();
+    // Optionally redirect to page without agent_id
+    window.location.href = window.location.pathname;
+}
+
+function selectAgent(agentId, agentName, agentCode) {
+    document.getElementById('agentSearchInput').value = agentName;
+    document.getElementById('selectedAgentId').value = agentId;
+    document.getElementById('agentDropdown').style.display = 'none';
+    document.getElementById('clearSearchBtn').style.display = 'block';
+    
+    // Redirect to the same page with agent_id parameter
+    const url = new URL(window.location.href);
+    url.searchParams.set('agent_id', agentId);
+    window.location.href = url.toString();
+}
+
+// =====================================================
+// UNLINKED CLIENTS FUNCTIONS
+// =====================================================
+
+function refreshUnlinkedClients() {
+    const body = document.getElementById('linkClientsBody');
+    body.innerHTML = `
+        <div class="text-center py-4">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="text-muted mt-2">Loading available clients...</p>
+        </div>
+    `;
+    
+    fetch('?ajax=get_unlinked_clients')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                if (data.count === 0) {
+                    body.innerHTML = `
+                        <div class="text-center py-4">
+                            <i class="bi bi-check-circle" style="font-size: 48px; color: #28a745;"></i>
+                            <p class="text-success mt-2">All clients are already linked to agents!</p>
+                            <p class="text-muted small">Found ${data.count} unlinked clients</p>
+                        </div>
+                        <div class="text-center">
+                            <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+                        </div>
+                    `;
+                } else {
+                    let html = `
+                        <div class="alert alert-info">
+                            <i class="bi bi-info-circle me-2"></i>
+                            Found <strong>${data.count}</strong> clients available to link.
+                            Select the clients you want to link to this agent.
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-sm table-hover">
+                                <thead>
+                                    <tr>
+                                        <th><input type="checkbox" id="selectAllClients" onchange="toggleAllClients()"></th>
+                                        <th>Client Name</th>
+                                        <th>CDS Account</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                    `;
+                    
+                    data.clients.forEach(client => {
+                        html += `
+                            <tr>
+                                <td><input type="checkbox" class="client-checkbox" name="client_cds[]" value="${escapeHtml(client.cds_account)}"></td>
+                                <td>${escapeHtml(client.client_name)}</td>
+                                <td><code>${escapeHtml(client.cds_account)}</code></td>
+                            </tr>
+                        `;
+                    });
+                    
+                    html += `
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="mt-2">
+                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="selectAllVisibleClients()">
+                                <i class="bi bi-check-all me-1"></i>Select All
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="deselectAllVisibleClients()">
+                                <i class="bi bi-x-circle me-1"></i>Deselect All
+                            </button>
+                        </div>
+                    `;
+                    
+                    body.innerHTML = html;
+                    document.getElementById('linkClientsBtn').style.display = 'inline-block';
+                }
+            } else {
+                body.innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="bi bi-exclamation-triangle me-2"></i>
+                        Error loading clients: ${escapeHtml(data.error || 'Unknown error')}
+                        <button type="button" class="btn btn-sm btn-outline-danger mt-2" onclick="refreshUnlinkedClients()">
+                            <i class="bi bi-arrow-repeat me-1"></i>Try Again
+                        </button>
+                    </div>
+                `;
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            body.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="bi bi-exclamation-triangle me-2"></i>
+                    Failed to load clients. Please try again.
+                    <button type="button" class="btn btn-sm btn-outline-danger mt-2" onclick="refreshUnlinkedClients()">
+                        <i class="bi bi-arrow-repeat me-1"></i>Try Again
+                    </button>
+                </div>
+            `;
+        });
+}
+
+function submitLinkClients() {
+    const checkboxes = document.querySelectorAll('.client-checkbox:checked');
+    if (checkboxes.length === 0) {
+        alert('Please select at least one client to link.');
+        return;
+    }
+    
+    // Build form data
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = window.location.href;
+    
+    // Add CSRF token
+    const csrfInput = document.createElement('input');
+    csrfInput.type = 'hidden';
+    csrfInput.name = 'csrf_token';
+    csrfInput.value = '<?php echo $_SESSION['csrf_token']; ?>';
+    form.appendChild(csrfInput);
+    
+    // Add action
+    const actionInput = document.createElement('input');
+    actionInput.type = 'hidden';
+    actionInput.name = 'link_clients';
+    actionInput.value = '1';
+    form.appendChild(actionInput);
+    
+    // Add agent_id
+    const agentInput = document.createElement('input');
+    agentInput.type = 'hidden';
+    agentInput.name = 'agent_id';
+    agentInput.value = '<?php echo $selected_agent_id; ?>';
+    form.appendChild(agentInput);
+    
+    // Add selected clients
+    checkboxes.forEach(cb => {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'client_cds[]';
+        input.value = cb.value;
+        form.appendChild(input);
+    });
+    
+    document.body.appendChild(form);
+    form.submit();
+}
+
+// =====================================================
+// SELECT ALL / DESELECT ALL FUNCTIONS
+// =====================================================
+
+function toggleAllClients() {
+    const selectAll = document.getElementById('selectAllClients');
+    if (selectAll) {
+        document.querySelectorAll('.client-checkbox').forEach(cb => cb.checked = selectAll.checked);
+    }
+}
+
+function selectAllVisibleClients() {
+    document.querySelectorAll('.client-checkbox').forEach(cb => cb.checked = true);
+    const selectAll = document.getElementById('selectAllClients');
+    if (selectAll) selectAll.checked = true;
+}
+
+function deselectAllVisibleClients() {
+    document.querySelectorAll('.client-checkbox').forEach(cb => cb.checked = false);
+    const selectAll = document.getElementById('selectAllClients');
+    if (selectAll) selectAll.checked = false;
+}
+
+// =====================================================
+// COMMISSION FUNCTIONS
+// =====================================================
 
 function toggleAllCommissions() {
     const selectAll = document.getElementById('selectAllCommissions');
     const checkboxes = document.querySelectorAll('.commission-checkbox');
     checkboxes.forEach(cb => cb.checked = selectAll.checked);
     updateSelectedCommissionSummary();
-}
-
-function toggleAllClients() {
-    const selectAll = document.getElementById('selectAllClients');
-    const checkboxes = document.querySelectorAll('input[name="client_cds[]"]');
-    checkboxes.forEach(cb => cb.checked = selectAll.checked);
 }
 
 function updateSelectedCommissionSummary() {
@@ -1574,27 +2056,27 @@ function updateSelectedCommissionSummary() {
     
     checkboxes.forEach(cb => {
         const row = cb.closest('tr');
-        const amountCell = row.querySelector('td:nth-child(8)');
-        if (amountCell) {
-            const amountText = amountCell.textContent.replace('Tsh ', '').replace(/,/g, '');
+        const cells = row.querySelectorAll('td');
+        // Find the commission amount cell (usually 8th column, index 7)
+        if (cells.length >= 8) {
+            const amountText = cells[7].textContent.replace('Tsh ', '').replace(/,/g, '');
             total += parseFloat(amountText) || 0;
         }
         ids.push(cb.value);
     });
     
-    document.getElementById('selectedCommissionCount').textContent = count;
-    document.getElementById('selectedCommissionTotal').textContent = 'Tsh ' + total.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-    document.getElementById('selectedCommissionIds').innerHTML = ids.map(id => 
-        `<input type="hidden" name="commission_ids[]" value="${id}">`
-    ).join('');
-}
-
-// Add event listeners to commission checkboxes
-document.addEventListener('change', function(e) {
-    if (e.target.classList.contains('commission-checkbox')) {
-        updateSelectedCommissionSummary();
+    const countEl = document.getElementById('selectedCommissionCount');
+    const totalEl = document.getElementById('selectedCommissionTotal');
+    const idsContainer = document.getElementById('selectedCommissionIds');
+    
+    if (countEl) countEl.textContent = count;
+    if (totalEl) totalEl.textContent = 'Tsh ' + total.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    if (idsContainer) {
+        idsContainer.innerHTML = ids.map(id => 
+            `<input type="hidden" name="commission_ids[]" value="${id}">`
+        ).join('');
     }
-});
+}
 
 function calculateCommissions(agentId) {
     if (!confirm('Calculate commissions for all linked clients? This may take a moment.')) return;
@@ -1622,6 +2104,25 @@ function calculateCommissions(agentId) {
             btn.disabled = false;
         });
 }
+
+// =====================================================
+// UTILITY FUNCTIONS
+// =====================================================
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Auto-dismiss alerts
+document.querySelectorAll('.alert').forEach(el => {
+    setTimeout(() => {
+        const bsAlert = bootstrap.Alert.getOrCreateInstance(el);
+        if (bsAlert) bsAlert.close();
+    }, 5000);
+});
 </script>
 
 <?php include '../includes/footer.php'; ?>
