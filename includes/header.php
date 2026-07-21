@@ -258,9 +258,9 @@
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/manage_lookups">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/agent_management">
                             <i class="bi bi-cash-stack"></i>
-                            <span>Master Settings</span>
+                            <span>Agents Management</span>
                         </a>
                     </li> 
                     <li class="nav-item">
