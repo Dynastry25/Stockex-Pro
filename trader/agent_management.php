@@ -14,7 +14,7 @@ header("X-Content-Type-Options: nosniff");
 header("X-XSS-Protection: 1; mode=block");
 
 // =====================================================
-// ACCESS CONTROL - FIXED FOR TRADER FOLDER
+// ACCESS CONTROL
 // =====================================================
 
 // Check if user is logged in
@@ -33,17 +33,8 @@ if (!in_array($user_role, $trader_roles)) {
     exit;
 }
 
-// Additional check: Traders can VIEW only, Finance can VIEW and MANAGE
 $is_finance = in_array($user_role, $finance_roles);
-$is_trader = ($user_role === 'trader');
-
-// If trader, restrict to view-only mode
-if ($is_trader) {
-    // Traders can only view agents, not create/edit/pay
-    $view_only_mode = true;
-} else {
-    $view_only_mode = false;
-}
+$view_only_mode = ($user_role === 'trader');
 
 // CSRF Protection
 if (session_status() === PHP_SESSION_NONE) {
@@ -60,11 +51,13 @@ $success_message = '';
 $error_message = '';
 
 // =====================================================
-// DATABASE SETUP - CREATE AGENT TABLES
+// DATABASE SETUP - FIXED FOR COMPATIBILITY
 // =====================================================
 
 try {
-    // Agents table
+    // ========================================
+    // 1. CREATE AGENTS TABLE
+    // ========================================
     $db->exec("CREATE TABLE IF NOT EXISTS agents (
         id INT AUTO_INCREMENT PRIMARY KEY,
         agent_code VARCHAR(50) UNIQUE NOT NULL,
@@ -89,7 +82,9 @@ try {
         INDEX idx_status (status)
     )");
     
-    // Agent-Client linking table
+    // ========================================
+    // 2. CREATE AGENT CLIENTS TABLE
+    // ========================================
     $db->exec("CREATE TABLE IF NOT EXISTS agent_clients (
         id INT AUTO_INCREMENT PRIMARY KEY,
         agent_id INT NOT NULL,
@@ -104,7 +99,9 @@ try {
         FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
     )");
     
-    // Agent Commission table
+    // ========================================
+    // 3. CREATE AGENT COMMISSIONS TABLE
+    // ========================================
     $db->exec("CREATE TABLE IF NOT EXISTS agent_commissions (
         id INT AUTO_INCREMENT PRIMARY KEY,
         agent_id INT NOT NULL,
@@ -115,7 +112,7 @@ try {
         brokerage_commission DECIMAL(15,2),
         agent_commission DECIMAL(15,2),
         commission_rate DECIMAL(5,4),
-        is_first_trade BOOLEAN DEFAULT FALSE,
+        is_first_trade TINYINT(1) DEFAULT 0,
         trade_date DATE,
         calculation_date DATETIME DEFAULT CURRENT_TIMESTAMP,
         status ENUM('pending', 'approved', 'paid') DEFAULT 'pending',
@@ -128,7 +125,9 @@ try {
         FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
     )");
     
-    // Agent commission payments table
+    // ========================================
+    // 4. CREATE AGENT COMMISSION PAYMENTS TABLE
+    // ========================================
     $db->exec("CREATE TABLE IF NOT EXISTS agent_commission_payments (
         id INT AUTO_INCREMENT PRIMARY KEY,
         payment_no VARCHAR(50) UNIQUE NOT NULL,
@@ -155,20 +154,82 @@ try {
         INDEX idx_status (status)
     )");
     
-    // Add commission tracking to trades table if missing
-    $db->exec("ALTER TABLE trades ADD COLUMN IF NOT EXISTS agent_id INT DEFAULT NULL AFTER final_brokerage_fee");
-    $db->exec("ALTER TABLE trades ADD COLUMN IF NOT EXISTS agent_commission_calculated TINYINT DEFAULT 0 AFTER agent_id");
-    $db->exec("ALTER TABLE trades ADD COLUMN IF NOT EXISTS agent_commission_amount DECIMAL(15,2) DEFAULT 0.00 AFTER agent_commission_calculated");
-    $db->exec("ALTER TABLE trades ADD COLUMN IF NOT EXISTS agent_commission_rate DECIMAL(5,4) DEFAULT 0.0000 AFTER agent_commission_amount");
-    $db->exec("ALTER TABLE trades ADD COLUMN IF NOT EXISTS is_first_agent_trade TINYINT DEFAULT 0 AFTER agent_commission_rate");
+    // ========================================
+    // 5. ADD COLUMNS TO TRADES TABLE - FIXED
+    // ========================================
     
-    // Add indexes
-    $db->exec("ALTER TABLE trades ADD INDEX IF NOT EXISTS idx_agent_id (agent_id)");
-    $db->exec("ALTER TABLE trades ADD INDEX IF NOT EXISTS idx_agent_commission_calculated (agent_commission_calculated)");
+    // Check if column exists before adding - using simpler approach
+    try {
+        $check = $db->query("SHOW COLUMNS FROM trades LIKE 'agent_id'");
+        if ($check->rowCount() == 0) {
+            $db->exec("ALTER TABLE trades ADD COLUMN agent_id INT DEFAULT NULL");
+        }
+    } catch (Exception $e) {
+        // Column might already exist or other error - continue
+        error_log("Note: agent_id column check: " . $e->getMessage());
+    }
+    
+    try {
+        $check = $db->query("SHOW COLUMNS FROM trades LIKE 'agent_commission_calculated'");
+        if ($check->rowCount() == 0) {
+            $db->exec("ALTER TABLE trades ADD COLUMN agent_commission_calculated TINYINT DEFAULT 0");
+        }
+    } catch (Exception $e) {
+        error_log("Note: agent_commission_calculated column check: " . $e->getMessage());
+    }
+    
+    try {
+        $check = $db->query("SHOW COLUMNS FROM trades LIKE 'agent_commission_amount'");
+        if ($check->rowCount() == 0) {
+            $db->exec("ALTER TABLE trades ADD COLUMN agent_commission_amount DECIMAL(15,2) DEFAULT 0.00");
+        }
+    } catch (Exception $e) {
+        error_log("Note: agent_commission_amount column check: " . $e->getMessage());
+    }
+    
+    try {
+        $check = $db->query("SHOW COLUMNS FROM trades LIKE 'agent_commission_rate'");
+        if ($check->rowCount() == 0) {
+            $db->exec("ALTER TABLE trades ADD COLUMN agent_commission_rate DECIMAL(5,4) DEFAULT 0.0000");
+        }
+    } catch (Exception $e) {
+        error_log("Note: agent_commission_rate column check: " . $e->getMessage());
+    }
+    
+    try {
+        $check = $db->query("SHOW COLUMNS FROM trades LIKE 'is_first_agent_trade'");
+        if ($check->rowCount() == 0) {
+            $db->exec("ALTER TABLE trades ADD COLUMN is_first_agent_trade TINYINT DEFAULT 0");
+        }
+    } catch (Exception $e) {
+        error_log("Note: is_first_agent_trade column check: " . $e->getMessage());
+    }
+    
+    // ========================================
+    // 6. ADD INDEXES TO TRADES TABLE
+    // ========================================
+    try {
+        // Check if index exists before adding
+        $check = $db->query("SHOW INDEX FROM trades WHERE Key_name = 'idx_agent_id'");
+        if ($check->rowCount() == 0) {
+            $db->exec("ALTER TABLE trades ADD INDEX idx_agent_id (agent_id)");
+        }
+    } catch (Exception $e) {
+        error_log("Note: idx_agent_id index check: " . $e->getMessage());
+    }
+    
+    try {
+        $check = $db->query("SHOW INDEX FROM trades WHERE Key_name = 'idx_agent_commission_calculated'");
+        if ($check->rowCount() == 0) {
+            $db->exec("ALTER TABLE trades ADD INDEX idx_agent_commission_calculated (agent_commission_calculated)");
+        }
+    } catch (Exception $e) {
+        error_log("Note: idx_agent_commission_calculated index check: " . $e->getMessage());
+    }
     
 } catch (Exception $e) {
     error_log("Agent table setup error: " . $e->getMessage());
-    $error_message = "Database setup error: " . $e->getMessage();
+    $error_message = "Database setup warning: " . $e->getMessage() . " (Tables may already exist)";
 }
 
 // =====================================================
@@ -311,12 +372,7 @@ function calculateAndSaveAgentCommission($db, $trade_id, $agent_id) {
     }
 }
 
-// =====================================================
-// PROCESS FUNCTIONS - ONLY FOR FINANCE USERS
-// =====================================================
-
 function processAgentCommissionPayment($db, $data) {
-    // This function requires finance permissions
     if (!in_array($_SESSION['role'] ?? '', ['finance_officer', 'system_admin'])) {
         throw new Exception("Only finance officers can process commission payments");
     }
@@ -378,11 +434,10 @@ function processAgentCommissionPayment($db, $data) {
 }
 
 // =====================================================
-// POST HANDLING - RESTRICTED FOR FINANCE USERS
+// POST HANDLING
 // =====================================================
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    // Only finance users can POST (create/edit/pay)
     if (!in_array($user_role, $finance_roles)) {
         $error_message = "You do not have permission to perform this action.";
     } elseif (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
@@ -547,9 +602,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             }
         }
         
-        // ============ PAY COMMISSIONS - FINANCE ONLY ============
+        // ============ PAY COMMISSIONS ============
         if (isset($_POST['pay_commissions'])) {
-            // Only finance officers can pay commissions
             if (!in_array($user_role, $finance_roles)) {
                 $error_message = "Only finance officers can process commission payments.";
             } else {
@@ -590,7 +644,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             $commission_id_string = implode(',', $commission_ids);
                             $agent_name = $commissions[0]['agent_name'];
                             
-                            $bank = getBankAccountDetails($db, $bank_account_id);
+                            // Get bank account details
+                            $stmt = $db->prepare("SELECT bank_name, account_number FROM banks_accounts WHERE id = ?");
+                            $stmt->execute([$bank_account_id]);
+                            $bank = $stmt->fetch();
                             
                             $payment_data = [
                                 'agent_id' => $agent_id,
@@ -629,7 +686,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 // GET DATA FOR DISPLAY
 // =====================================================
 
-// Get all agents
 $agents = [];
 try {
     $stmt = $db->query("SELECT * FROM agents ORDER BY name");
@@ -638,7 +694,6 @@ try {
     error_log("Error fetching agents: " . $e->getMessage());
 }
 
-// Get selected agent data
 $selected_agent_id = isset($_GET['agent_id']) ? (int)$_GET['agent_id'] : 0;
 $selected_agent = null;
 $agent_clients = [];
@@ -672,7 +727,6 @@ if ($selected_agent_id > 0) {
         
         $unlinked_clients = getUnlinkedClients($db);
         
-        // Get payment methods and bank accounts (only for finance users)
         if (in_array($user_role, $finance_roles)) {
             $stmt = $db->query("SELECT id, code, description FROM payment_methods WHERE status = 'active' ORDER BY priority");
             $payment_methods = $stmt->fetchAll();
@@ -686,7 +740,6 @@ if ($selected_agent_id > 0) {
     }
 }
 
-// Get all unlinked clients for the modal
 $all_unlinked_clients = [];
 try {
     $all_unlinked_clients = getUnlinkedClients($db);
@@ -698,8 +751,9 @@ $page_title = 'Agent Management';
 include '../includes/header.php';
 ?>
 
-<!-- REST OF THE HTML - SAME AS BEFORE BUT WITH ACCESS CONTROLS -->
-<!-- Add a note about view-only mode for traders -->
+<!-- ===================================================== -->
+<!-- HTML CONTENT - Same as before -->
+<!-- ===================================================== -->
 
 <div class="container-fluid">
     
@@ -1112,7 +1166,7 @@ include '../includes/header.php';
 </div>
 
 <!-- ===================================================== -->
-<!-- MODALS - Only show to Finance users -->
+<!-- MODALS -->
 <!-- ===================================================== -->
 
 <!-- New Agent Modal -->
@@ -1372,7 +1426,7 @@ include '../includes/header.php';
     </div>
 </div>
 
-<!-- Pay Commissions Modal - Finance Only -->
+<!-- Pay Commissions Modal -->
 <?php if (!$view_only_mode): ?>
 <div class="modal fade" id="payCommissionsModal" tabindex="-1">
     <div class="modal-dialog modal-lg">
