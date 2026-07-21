@@ -259,7 +259,8 @@ function getAgentClients($db, $agent_id) {
                 c.client_name,
                 c.linked_to_agent,
                 c.agent_id,
-                (SELECT COUNT(*) FROM trades WHERE client_cds_account = c.cds_account AND status = 'active') as trade_count,
+                (SELECT COUNT(*) FROM trades WHERE client_cds_account = c.cds_account AND status = 'active' AND agent_commission_calculated = 1) as calculated_trades,
+                (SELECT COUNT(*) FROM trades WHERE client_cds_account = c.cds_account AND status = 'active') as total_trades,
                 ac.linked_at,
                 ac.linked_by
             FROM clients c
@@ -293,6 +294,42 @@ function getAgentCommissionSummary($db, $agent_id) {
     ");
     $stmt->execute([$agent_id]);
     return $stmt->fetch();
+}
+
+function getClientTrades($db, $cds_account, $agent_id = null) {
+    $sql = "
+        SELECT 
+            id, 
+            trade_reference, 
+            trade_date, 
+            security_id, 
+            trade_side, 
+            quantity, 
+            price, 
+            consideration,
+            final_brokerage_fee,
+            agent_commission_calculated,
+            agent_commission_amount,
+            agent_commission_rate,
+            is_first_agent_trade,
+            agent_id
+        FROM trades 
+        WHERE client_cds_account = ? 
+        AND status = 'active'
+    ";
+    
+    $params = [$cds_account];
+    
+    if ($agent_id !== null) {
+        $sql .= " AND (agent_id = ? OR agent_id IS NULL)";
+        $params[] = $agent_id;
+    }
+    
+    $sql .= " ORDER BY trade_date DESC";
+    
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    return $stmt->fetchAll();
 }
 
 function linkClientsToAgent($db, $agent_id, $client_cds_list) {
@@ -397,6 +434,15 @@ function unlinkClientFromAgent($db, $agent_id, $cds_account) {
             WHERE cds_account = ?
         ");
         $stmt->execute([$cds_account]);
+        
+        // Also remove agent_id from trades for this client (optional - we keep the commission records)
+        $stmt = $db->prepare("
+            UPDATE trades 
+            SET agent_id = NULL 
+            WHERE client_cds_account = ? 
+            AND agent_id = ?
+        ");
+        $stmt->execute([$cds_account, $agent_id]);
         
         // Update agent_clients audit trail
         $stmt = $db->prepare("
@@ -677,40 +723,24 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         // ============ CALCULATE COMMISSIONS ============
         if (isset($_POST['calculate_commissions'])) {
             $agent_id = (int)$_POST['agent_id'] ?? 0;
+            $trade_ids = $_POST['trade_ids'] ?? [];
             
-            try {
-                // Get all clients linked to this agent
-                $stmt = $db->prepare("
-                    SELECT cds_account FROM clients 
-                    WHERE agent_id = ? 
-                    AND linked_to_agent = 1
-                    AND status = 'active'
-                ");
-                $stmt->execute([$agent_id]);
-                $clients = $stmt->fetchAll();
-                
-                $calculated = 0;
-                foreach ($clients as $client) {
-                    $stmt = $db->prepare("
-                        SELECT id FROM trades 
-                        WHERE client_cds_account = ? 
-                        AND agent_commission_calculated = 0
-                        AND status = 'active'
-                    ");
-                    $stmt->execute([$client['cds_account']]);
-                    $trades = $stmt->fetchAll();
-                    
-                    foreach ($trades as $trade) {
-                        if (calculateAndSaveAgentCommission($db, $trade['id'], $agent_id)) {
+            if (empty($trade_ids)) {
+                $error_message = "Please select at least one trade to calculate commission.";
+            } else {
+                try {
+                    $calculated = 0;
+                    foreach ($trade_ids as $trade_id) {
+                        if (calculateAndSaveAgentCommission($db, $trade_id, $agent_id)) {
                             $calculated++;
                         }
                     }
+                    
+                    $success_message = "Calculated commissions for $calculated trade(s)!";
+                    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+                } catch (Exception $e) {
+                    $error_message = "Error calculating commissions: " . $e->getMessage();
                 }
-                
-                $success_message = "Calculated commissions for $calculated trade(s)!";
-                $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-            } catch (Exception $e) {
-                $error_message = "Error calculating commissions: " . $e->getMessage();
             }
         }
         
@@ -816,30 +846,36 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_unlinked_clients') {
     exit;
 }
 
+if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_client_trades') {
+    header('Content-Type: application/json');
+    $cds_account = $_GET['cds_account'] ?? '';
+    $agent_id = isset($_GET['agent_id']) ? (int)$_GET['agent_id'] : null;
+    
+    try {
+        $trades = getClientTrades($db, $cds_account, $agent_id);
+        echo json_encode([
+            'success' => true,
+            'trades' => $trades
+        ]);
+    } catch (Exception $e) {
+        echo json_encode([
+            'success' => false,
+            'error' => $e->getMessage()
+        ]);
+    }
+    exit;
+}
+
 if (isset($_GET['ajax']) && $_GET['ajax'] == 'calculate_commissions') {
     header('Content-Type: application/json');
     $agent_id = (int)$_GET['agent_id'] ?? 0;
+    $trade_ids = isset($_GET['trade_ids']) ? explode(',', $_GET['trade_ids']) : [];
     
     try {
-        $stmt = $db->prepare("SELECT cds_account FROM clients WHERE agent_id = ? AND linked_to_agent = 1 AND status = 'active'");
-        $stmt->execute([$agent_id]);
-        $clients = $stmt->fetchAll();
-        
         $calculated = 0;
-        foreach ($clients as $client) {
-            $stmt = $db->prepare("
-                SELECT id FROM trades 
-                WHERE client_cds_account = ? 
-                AND agent_commission_calculated = 0
-                AND status = 'active'
-            ");
-            $stmt->execute([$client['cds_account']]);
-            $trades = $stmt->fetchAll();
-            
-            foreach ($trades as $trade) {
-                if (calculateAndSaveAgentCommission($db, $trade['id'], $agent_id)) {
-                    $calculated++;
-                }
+        foreach ($trade_ids as $trade_id) {
+            if (calculateAndSaveAgentCommission($db, $trade_id, $agent_id)) {
+                $calculated++;
             }
         }
         
@@ -1016,6 +1052,42 @@ include '../includes/header.php';
     text-align: center;
     color: #6c757d;
 }
+
+/* Client row hover effects */
+.client-row {
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.client-row:hover {
+    background: #f0f4ff;
+}
+.client-row.selected {
+    background: #d4edda;
+}
+
+/* Trade selection styles */
+.trade-checkbox {
+    cursor: pointer;
+}
+.trade-row:hover {
+    background: #f8f9fa;
+}
+.trade-row.selected {
+    background: #cce5ff;
+}
+
+/* Filter input styles */
+.filter-input {
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    padding: 6px 12px;
+    width: 100%;
+}
+.filter-input:focus {
+    border-color: #0d6efd;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(13,110,253,0.25);
+}
 </style>
 
 <div class="container-fluid">
@@ -1114,9 +1186,6 @@ include '../includes/header.php';
                                 </button>
                                 <button class="btn btn-outline-success btn-sm" data-bs-toggle="modal" data-bs-target="#linkClientsModal">
                                     <i class="bi bi-link-45deg me-1"></i>Link Clients
-                                </button>
-                                <button class="btn btn-outline-warning btn-sm" onclick="calculateCommissions(<?php echo $selected_agent_id; ?>)">
-                                    <i class="bi bi-calculator me-1"></i>Calc Commissions
                                 </button>
                             <?php endif; ?>
                         </div>
@@ -1219,9 +1288,7 @@ include '../includes/header.php';
                                             <th>CDS Account</th>
                                             <th>Linked Date</th>
                                             <th>Trades</th>
-                                            <?php if (!$view_only_mode): ?>
-                                                <th>Actions</th>
-                                            <?php endif; ?>
+                                            <th>Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -1230,9 +1297,14 @@ include '../includes/header.php';
                                                 <td><?php echo htmlspecialchars($client['client_name']); ?></td>
                                                 <td><code><?php echo htmlspecialchars($client['cds_account']); ?></code></td>
                                                 <td><?php echo date('d/m/Y H:i', strtotime($client['linked_at'] ?? 'now')); ?></td>
-                                                <td><?php echo $client['trade_count'] ?? 0; ?></td>
-                                                <?php if (!$view_only_mode): ?>
-                                                    <td>
+                                                <td>
+                                                    <?php echo ($client['calculated_trades'] ?? 0); ?> / <?php echo ($client['total_trades'] ?? 0); ?>
+                                                    <button class="btn btn-outline-info btn-sm ms-1" onclick="viewClientTrades('<?php echo htmlspecialchars($client['cds_account']); ?>')" title="View Trades">
+                                                        <i class="bi bi-eye"></i>
+                                                    </button>
+                                                </td>
+                                                <td>
+                                                    <?php if (!$view_only_mode): ?>
                                                         <form method="POST" style="display:inline;" onsubmit="return confirm('Unlink this client from the agent?')">
                                                             <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
                                                             <input type="hidden" name="unlink_client" value="1">
@@ -1242,8 +1314,8 @@ include '../includes/header.php';
                                                                 <i class="bi bi-link-45deg"></i> Unlink
                                                             </button>
                                                         </form>
-                                                    </td>
-                                                <?php endif; ?>
+                                                    <?php endif; ?>
+                                                </td>
                                             </tr>
                                         <?php endforeach; ?>
                                     </tbody>
@@ -1271,13 +1343,6 @@ include '../includes/header.php';
                                             <option value="paid" <?php echo ($_GET['commission_status'] ?? '') === 'paid' ? 'selected' : ''; ?>>Paid</option>
                                         </select>
                                     </div>
-                                    <?php if (!$view_only_mode): ?>
-                                        <div class="col-auto">
-                                            <button class="btn btn-outline-warning btn-sm" onclick="calculateCommissions(<?php echo $selected_agent_id; ?>)">
-                                                <i class="bi bi-calculator me-1"></i>Calculate
-                                            </button>
-                                        </div>
-                                    <?php endif; ?>
                                 </form>
                             </div>
                             <?php if (!$view_only_mode): ?>
@@ -1293,11 +1358,6 @@ include '../includes/header.php';
                             <div class="text-center py-4">
                                 <i class="bi bi-currency-dollar" style="font-size: 48px; color: #dee2e6;"></i>
                                 <p class="text-muted mt-2">No commissions found for this agent.</p>
-                                <?php if (!$view_only_mode): ?>
-                                    <button class="btn btn-warning btn-sm" onclick="calculateCommissions(<?php echo $selected_agent_id; ?>)">
-                                        <i class="bi bi-calculator me-1"></i>Calculate Commissions
-                                    </button>
-                                <?php endif; ?>
                             </div>
                         <?php else: ?>
                             <div class="table-responsive">
@@ -1645,9 +1705,9 @@ include '../includes/header.php';
     </div>
 </div>
 
-<!-- Link Clients Modal -->
+<!-- Link Clients Modal - WITH FILTER AND CLICK SELECT -->
 <div class="modal fade" id="linkClientsModal" tabindex="-1">
-    <div class="modal-dialog modal-lg">
+    <div class="modal-dialog modal-xl">
         <div class="modal-content">
             <div class="modal-header bg-success text-white">
                 <h5 class="modal-title"><i class="bi bi-link-45deg me-2"></i>Link Clients to Agent</h5>
@@ -1664,6 +1724,32 @@ include '../includes/header.php';
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-success" id="linkClientsBtn" onclick="submitLinkClients()">Link Selected Clients</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- View Client Trades Modal -->
+<div class="modal fade" id="clientTradesModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header bg-info text-white">
+                <h5 class="modal-title"><i class="bi bi-list-check me-2"></i>Client Trades - <span id="clientNameDisplay">Loading...</span></h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="clientTradesBody">
+                <div class="text-center py-4">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="text-muted mt-2">Loading trades...</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-warning" id="calculateSelectedTradesBtn" onclick="calculateSelectedTrades()">
+                    <i class="bi bi-calculator me-1"></i>Calculate Commission for Selected
+                </button>
             </div>
         </div>
     </div>
@@ -1763,7 +1849,7 @@ include '../includes/header.php';
 
 <script>
 // =====================================================
-// JAVASCRIPT - SEARCHABLE AGENT DROPDOWN
+// JAVASCRIPT - ENHANCED WITH FILTER AND CLICK SELECT
 // =====================================================
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -1825,10 +1911,8 @@ function filterAgents() {
         }
     });
     
-    // Show/hide clear button
     clearBtn.style.display = filter.length > 0 ? 'block' : 'none';
     
-    // Show/hide no results message
     let noResults = dropdown.querySelector('.no-results');
     if (!hasResults) {
         if (!noResults) {
@@ -1850,7 +1934,6 @@ function clearAgentSearch() {
     document.getElementById('clearSearchBtn').style.display = 'none';
     document.getElementById('selectedAgentId').value = '';
     filterAgents();
-    // Optionally redirect to page without agent_id
     window.location.href = window.location.pathname;
 }
 
@@ -1860,18 +1943,22 @@ function selectAgent(agentId, agentName, agentCode) {
     document.getElementById('agentDropdown').style.display = 'none';
     document.getElementById('clearSearchBtn').style.display = 'block';
     
-    // Redirect to the same page with agent_id parameter
     const url = new URL(window.location.href);
     url.searchParams.set('agent_id', agentId);
     window.location.href = url.toString();
 }
 
 // =====================================================
-// UNLINKED CLIENTS FUNCTIONS
+// ENHANCED: UNLINKED CLIENTS WITH FILTER AND CLICK SELECT
 // =====================================================
+
+let selectedClients = new Set();
+let clientFilterTimeout = null;
 
 function refreshUnlinkedClients() {
     const body = document.getElementById('linkClientsBody');
+    selectedClients = new Set();
+    
     body.innerHTML = `
         <div class="text-center py-4">
             <div class="spinner-border text-primary" role="status">
@@ -1901,13 +1988,20 @@ function refreshUnlinkedClients() {
                         <div class="alert alert-info">
                             <i class="bi bi-info-circle me-2"></i>
                             Found <strong>${data.count}</strong> clients available to link.
-                            Select the clients you want to link to this agent.
+                            <span class="text-muted">(Click on a row to select/deselect it)</span>
                         </div>
-                        <div class="table-responsive">
-                            <table class="table table-sm table-hover">
-                                <thead>
+                        <div class="mb-3">
+                            <input type="text" class="filter-input" id="clientFilterInput" 
+                                   placeholder="🔍 Filter clients by name or CDS account..."
+                                   onkeyup="filterClientList()">
+                        </div>
+                        <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                            <table class="table table-sm table-hover" id="clientListTable">
+                                <thead class="sticky-top bg-white">
                                     <tr>
-                                        <th><input type="checkbox" id="selectAllClients" onchange="toggleAllClients()"></th>
+                                        <th style="width:40px;">
+                                            <input type="checkbox" id="selectAllClients" onchange="toggleAllClients()">
+                                        </th>
                                         <th>Client Name</th>
                                         <th>CDS Account</th>
                                     </tr>
@@ -1915,10 +2009,14 @@ function refreshUnlinkedClients() {
                                 <tbody>
                     `;
                     
-                    data.clients.forEach(client => {
+                    data.clients.forEach((client, index) => {
+                        const rowId = 'client_' + index;
                         html += `
-                            <tr>
-                                <td><input type="checkbox" class="client-checkbox" name="client_cds[]" value="${escapeHtml(client.cds_account)}"></td>
+                            <tr id="${rowId}" class="client-row" onclick="toggleClientSelection('${rowId}', '${escapeHtml(client.cds_account)}')">
+                                <td>
+                                    <input type="checkbox" class="client-checkbox" value="${escapeHtml(client.cds_account)}" 
+                                           onclick="event.stopPropagation(); toggleClientCheckbox('${rowId}', this)">
+                                </td>
                                 <td>${escapeHtml(client.client_name)}</td>
                                 <td><code>${escapeHtml(client.cds_account)}</code></td>
                             </tr>
@@ -1929,18 +2027,25 @@ function refreshUnlinkedClients() {
                                 </tbody>
                             </table>
                         </div>
-                        <div class="mt-2">
-                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="selectAllVisibleClients()">
-                                <i class="bi bi-check-all me-1"></i>Select All
-                            </button>
-                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="deselectAllVisibleClients()">
-                                <i class="bi bi-x-circle me-1"></i>Deselect All
-                            </button>
+                        <div class="mt-2 d-flex justify-content-between">
+                            <div>
+                                <span id="selectedCountDisplay">0</span> clients selected
+                            </div>
+                            <div>
+                                <button type="button" class="btn btn-sm btn-outline-primary" onclick="selectAllVisibleClients()">
+                                    <i class="bi bi-check-all me-1"></i>Select All Visible
+                                </button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="deselectAllVisibleClients()">
+                                    <i class="bi bi-x-circle me-1"></i>Deselect All Visible
+                                </button>
+                            </div>
                         </div>
                     `;
                     
                     body.innerHTML = html;
-                    document.getElementById('linkClientsBtn').style.display = 'inline-block';
+                    
+                    // Store client data for reference
+                    body.dataset.clients = JSON.stringify(data.clients);
                 }
             } else {
                 body.innerHTML = `
@@ -1968,6 +2073,156 @@ function refreshUnlinkedClients() {
         });
 }
 
+function filterClientList() {
+    const filter = document.getElementById('clientFilterInput').value.toLowerCase().trim();
+    const rows = document.querySelectorAll('#clientListTable tbody tr');
+    
+    let visibleCount = 0;
+    rows.forEach(row => {
+        const text = row.textContent.toLowerCase();
+        if (text.includes(filter) || filter === '') {
+            row.style.display = '';
+            visibleCount++;
+        } else {
+            row.style.display = 'none';
+        }
+    });
+    
+    // Update select all checkbox state based on visible rows
+    updateSelectAllState();
+}
+
+function toggleClientSelection(rowId, cdsAccount) {
+    const row = document.getElementById(rowId);
+    if (!row) return;
+    
+    const checkbox = row.querySelector('.client-checkbox');
+    if (!checkbox) return;
+    
+    // Toggle the checkbox
+    checkbox.checked = !checkbox.checked;
+    
+    // Update row visual
+    if (checkbox.checked) {
+        row.classList.add('selected');
+        selectedClients.add(cdsAccount);
+    } else {
+        row.classList.remove('selected');
+        selectedClients.delete(cdsAccount);
+    }
+    
+    updateSelectedCount();
+    updateSelectAllState();
+}
+
+function toggleClientCheckbox(rowId, checkbox) {
+    const row = document.getElementById(rowId);
+    if (!row) return;
+    
+    if (checkbox.checked) {
+        row.classList.add('selected');
+        selectedClients.add(checkbox.value);
+    } else {
+        row.classList.remove('selected');
+        selectedClients.delete(checkbox.value);
+    }
+    
+    updateSelectedCount();
+    updateSelectAllState();
+}
+
+function toggleAllClients() {
+    const selectAll = document.getElementById('selectAllClients');
+    if (!selectAll) return;
+    
+    const visibleRows = document.querySelectorAll('#clientListTable tbody tr:not([style*="display: none"])');
+    const checkboxes = visibleRows.querySelectorAll('.client-checkbox');
+    
+    checkboxes.forEach(cb => {
+        cb.checked = selectAll.checked;
+        const row = cb.closest('tr');
+        if (row) {
+            if (selectAll.checked) {
+                row.classList.add('selected');
+                selectedClients.add(cb.value);
+            } else {
+                row.classList.remove('selected');
+                selectedClients.delete(cb.value);
+            }
+        }
+    });
+    
+    updateSelectedCount();
+}
+
+function selectAllVisibleClients() {
+    const visibleRows = document.querySelectorAll('#clientListTable tbody tr:not([style*="display: none"])');
+    const checkboxes = visibleRows.querySelectorAll('.client-checkbox');
+    
+    checkboxes.forEach(cb => {
+        cb.checked = true;
+        const row = cb.closest('tr');
+        if (row) {
+            row.classList.add('selected');
+            selectedClients.add(cb.value);
+        }
+    });
+    
+    updateSelectedCount();
+    updateSelectAllState();
+}
+
+function deselectAllVisibleClients() {
+    const visibleRows = document.querySelectorAll('#clientListTable tbody tr:not([style*="display: none"])');
+    const checkboxes = visibleRows.querySelectorAll('.client-checkbox');
+    
+    checkboxes.forEach(cb => {
+        cb.checked = false;
+        const row = cb.closest('tr');
+        if (row) {
+            row.classList.remove('selected');
+            selectedClients.delete(cb.value);
+        }
+    });
+    
+    updateSelectedCount();
+    updateSelectAllState();
+}
+
+function updateSelectedCount() {
+    const countDisplay = document.getElementById('selectedCountDisplay');
+    if (countDisplay) {
+        countDisplay.textContent = selectedClients.size;
+    }
+}
+
+function updateSelectAllState() {
+    const selectAll = document.getElementById('selectAllClients');
+    if (!selectAll) return;
+    
+    const visibleRows = document.querySelectorAll('#clientListTable tbody tr:not([style*="display: none"])');
+    const checkboxes = visibleRows.querySelectorAll('.client-checkbox');
+    
+    if (checkboxes.length === 0) {
+        selectAll.checked = false;
+        selectAll.indeterminate = false;
+        return;
+    }
+    
+    const checkedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
+    
+    if (checkedCount === checkboxes.length) {
+        selectAll.checked = true;
+        selectAll.indeterminate = false;
+    } else if (checkedCount === 0) {
+        selectAll.checked = false;
+        selectAll.indeterminate = false;
+    } else {
+        selectAll.checked = false;
+        selectAll.indeterminate = true;
+    }
+}
+
 function submitLinkClients() {
     const checkboxes = document.querySelectorAll('.client-checkbox:checked');
     if (checkboxes.length === 0) {
@@ -1975,33 +2230,32 @@ function submitLinkClients() {
         return;
     }
     
-    // Build form data
+    if (!confirm(`Link ${checkboxes.length} client(s) to this agent?`)) {
+        return;
+    }
+    
     const form = document.createElement('form');
     form.method = 'POST';
     form.action = window.location.href;
     
-    // Add CSRF token
     const csrfInput = document.createElement('input');
     csrfInput.type = 'hidden';
     csrfInput.name = 'csrf_token';
     csrfInput.value = '<?php echo $_SESSION['csrf_token']; ?>';
     form.appendChild(csrfInput);
     
-    // Add action
     const actionInput = document.createElement('input');
     actionInput.type = 'hidden';
     actionInput.name = 'link_clients';
     actionInput.value = '1';
     form.appendChild(actionInput);
     
-    // Add agent_id
     const agentInput = document.createElement('input');
     agentInput.type = 'hidden';
     agentInput.name = 'agent_id';
     agentInput.value = '<?php echo $selected_agent_id; ?>';
     form.appendChild(agentInput);
     
-    // Add selected clients
     checkboxes.forEach(cb => {
         const input = document.createElement('input');
         input.type = 'hidden';
@@ -2015,26 +2269,265 @@ function submitLinkClients() {
 }
 
 // =====================================================
-// SELECT ALL / DESELECT ALL FUNCTIONS
+// VIEW CLIENT TRADES MODAL
 // =====================================================
 
-function toggleAllClients() {
-    const selectAll = document.getElementById('selectAllClients');
-    if (selectAll) {
-        document.querySelectorAll('.client-checkbox').forEach(cb => cb.checked = selectAll.checked);
+let currentClientCds = '';
+let currentClientTrades = [];
+
+function viewClientTrades(cdsAccount) {
+    currentClientCds = cdsAccount;
+    
+    const modal = new bootstrap.Modal(document.getElementById('clientTradesModal'));
+    const body = document.getElementById('clientTradesBody');
+    const nameDisplay = document.getElementById('clientNameDisplay');
+    
+    nameDisplay.textContent = 'Loading client info...';
+    body.innerHTML = `
+        <div class="text-center py-4">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="text-muted mt-2">Loading trades for client...</p>
+        </div>
+    `;
+    
+    modal.show();
+    
+    // Get client name
+    fetch(`?ajax=get_client_name&cds=${encodeURIComponent(cdsAccount)}`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                nameDisplay.textContent = data.client_name || cdsAccount;
+            }
+        })
+        .catch(() => {});
+    
+    // Get trades
+    fetch(`?ajax=get_client_trades&cds_account=${encodeURIComponent(cdsAccount)}&agent_id=<?php echo $selected_agent_id; ?>`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                currentClientTrades = data.trades;
+                renderClientTrades(data.trades);
+            } else {
+                body.innerHTML = `<div class="alert alert-danger">${escapeHtml(data.error || 'Error loading trades')}</div>`;
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            body.innerHTML = `<div class="alert alert-danger">Failed to load trades</div>`;
+        });
+}
+
+function renderClientTrades(trades) {
+    const body = document.getElementById('clientTradesBody');
+    
+    if (trades.length === 0) {
+        body.innerHTML = `
+            <div class="text-center py-4">
+                <i class="bi bi-inbox" style="font-size: 48px; color: #dee2e6;"></i>
+                <p class="text-muted mt-2">No trades found for this client.</p>
+            </div>
+        `;
+        return;
+    }
+    
+    let html = `
+        <div class="mb-3">
+            <span class="text-muted">Found <strong>${trades.length}</strong> trades. Select trades to calculate commission.</span>
+            <button class="btn btn-sm btn-outline-primary ms-2" onclick="selectAllTrades()">Select All</button>
+            <button class="btn btn-sm btn-outline-secondary ms-1" onclick="deselectAllTrades()">Deselect All</button>
+        </div>
+        <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+            <table class="table table-sm table-hover">
+                <thead class="sticky-top bg-white">
+                    <tr>
+                        <th style="width:40px;"><input type="checkbox" id="selectAllTradesCheckbox" onchange="toggleAllTrades()"></th>
+                        <th>Trade Ref</th>
+                        <th>Date</th>
+                        <th>Security</th>
+                        <th>Side</th>
+                        <th>Qty</th>
+                        <th>Price</th>
+                        <th>Consideration</th>
+                        <th>Brokerage</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+    `;
+    
+    trades.forEach((trade, index) => {
+        const isCalculated = trade.agent_commission_calculated == 1;
+        const statusBadge = isCalculated ? 
+            '<span class="badge bg-success">Calculated</span>' : 
+            '<span class="badge bg-warning">Pending</span>';
+        
+        const rowId = 'trade_' + index;
+        html += `
+            <tr id="${rowId}" class="trade-row ${isCalculated ? 'calculated' : ''}" onclick="toggleTradeSelection('${rowId}')">
+                <td>
+                    <input type="checkbox" class="trade-checkbox" value="${trade.id}" 
+                           onclick="event.stopPropagation();" 
+                           ${isCalculated ? 'disabled' : ''}>
+                </td>
+                <td><code>${escapeHtml(trade.trade_reference)}</code></td>
+                <td>${escapeHtml(trade.trade_date)}</td>
+                <td>${escapeHtml(trade.security_id)}</td>
+                <td><span class="badge ${trade.trade_side === 'buy' ? 'bg-success' : 'bg-danger'}">${escapeHtml(trade.trade_side)}</span></td>
+                <td>${Number(trade.quantity).toLocaleString()}</td>
+                <td>${Number(trade.price).toFixed(2)}</td>
+                <td>Tsh ${Number(trade.consideration).toLocaleString()}</td>
+                <td>Tsh ${Number(trade.final_brokerage_fee || 0).toFixed(2)}</td>
+                <td>${statusBadge}</td>
+            </tr>
+        `;
+    });
+    
+    html += `
+                </tbody>
+            </table>
+        </div>
+        <div class="mt-2">
+            <span id="selectedTradesCount">0</span> trades selected for commission calculation
+            ${currentClientTrades.some(t => t.agent_commission_calculated == 1) ? 
+                '<span class="text-muted ms-2">(Some trades already calculated)</span>' : ''}
+        </div>
+    `;
+    
+    body.innerHTML = html;
+    updateSelectedTradesCount();
+}
+
+function toggleTradeSelection(rowId) {
+    const row = document.getElementById(rowId);
+    if (!row) return;
+    
+    const checkbox = row.querySelector('.trade-checkbox');
+    if (!checkbox || checkbox.disabled) return;
+    
+    checkbox.checked = !checkbox.checked;
+    if (checkbox.checked) {
+        row.classList.add('selected');
+    } else {
+        row.classList.remove('selected');
+    }
+    
+    updateSelectedTradesCount();
+    updateSelectAllTradesState();
+}
+
+function toggleAllTrades() {
+    const selectAll = document.getElementById('selectAllTradesCheckbox');
+    if (!selectAll) return;
+    
+    const checkboxes = document.querySelectorAll('.trade-checkbox:not([disabled])');
+    checkboxes.forEach(cb => {
+        cb.checked = selectAll.checked;
+        const row = cb.closest('tr');
+        if (row) {
+            if (selectAll.checked) {
+                row.classList.add('selected');
+            } else {
+                row.classList.remove('selected');
+            }
+        }
+    });
+    
+    updateSelectedTradesCount();
+}
+
+function selectAllTrades() {
+    const checkboxes = document.querySelectorAll('.trade-checkbox:not([disabled])');
+    checkboxes.forEach(cb => {
+        cb.checked = true;
+        const row = cb.closest('tr');
+        if (row) row.classList.add('selected');
+    });
+    updateSelectedTradesCount();
+    updateSelectAllTradesState();
+}
+
+function deselectAllTrades() {
+    const checkboxes = document.querySelectorAll('.trade-checkbox:not([disabled])');
+    checkboxes.forEach(cb => {
+        cb.checked = false;
+        const row = cb.closest('tr');
+        if (row) row.classList.remove('selected');
+    });
+    updateSelectedTradesCount();
+    updateSelectAllTradesState();
+}
+
+function updateSelectedTradesCount() {
+    const count = document.querySelectorAll('.trade-checkbox:checked').length;
+    const display = document.getElementById('selectedTradesCount');
+    if (display) display.textContent = count;
+}
+
+function updateSelectAllTradesState() {
+    const selectAll = document.getElementById('selectAllTradesCheckbox');
+    if (!selectAll) return;
+    
+    const checkboxes = document.querySelectorAll('.trade-checkbox:not([disabled])');
+    if (checkboxes.length === 0) {
+        selectAll.checked = false;
+        selectAll.indeterminate = false;
+        return;
+    }
+    
+    const checkedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
+    
+    if (checkedCount === checkboxes.length) {
+        selectAll.checked = true;
+        selectAll.indeterminate = false;
+    } else if (checkedCount === 0) {
+        selectAll.checked = false;
+        selectAll.indeterminate = false;
+    } else {
+        selectAll.checked = false;
+        selectAll.indeterminate = true;
     }
 }
 
-function selectAllVisibleClients() {
-    document.querySelectorAll('.client-checkbox').forEach(cb => cb.checked = true);
-    const selectAll = document.getElementById('selectAllClients');
-    if (selectAll) selectAll.checked = true;
-}
-
-function deselectAllVisibleClients() {
-    document.querySelectorAll('.client-checkbox').forEach(cb => cb.checked = false);
-    const selectAll = document.getElementById('selectAllClients');
-    if (selectAll) selectAll.checked = false;
+function calculateSelectedTrades() {
+    const checkboxes = document.querySelectorAll('.trade-checkbox:checked');
+    if (checkboxes.length === 0) {
+        alert('Please select at least one trade to calculate commission.');
+        return;
+    }
+    
+    const tradeIds = Array.from(checkboxes).map(cb => cb.value);
+    
+    if (!confirm(`Calculate commission for ${tradeIds.length} trade(s)?`)) {
+        return;
+    }
+    
+    const btn = document.getElementById('calculateSelectedTradesBtn');
+    const originalHtml = btn.innerHTML;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Calculating...';
+    btn.disabled = true;
+    
+    fetch(`?ajax=calculate_commissions&agent_id=<?php echo $selected_agent_id; ?>&trade_ids=${tradeIds.join(',')}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                alert('Error: ' + data.error);
+            } else {
+                alert(data.message);
+                // Refresh the trades list
+                viewClientTrades(currentClientCds);
+            }
+        })
+        .catch(error => {
+            alert('Error calculating commissions: ' + error);
+        })
+        .finally(() => {
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+        });
 }
 
 // =====================================================
@@ -2057,7 +2550,6 @@ function updateSelectedCommissionSummary() {
     checkboxes.forEach(cb => {
         const row = cb.closest('tr');
         const cells = row.querySelectorAll('td');
-        // Find the commission amount cell (usually 8th column, index 7)
         if (cells.length >= 8) {
             const amountText = cells[7].textContent.replace('Tsh ', '').replace(/,/g, '');
             total += parseFloat(amountText) || 0;
@@ -2076,33 +2568,6 @@ function updateSelectedCommissionSummary() {
             `<input type="hidden" name="commission_ids[]" value="${id}">`
         ).join('');
     }
-}
-
-function calculateCommissions(agentId) {
-    if (!confirm('Calculate commissions for all linked clients? This may take a moment.')) return;
-    
-    const btn = event.target;
-    const originalHtml = btn.innerHTML;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Calculating...';
-    btn.disabled = true;
-    
-    fetch(`?ajax=calculate_commissions&agent_id=${agentId}`)
-        .then(response => response.json())
-        .then(data => {
-            if (data.error) {
-                alert('Error: ' + data.error);
-            } else {
-                alert(data.message);
-                window.location.reload();
-            }
-        })
-        .catch(error => {
-            alert('Error calculating commissions: ' + error);
-        })
-        .finally(() => {
-            btn.innerHTML = originalHtml;
-            btn.disabled = false;
-        });
 }
 
 // =====================================================
