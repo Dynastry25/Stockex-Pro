@@ -2,7 +2,7 @@
 /**
  * Agent Management System
  * Location: /trader/agent_management.php
- * Access: Finance Officers, System Admins, Operations, and Traders
+ * Access: All roles with appropriate permissions
  */
 
 require_once '../config/config.php';
@@ -14,7 +14,7 @@ header("X-Content-Type-Options: nosniff");
 header("X-XSS-Protection: 1; mode=block");
 
 // =====================================================
-// ACCESS CONTROL - UPDATED WITH OPERATIONS
+// ACCESS CONTROL - ALL ROLES CAN ACCESS
 // =====================================================
 
 // Check if user is logged in
@@ -24,25 +24,20 @@ $user_role = $_SESSION['role'] ?? '';
 
 // Define roles and permissions
 $finance_roles = ['finance_officer', 'system_admin'];
-$ops_roles = ['operations', 'system_admin', 'finance_officer'];
-$trader_roles = ['trader', 'finance_officer', 'system_admin', 'operations'];
+$all_roles = ['trader', 'operations', 'finance_officer', 'system_admin'];
 
-// Check access based on role
-if (!in_array($user_role, $trader_roles)) {
+// Check access - all logged-in users can access
+if (!in_array($user_role, $all_roles)) {
     show_alert('Access denied. You do not have permission to access this page.', 'danger');
     redirect('dashboard.php');
     exit;
 }
 
-// Determine permissions
+// Determine permissions - ALL USERS CAN DO EVERYTHING EXCEPT PAY COMMISSIONS
 $is_finance = in_array($user_role, $finance_roles);  // Can pay commissions
-$is_ops = in_array($user_role, $ops_roles);          // Can manage clients and agents
-$is_trader = ($user_role === 'trader');              // View only
-
-// Operations can do everything except pay commissions
-$view_only_mode = ($is_trader && !$is_ops && !$is_finance);
-$can_pay_commissions = $is_finance;
-$can_manage = ($is_ops || $is_finance);
+$can_manage = true;  // All users can manage agents and clients
+$can_pay_commissions = $is_finance;  // Only finance can pay commissions
+$view_only_mode = false;  // No view-only mode anymore
 
 // CSRF Protection
 if (session_status() === PHP_SESSION_NONE) {
@@ -602,11 +597,11 @@ function processAgentCommissionPayment($db, $data) {
 }
 
 // =====================================================
-// POST HANDLING
+// POST HANDLING - ALL USERS CAN PERFORM ACTIONS
 // =====================================================
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    // Check permissions based on action
+    // All users can perform actions except paying commissions
     $action = '';
     if (isset($_POST['save_agent'])) $action = 'save_agent';
     if (isset($_POST['link_clients'])) $action = 'link_clients';
@@ -617,10 +612,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     // Only finance can pay commissions
     if ($action === 'pay_commissions' && !in_array($user_role, $finance_roles)) {
         $error_message = "Only Finance Officers can process commission payments.";
-    } 
-    // Operations and Finance can manage agents and clients
-    elseif (in_array($action, ['save_agent', 'link_clients', 'unlink_client', 'calculate_commissions']) && !in_array($user_role, $ops_roles)) {
-        $error_message = "You do not have permission to perform this action.";
     }
     elseif (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         $error_message = "CSRF token validation failed. Please try again.";
@@ -933,6 +924,48 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'calculate_commissions') {
     exit;
 }
 
+if (isset($_GET['ajax']) && $_GET['ajax'] == 'calculate_all_commissions') {
+    header('Content-Type: application/json');
+    $agent_id = (int)$_GET['agent_id'] ?? 0;
+    
+    try {
+        // Get all clients linked to this agent
+        $stmt = $db->prepare("SELECT cds_account FROM clients WHERE agent_id = ? AND linked_to_agent = 1 AND status = 'active'");
+        $stmt->execute([$agent_id]);
+        $clients = $stmt->fetchAll();
+        
+        $calculated = 0;
+        foreach ($clients as $client) {
+            $stmt = $db->prepare("
+                SELECT id FROM trades 
+                WHERE client_cds_account = ? 
+                AND agent_commission_calculated = 0
+                AND status = 'active'
+            ");
+            $stmt->execute([$client['cds_account']]);
+            $trades = $stmt->fetchAll();
+            
+            foreach ($trades as $trade) {
+                if (calculateAndSaveAgentCommission($db, $trade['id'], $agent_id)) {
+                    $calculated++;
+                }
+            }
+        }
+        
+        echo json_encode([
+            'success' => true,
+            'calculated' => $calculated,
+            'message' => "Calculated commissions for $calculated trade(s)"
+        ]);
+    } catch (Exception $e) {
+        echo json_encode([
+            'success' => false,
+            'error' => $e->getMessage()
+        ]);
+    }
+    exit;
+}
+
 // =====================================================
 // GET DATA FOR DISPLAY
 // =====================================================
@@ -963,7 +996,6 @@ if ($selected_agent_id > 0) {
         $selected_agent = $stmt->fetch();
         
         if ($selected_agent) {
-            // Get linked clients - FIXED: This will now work properly
             $agent_clients = getAgentClients($db, $selected_agent_id);
             $agent_commission_summary = getAgentCommissionSummary($db, $selected_agent_id);
             
@@ -982,6 +1014,7 @@ if ($selected_agent_id > 0) {
             
             $unlinked_clients = getUnlinkedClients($db);
             
+            // Only fetch payment methods for finance users
             if ($can_pay_commissions) {
                 $stmt = $db->query("SELECT id, code, description FROM payment_methods WHERE status = 'active' ORDER BY priority");
                 $payment_methods = $stmt->fetchAll();
@@ -1139,25 +1172,25 @@ include '../includes/header.php';
     border-radius: 10px;
 }
 .permission-badge.finance { background: #cce5ff; color: #004085; }
-.permission-badge.ops { background: #d4edda; color: #155724; }
-.permission-badge.trader { background: #fff3cd; color: #856404; }
+.permission-badge.all { background: #d4edda; color: #155724; }
 </style>
 
 <div class="container-fluid">
     
     <!-- Access Notice -->
-    <?php if ($is_trader && !$is_ops && !$is_finance): ?>
-        <div class="alert alert-info alert-dismissible fade show">
-            <i class="bi bi-info-circle me-2"></i>
-            <strong>View-Only Mode:</strong> You are viewing agent information. 
-            Only Operations and Finance can manage agents and clients.
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        </div>
-    <?php elseif ($is_ops && !$is_finance): ?>
+    <?php if ($can_pay_commissions): ?>
         <div class="alert alert-success alert-dismissible fade show">
             <i class="bi bi-check-circle me-2"></i>
-            <strong>Operations Access:</strong> You can manage agents, link clients, and calculate commissions. 
-            <span class="text-warning">Commission payments require Finance approval.</span>
+            <strong>Full Access:</strong> You can manage agents, link clients, calculate commissions, and process payments.
+            <span class="permission-badge finance">Finance Access</span>
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    <?php else: ?>
+        <div class="alert alert-info alert-dismissible fade show">
+            <i class="bi bi-info-circle me-2"></i>
+            <strong>Full Management Access:</strong> You can manage agents, link clients, and calculate commissions.
+            <span class="permission-badge all">Full Access</span>
+            <span class="text-warning ms-2">Commission payments require Finance approval.</span>
             <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
         </div>
     <?php endif; ?>
@@ -1186,25 +1219,18 @@ include '../includes/header.php';
                 <div>
                     <h4 class="mb-0"><i class="bi bi-person-badge text-primary me-2"></i>Agent Management</h4>
                     <small class="text-muted">
-                        <?php if ($can_manage): ?>
-                            Full management (Create, edit, link clients, calculate commissions)
-                            <?php if (!$can_pay_commissions): ?>
-                                <span class="permission-badge ops">Ops Access</span>
-                            <?php else: ?>
-                                <span class="permission-badge finance">Finance Access</span>
-                            <?php endif; ?>
+                        Full management access
+                        <?php if ($can_pay_commissions): ?>
+                            <span class="permission-badge finance">Finance Access</span>
                         <?php else: ?>
-                            View-only access
-                            <span class="permission-badge trader">Trader Access</span>
+                            <span class="permission-badge all">Full Access</span>
                         <?php endif; ?>
                     </small>
                 </div>
                 <div>
-                    <?php if ($can_manage): ?>
-                        <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#agentModal">
-                            <i class="bi bi-plus-circle me-1"></i>New Agent
-                        </button>
-                    <?php endif; ?>
+                    <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#agentModal">
+                        <i class="bi bi-plus-circle me-1"></i>New Agent
+                    </button>
                 </div>
             </div>
         </div>
@@ -1246,7 +1272,7 @@ include '../includes/header.php';
                             <input type="hidden" id="selectedAgentId" value="<?php echo $selected_agent_id; ?>">
                         </div>
                         <div class="col-md-6 text-end">
-                            <?php if ($selected_agent_id > 0 && $can_manage): ?>
+                            <?php if ($selected_agent_id > 0): ?>
                                 <button class="btn btn-outline-primary btn-sm" data-bs-toggle="modal" data-bs-target="#editAgentModal">
                                     <i class="bi bi-pencil me-1"></i>Edit Agent
                                 </button>
@@ -1339,11 +1365,9 @@ include '../includes/header.php';
                             <div class="text-center py-4">
                                 <i class="bi bi-people" style="font-size: 48px; color: #dee2e6;"></i>
                                 <p class="text-muted mt-2">No clients linked to this agent.</p>
-                                <?php if ($can_manage): ?>
-                                    <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#linkClientsModal">
-                                        <i class="bi bi-link-45deg me-1"></i>Link Clients
-                                    </button>
-                                <?php endif; ?>
+                                <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#linkClientsModal">
+                                    <i class="bi bi-link-45deg me-1"></i>Link Clients
+                                </button>
                             </div>
                         <?php else: ?>
                             <div class="table-responsive">
@@ -1365,24 +1389,20 @@ include '../includes/header.php';
                                                 <td><?php echo date('d/m/Y H:i', strtotime($client['linked_at'] ?? 'now')); ?></td>
                                                 <td>
                                                     <?php echo ($client['calculated_trades'] ?? 0); ?> / <?php echo ($client['total_trades'] ?? 0); ?>
-                                                    <?php if ($can_manage): ?>
-                                                        <button class="btn btn-outline-info btn-sm ms-1" onclick="viewClientTrades('<?php echo htmlspecialchars($client['cds_account']); ?>')" title="View Trades">
-                                                            <i class="bi bi-eye"></i>
-                                                        </button>
-                                                    <?php endif; ?>
+                                                    <button class="btn btn-outline-info btn-sm ms-1" onclick="viewClientTrades('<?php echo htmlspecialchars($client['cds_account']); ?>')" title="View Trades">
+                                                        <i class="bi bi-eye"></i>
+                                                    </button>
                                                 </td>
                                                 <td>
-                                                    <?php if ($can_manage): ?>
-                                                        <form method="POST" style="display:inline;" onsubmit="return confirm('Unlink this client from the agent?')">
-                                                            <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
-                                                            <input type="hidden" name="unlink_client" value="1">
-                                                            <input type="hidden" name="agent_id" value="<?php echo $selected_agent_id; ?>">
-                                                            <input type="hidden" name="client_cds" value="<?php echo htmlspecialchars($client['cds_account']); ?>">
-                                                            <button type="submit" class="btn btn-outline-danger btn-sm">
-                                                                <i class="bi bi-link-45deg"></i> Unlink
-                                                            </button>
-                                                        </form>
-                                                    <?php endif; ?>
+                                                    <form method="POST" style="display:inline;" onsubmit="return confirm('Unlink this client from the agent?')">
+                                                        <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
+                                                        <input type="hidden" name="unlink_client" value="1">
+                                                        <input type="hidden" name="agent_id" value="<?php echo $selected_agent_id; ?>">
+                                                        <input type="hidden" name="client_cds" value="<?php echo htmlspecialchars($client['cds_account']); ?>">
+                                                        <button type="submit" class="btn btn-outline-danger btn-sm">
+                                                            <i class="bi bi-link-45deg"></i> Unlink
+                                                        </button>
+                                                    </form>
                                                 </td>
                                             </tr>
                                         <?php endforeach; ?>
@@ -1426,11 +1446,9 @@ include '../includes/header.php';
                             <div class="text-center py-4">
                                 <i class="bi bi-currency-dollar" style="font-size: 48px; color: #dee2e6;"></i>
                                 <p class="text-muted mt-2">No commissions found for this agent.</p>
-                                <?php if ($can_manage): ?>
-                                    <button class="btn btn-warning btn-sm" onclick="calculateAllCommissions(<?php echo $selected_agent_id; ?>)">
-                                        <i class="bi bi-calculator me-1"></i>Calculate All Commissions
-                                    </button>
-                                <?php endif; ?>
+                                <button class="btn btn-warning btn-sm" onclick="calculateAllCommissions(<?php echo $selected_agent_id; ?>)">
+                                    <i class="bi bi-calculator me-1"></i>Calculate All Commissions
+                                </button>
                             </div>
                         <?php else: ?>
                             <div class="table-responsive">
@@ -1778,7 +1796,7 @@ include '../includes/header.php';
     </div>
 </div>
 
-<!-- Link Clients Modal - WITH FILTER AND CLICK SELECT -->
+<!-- Link Clients Modal -->
 <div class="modal fade" id="linkClientsModal" tabindex="-1">
     <div class="modal-dialog modal-xl">
         <div class="modal-content">
@@ -1820,11 +1838,9 @@ include '../includes/header.php';
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                <?php if ($can_manage): ?>
-                    <button type="button" class="btn btn-warning" id="calculateSelectedTradesBtn" onclick="calculateSelectedTrades()">
-                        <i class="bi bi-calculator me-1"></i>Calculate Commission for Selected
-                    </button>
-                <?php endif; ?>
+                <button type="button" class="btn btn-warning" id="calculateSelectedTradesBtn" onclick="calculateSelectedTrades()">
+                    <i class="bi bi-calculator me-1"></i>Calculate Commission for Selected
+                </button>
             </div>
         </div>
     </div>
@@ -2409,18 +2425,14 @@ function renderClientTrades(trades) {
     let html = `
         <div class="mb-3">
             <span class="text-muted">Found <strong>${trades.length}</strong> trades. Select trades to calculate commission.</span>
-            <?php if ($can_manage): ?>
             <button class="btn btn-sm btn-outline-primary ms-2" onclick="selectAllTrades()">Select All</button>
             <button class="btn btn-sm btn-outline-secondary ms-1" onclick="deselectAllTrades()">Deselect All</button>
-            <?php endif; ?>
         </div>
         <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
             <table class="table table-sm table-hover">
                 <thead class="sticky-top bg-white">
                     <tr>
-                        <?php if ($can_manage): ?>
                         <th style="width:40px;"><input type="checkbox" id="selectAllTradesCheckbox" onchange="toggleAllTrades()"></th>
-                        <?php endif; ?>
                         <th>Trade Ref</th>
                         <th>Date</th>
                         <th>Security</th>
@@ -2443,14 +2455,12 @@ function renderClientTrades(trades) {
         
         const rowId = 'trade_' + index;
         html += `
-            <tr id="${rowId}" class="trade-row ${isCalculated ? 'calculated' : ''}" <?php if ($can_manage): ?>onclick="toggleTradeSelection('${rowId}')"<?php endif; ?>>
-                <?php if ($can_manage): ?>
+            <tr id="${rowId}" class="trade-row ${isCalculated ? 'calculated' : ''}" onclick="toggleTradeSelection('${rowId}')">
                 <td>
                     <input type="checkbox" class="trade-checkbox" value="${trade.id}" 
                            onclick="event.stopPropagation();" 
                            ${isCalculated ? 'disabled' : ''}>
                 </td>
-                <?php endif; ?>
                 <td><code>${escapeHtml(trade.trade_reference)}</code></td>
                 <td>${escapeHtml(trade.trade_date)}</td>
                 <td>${escapeHtml(trade.security_id)}</td>
