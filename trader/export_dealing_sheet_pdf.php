@@ -473,7 +473,7 @@ $pdf->SetTextColor(0, 0, 0);
 
 $pdf->Ln(3);
 
-// ========== SECTION 4: BROKER BANK DETAILS (BUY ONLY) - COMPACT ==========
+// ========== SECTION 4: BROKER BANK DETAILS (BUY ONLY) - SINGLE COLUMN ==========
 if (!$is_sell && $broker_bank_details) { // Only for BUY orders
     $pdf->SetFont('helvetica', 'B', 9);
     $pdf->SetFillColor(230, 230, 230);
@@ -483,36 +483,36 @@ if (!$is_sell && $broker_bank_details) { // Only for BUY orders
     $pdf->SetTextColor(150, 0, 0);
     $pdf->Cell(0, 4, 'Transfer the NET AMOUNT PAYABLE to:', 0, 1, 'L');
     $pdf->SetTextColor(0, 0, 0);
+    $pdf->Ln(1);
     
-    // Compact bank details in two columns
-    $pdf->SetFont('helvetica', '', 7.5);
-    $pdf->Cell(35, 4, 'Bank:', 0, 0);
-    $pdf->SetFont('helvetica', 'B', 7.5);
-    $pdf->Cell(70, 4, $broker_bank_details['bank_name'] ?? 'N/A', 0, 0);
-    $pdf->SetFont('helvetica', '', 7.5);
-    $pdf->Cell(25, 4, 'Account No:', 0, 0);
-    $pdf->SetFont('helvetica', 'B', 7.5);
-    $pdf->Cell(0, 4, $broker_bank_details['account_number'] ?? 'N/A', 0, 1);
+    // Single column bank details
+    $pdf->SetFont('helvetica', '', 8);
+    $pdf->Cell(35, 5, 'Bank:', 0, 0);
+    $pdf->SetFont('helvetica', 'B', 8);
+    $pdf->Cell(0, 5, $broker_bank_details['bank_name'] ?? 'N/A', 0, 1);
     
-    $pdf->SetFont('helvetica', '', 7.5);
-    $pdf->Cell(35, 4, 'Account Name:', 0, 0);
-    $pdf->SetFont('helvetica', 'B', 7.5);
-    $pdf->Cell(70, 4, $broker_bank_details['account_name'] ?? 'N/A', 0, 0);
+    $pdf->SetFont('helvetica', '', 8);
+    $pdf->Cell(35, 5, 'Account Name:', 0, 0);
+    $pdf->SetFont('helvetica', 'B', 8);
+    $pdf->Cell(0, 5, $broker_bank_details['account_name'] ?? 'N/A', 0, 1);
     
-    if (!empty($broker_bank_details['swift_code'])) {
-        $pdf->SetFont('helvetica', '', 7.5);
-        $pdf->Cell(25, 4, 'SWIFT:', 0, 0);
-        $pdf->SetFont('helvetica', 'B', 7.5);
-        $pdf->Cell(0, 4, $broker_bank_details['swift_code'], 0, 1);
-    } else {
-        $pdf->Cell(0, 4, '', 0, 1);
-    }
+    $pdf->SetFont('helvetica', '', 8);
+    $pdf->Cell(35, 5, 'Account Number:', 0, 0);
+    $pdf->SetFont('helvetica', 'B', 8);
+    $pdf->Cell(0, 5, $broker_bank_details['account_number'] ?? 'N/A', 0, 1);
     
     if (!empty($broker_bank_details['branch_name'])) {
-        $pdf->SetFont('helvetica', '', 7.5);
-        $pdf->Cell(35, 4, 'Branch:', 0, 0);
-        $pdf->SetFont('helvetica', 'B', 7.5);
-        $pdf->Cell(0, 4, $broker_bank_details['branch_name'], 0, 1);
+        $pdf->SetFont('helvetica', '', 8);
+        $pdf->Cell(35, 5, 'Branch:', 0, 0);
+        $pdf->SetFont('helvetica', 'B', 8);
+        $pdf->Cell(0, 5, $broker_bank_details['branch_name'], 0, 1);
+    }
+    
+    if (!empty($broker_bank_details['swift_code'])) {
+        $pdf->SetFont('helvetica', '', 8);
+        $pdf->Cell(35, 5, 'SWIFT Code:', 0, 0);
+        $pdf->SetFont('helvetica', 'B', 8);
+        $pdf->Cell(0, 5, $broker_bank_details['swift_code'], 0, 1);
     }
     
     $pdf->SetFont('helvetica', 'I', 6);
@@ -520,25 +520,27 @@ if (!$is_sell && $broker_bank_details) { // Only for BUY orders
     $pdf->Cell(0, 4, 'Reference: Use Sheet Reference as payment reference', 0, 1, 'L');
     $pdf->SetTextColor(0, 0, 0);
     
-    $pdf->Ln(30);
+    $pdf->Ln(2);
 }
 
 // ========== SIGNATURES - SQUEEZED ==========
-$pdf->Ln(1);
 $pdf->SetFont('helvetica', 'B', 9);
 $pdf->Cell(70, 5, 'Prepared By:', 0, 0);
 $pdf->Cell(70, 5, 'Checked By:', 0, 0);
 $pdf->Cell(0, 5, 'Approved By:', 0, 1);
 
 $pdf->SetLineWidth(0.2);
-$pdf->Line(15, $pdf->GetY() + 6, 70, $pdf->GetY() + 6);
-$pdf->Line(85, $pdf->GetY() + 6, 140, $pdf->GetY() + 6);
-$pdf->Line(150, $pdf->GetY() + 6, 195, $pdf->GetY() + 6);
+$y_pos = $pdf->GetY();
+$pdf->Line(15, $y_pos + 6, 70, $y_pos + 6);
+$pdf->Line(85, $y_pos + 6, 140, $y_pos + 6);
+$pdf->Line(150, $y_pos + 6, 195, $y_pos + 6);
 
 $pdf->SetFont('helvetica', 'I', 7);
 $pdf->Cell(70, 10, $exportedByName, 0, 0, 'L');
 $pdf->Cell(70, 10, '', 0, 0, 'L');
 $pdf->Cell(0, 10, '', 0, 1, 'L');
+
+$pdf->Ln(2);
 
 // Disclaimer
 $pdf->SetFont('helvetica', 'I', 6);
