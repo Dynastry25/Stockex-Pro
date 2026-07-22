@@ -131,7 +131,7 @@ function calculateFees($asset_class, $consideration, $quantity, $price) {
         // EQUITY/ETF FEES - based on CONSIDERATION
         if ($consideration <= 10000000) {
             $fees['brokerage'] = $consideration * (1.70 / 100);
-            $fees['tier_details'][] = ['fee' => $fees['brokerage'], 'label' => 'Up to 10M @ 1.7000%'];
+            $fees['tier_details'][] = ['fee' => $fees['brokerage'], 'label' => 'Below 10M @ 1.7000%'];
         } elseif ($consideration <= 50000000) {
             $tier1 = 10000000 * (1.70 / 100);
             $tier2 = ($consideration - 10000000) * (1.50 / 100);
