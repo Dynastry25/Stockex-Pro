@@ -195,37 +195,33 @@ if ($is_sell) {
 }
 
 // ============================================
-// BANK DETAILS FOR SALE - NEW FUNCTION
+// BROKER BANK DETAILS FOR BUY ORDERS
 // ============================================
-function getBankDetails($db, $client_id = null) {
-    if ($client_id) {
-        $stmt = $db->prepare("SELECT bank_name, branch, account_name, account_number, swift_code FROM client_bank_details WHERE client_id = ? ORDER BY id DESC LIMIT 1");
-        $stmt->execute([$client_id]);
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ($result) {
-            return $result;
-        }
-    }
-    
-    // Fallback: get default bank details
-    $stmt = $db->query("SELECT bank_name, branch, account_name, account_number, swift_code FROM bank_details LIMIT 1");
+function getBrokerBankDetails($db) {
+    // Try to get active broker bank accounts
+    $stmt = $db->prepare("SELECT bank_name, account_name, account_number, branch_name, swift_code 
+                          FROM banks_accounts 
+                          WHERE status = 'active' AND is_active = '1'
+                          ORDER BY id ASC LIMIT 1");
+    $stmt->execute();
     $result = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    if (!$result) {
-        // Hardcoded defaults if no DB records exist
-        return [
-            'bank_name' => 'CRDB Bank PLC',
-            'branch' => 'Dar es Salaam',
-            'account_name' => 'Neovam Limited',
-            'account_number' => '01-1234567890',
-            'swift_code' => 'CRDBTZTZ'
-        ];
+    if ($result) {
+        return $result;
     }
-    return $result;
+    
+    // Fallback: hardcoded defaults if no DB records exist
+    return [
+        'bank_name' => 'National Microfinance Bank',
+        'account_name' => 'National Microfinance Bank',
+        'account_number' => '0112345678901',
+        'branch_name' => 'Dar es Salaam Main Branch',
+        'swift_code' => 'NMIBTZTZ'
+    ];
 }
 
 // ============================================
-// TRANSACTION FEES - NEW FUNCTION
+// TRANSACTION FEES - based on trade value
 // ============================================
 function calculateTransactionFee($trade_value) {
     if ($trade_value < 100000) {
@@ -240,11 +236,10 @@ function calculateTransactionFee($trade_value) {
     return 0;
 }
 
-// Get bank details for sale orders
-$bank_details = null;
-if ($is_sell) {
-    $client_id = $sheet['client_id'] ?? null;
-    $bank_details = getBankDetails($db, $client_id);
+// Get broker bank details for BUY orders
+$broker_bank_details = null;
+if (!$is_sell) { // BUY order
+    $broker_bank_details = getBrokerBankDetails($db);
 }
 
 // Calculate transaction fee
@@ -463,8 +458,10 @@ $pdf->Ln(8);
 
 if ($is_sell) {
     $net_amount = $consideration - $total_charges;
+    $net_label = 'NET AMOUNT RECEIVABLE';
 } else {
     $net_amount = $consideration + $total_charges;
+    $net_label = 'NET AMOUNT PAYABLE';
 }
 
 $pdf->SetFont('helvetica', 'B', 12);
@@ -481,38 +478,51 @@ $pdf->SetTextColor(100, 100, 100);
 $pdf->SetTextColor(0, 0, 0);
 $pdf->Ln(8);
 
-// ========== SECTION 4: BANK DETAILS (SELL ONLY) ==========
-if ($is_sell && $bank_details) {
+// ========== SECTION 4: BROKER BANK DETAILS (BUY ONLY) ==========
+if (!$is_sell && $broker_bank_details) { // Only for BUY orders
     $pdf->SetFont('helvetica', 'B', 11);
     $pdf->SetFillColor(230, 230, 230);
-    $pdf->Cell(0, 8, '4. BANK PAYMENT DETAILS', 0, 1, 'L', true);
+    $pdf->Cell(0, 8, '4. PAYMENT INSTRUCTIONS - BROKER BANK DETAILS', 0, 1, 'L', true);
+    
+    $pdf->SetFont('helvetica', 'B', 9);
+    $pdf->SetTextColor(150, 0, 0);
+    $pdf->Cell(0, 6, 'Please transfer the NET AMOUNT PAYABLE to the following bank account:', 0, 1, 'L');
+    $pdf->SetTextColor(0, 0, 0);
+    $pdf->Ln(2);
     
     $pdf->SetFont('helvetica', '', 9);
-    $pdf->Cell(45, 6, 'Bank Name:', 0, 0);
+    $pdf->Cell(45, 7, 'Bank Name:', 0, 0);
     $pdf->SetFont('helvetica', 'B', 9);
-    $pdf->Cell(0, 6, $bank_details['bank_name'] ?? 'N/A', 0, 1);
+    $pdf->Cell(0, 7, $broker_bank_details['bank_name'] ?? 'N/A', 0, 1);
     
     $pdf->SetFont('helvetica', '', 9);
-    $pdf->Cell(45, 6, 'Branch:', 0, 0);
+    $pdf->Cell(45, 7, 'Account Name:', 0, 0);
     $pdf->SetFont('helvetica', 'B', 9);
-    $pdf->Cell(0, 6, $bank_details['branch'] ?? 'N/A', 0, 1);
+    $pdf->Cell(0, 7, $broker_bank_details['account_name'] ?? 'N/A', 0, 1);
     
     $pdf->SetFont('helvetica', '', 9);
-    $pdf->Cell(45, 6, 'Account Name:', 0, 0);
+    $pdf->Cell(45, 7, 'Account Number:', 0, 0);
     $pdf->SetFont('helvetica', 'B', 9);
-    $pdf->Cell(0, 6, $bank_details['account_name'] ?? 'N/A', 0, 1);
+    $pdf->Cell(0, 7, $broker_bank_details['account_number'] ?? 'N/A', 0, 1);
     
-    $pdf->SetFont('helvetica', '', 9);
-    $pdf->Cell(45, 6, 'Account Number:', 0, 0);
-    $pdf->SetFont('helvetica', 'B', 9);
-    $pdf->Cell(0, 6, $bank_details['account_number'] ?? 'N/A', 0, 1);
-    
-    if (!empty($bank_details['swift_code'])) {
+    if (!empty($broker_bank_details['branch_name'])) {
         $pdf->SetFont('helvetica', '', 9);
-        $pdf->Cell(45, 6, 'SWIFT Code:', 0, 0);
+        $pdf->Cell(45, 7, 'Branch:', 0, 0);
         $pdf->SetFont('helvetica', 'B', 9);
-        $pdf->Cell(0, 6, $bank_details['swift_code'], 0, 1);
+        $pdf->Cell(0, 7, $broker_bank_details['branch_name'], 0, 1);
     }
+    
+    if (!empty($broker_bank_details['swift_code'])) {
+        $pdf->SetFont('helvetica', '', 9);
+        $pdf->Cell(45, 7, 'SWIFT Code:', 0, 0);
+        $pdf->SetFont('helvetica', 'B', 9);
+        $pdf->Cell(0, 7, $broker_bank_details['swift_code'], 0, 1);
+    }
+    
+    $pdf->SetFont('helvetica', 'I', 7);
+    $pdf->SetTextColor(100, 100, 100);
+    $pdf->Cell(0, 5, 'Reference: Please use the Sheet Reference number as payment reference.', 0, 1, 'L');
+    $pdf->SetTextColor(0, 0, 0);
     
     $pdf->Ln(4);
 }
