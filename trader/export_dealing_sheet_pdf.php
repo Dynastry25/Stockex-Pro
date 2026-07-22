@@ -183,17 +183,6 @@ $is_bond = ($sheet['asset_class'] === 'bond');
 $trade_side = strtoupper($sheet['order_type'] ?? 'BUY');
 $is_sell = ($trade_side === 'SELL');
 
-// CORRECTED FORMULA: 
-// For BUY: Total Payable = Consideration + Total Charges
-// For SELL: Total Receivable = Consideration - Total Charges
-if ($is_sell) {
-    $net_amount = $consideration - $fees['total'];
-    $net_label = 'NET AMOUNT RECEIVABLE';
-} else {
-    $net_amount = $consideration + $fees['total'];
-    $net_label = 'NET AMOUNT PAYABLE';
-}
-
 // ============================================
 // BROKER BANK DETAILS FOR BUY ORDERS
 // ============================================
@@ -221,7 +210,7 @@ function getBrokerBankDetails($db) {
 }
 
 // ============================================
-// TRANSACTION FEES - based on trade value
+// TRANSACTION FEES - based on trade value (ONLY FOR SELL)
 // ============================================
 function calculateTransactionFee($trade_value) {
     if ($trade_value < 100000) {
@@ -242,8 +231,24 @@ if (!$is_sell) { // BUY order
     $broker_bank_details = getBrokerBankDetails($db);
 }
 
-// Calculate transaction fee
-$transaction_fee = calculateTransactionFee($consideration);
+// Calculate transaction fee - ONLY FOR SELL
+$transaction_fee = 0;
+if ($is_sell) {
+    $transaction_fee = calculateTransactionFee($consideration);
+}
+
+// CORRECTED FORMULA: 
+// For BUY: Total Payable = Consideration + Total Charges (NO transaction fee)
+// For SELL: Total Receivable = Consideration - Total Charges (WITH transaction fee)
+if ($is_sell) {
+    $total_charges = $fees['total'] + $transaction_fee;
+    $net_amount = $consideration - $total_charges;
+    $net_label = 'NET AMOUNT RECEIVABLE';
+} else {
+    $total_charges = $fees['total']; // No transaction fee for BUY
+    $net_amount = $consideration + $total_charges;
+    $net_label = 'NET AMOUNT PAYABLE';
+}
 
 // ============================================
 // PDF CLASS
@@ -438,15 +443,16 @@ $pdf->Cell(100, 5, 'CDS Fee', 0, 0, 'L');
 $pdf->Cell(45, 5, $cds_label, 0, 0, 'R');
 $pdf->Cell(40, 5, number_format($fees['csd'], 2), 0, 1, 'R');
 
-// Transaction Fee (flat fee based on trade value)
-$pdf->Cell(100, 5, 'Transaction Processing Fee', 0, 0, 'L');
-$pdf->Cell(45, 5, 'Flat Fee', 0, 0, 'R');
-$pdf->Cell(40, 5, number_format($transaction_fee, 2), 0, 1, 'R');
+// Transaction Fee - ONLY FOR SELL
+if ($is_sell) {
+    $pdf->Cell(100, 5, 'Transaction Processing Fee', 0, 0, 'L');
+    $pdf->Cell(45, 5, 'Flat Fee', 0, 0, 'R');
+    $pdf->Cell(40, 5, number_format($transaction_fee, 2), 0, 1, 'R');
+}
 
 $pdf->Line(15, $pdf->GetY(), 195, $pdf->GetY());
 
 // Total Charges
-$total_charges = $fees['total'] + $transaction_fee;
 $pdf->SetFont('helvetica', 'B', 9);
 $pdf->Cell(145, 7, 'TOTAL CHARGES', 0, 0, 'R');
 $pdf->Cell(40, 7, number_format($total_charges, 2), 0, 1, 'R');
@@ -457,14 +463,6 @@ $pdf->Ln(2);
 $pdf->SetLineWidth(0.5);
 $pdf->Line(15, $pdf->GetY() + 2, 195, $pdf->GetY() + 2);
 $pdf->Ln(5);
-
-if ($is_sell) {
-    $net_amount = $consideration - $total_charges;
-    $net_label = 'NET AMOUNT RECEIVABLE';
-} else {
-    $net_amount = $consideration + $total_charges;
-    $net_label = 'NET AMOUNT PAYABLE';
-}
 
 $pdf->SetFont('helvetica', 'B', 11);
 $pdf->Cell(120, 7, $net_label . ':', 0, 0, 'R');
@@ -525,23 +523,22 @@ if (!$is_sell && $broker_bank_details) { // Only for BUY orders
     $pdf->Ln(2);
 }
 
-// ========== SIGNATURES ==========
-$pdf->Ln(2);
+// ========== SIGNATURES - SQUEEZED ==========
+$pdf->Ln(1);
 $pdf->SetFont('helvetica', 'B', 9);
-$pdf->Cell(70, 6, 'Prepared By:', 0, 0);
-$pdf->Cell(70, 6, 'Checked By:', 0, 0);
-$pdf->Cell(0, 6, 'Approved By:', 0, 1);
+$pdf->Cell(70, 5, 'Prepared By:', 0, 0);
+$pdf->Cell(70, 5, 'Checked By:', 0, 0);
+$pdf->Cell(0, 5, 'Approved By:', 0, 1);
 
 $pdf->SetLineWidth(0.2);
-$pdf->Line(15, $pdf->GetY() + 8, 70, $pdf->GetY() + 8);
-$pdf->Line(85, $pdf->GetY() + 8, 140, $pdf->GetY() + 8);
-$pdf->Line(150, $pdf->GetY() + 8, 195, $pdf->GetY() + 8);
+$pdf->Line(15, $pdf->GetY() + 6, 70, $pdf->GetY() + 6);
+$pdf->Line(85, $pdf->GetY() + 6, 140, $pdf->GetY() + 6);
+$pdf->Line(150, $pdf->GetY() + 6, 195, $pdf->GetY() + 6);
 
 $pdf->SetFont('helvetica', 'I', 7);
-$pdf->Cell(70, 12, $exportedByName, 0, 0, 'L');
-$pdf->Cell(70, 12, '', 0, 0, 'L');
-$pdf->Cell(0, 12, '', 0, 1, 'L');
-$pdf->Ln(4);
+$pdf->Cell(70, 10, $exportedByName, 0, 0, 'L');
+$pdf->Cell(70, 10, '', 0, 0, 'L');
+$pdf->Cell(0, 10, '', 0, 1, 'L');
 
 // Disclaimer
 $pdf->SetFont('helvetica', 'I', 6);
