@@ -520,7 +520,7 @@ if (!$is_sell && $broker_bank_details) { // Only for BUY orders
     $pdf->Cell(0, 4, 'Reference: Use Sheet Reference as payment reference', 0, 1, 'L');
     $pdf->SetTextColor(0, 0, 0);
     
-    $pdf->Ln(20);
+    $pdf->Ln(28);
 }
 
 // ========== SIGNATURES - SQUEEZED ==========
