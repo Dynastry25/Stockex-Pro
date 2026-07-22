@@ -202,7 +202,7 @@ function getBrokerBankDetails($db) {
     // Fallback: hardcoded defaults if no DB records exist
     return [
         'bank_name' => 'National Microfinance Bank',
-        'account_name' => 'National Microfinance Bank',
+        'account_name' => 'VICTORY FINANCIAL SERVICES LTD',
         'account_number' => '0112345678901',
         'branch_name' => 'Dar es Salaam Main Branch',
         'swift_code' => 'NMIBTZTZ'
