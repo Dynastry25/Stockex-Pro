@@ -1,9 +1,9 @@
 <?php
 /**
- * Export Dealing Sheet as PDF
+ * Export Order Sheet as PDF
  * Separate file to avoid conflicts with main page
  * 
- * Usage: export_dealing_sheet_pdf.php?id=123
+ * Usage: export_order_sheet_pdf.php?id=123
  */
 
 // Error reporting for debugging (disable in production)
@@ -19,7 +19,7 @@ while (ob_get_level() > 0) {
 
 // Check if ID is provided
 if (!isset($_GET['id']) || !is_numeric($_GET['id'])) {
-    die('Invalid request. No dealing sheet ID provided.');
+    die('Invalid request. No order sheet ID provided.');
 }
 
 $sheet_id = (int) $_GET['id'];
@@ -52,17 +52,17 @@ if ($user_role !== 'system_admin') {
 $db = getDBConnection();
 $current_user = get_logged_in_user() ?: get_session_user();
 
-// Get the dealing sheet data
-function getDealingSheetById($db, $id) {
+// Get the order sheet data
+function getOrderSheetById($db, $id) {
     $stmt = $db->prepare("SELECT * FROM dealing_sheets WHERE id = ?");
     $stmt->execute([$id]);
     return $stmt->fetch(PDO::FETCH_ASSOC);
 }
 
-$sheet = getDealingSheetById($db, $sheet_id);
+$sheet = getOrderSheetById($db, $sheet_id);
 
 if (!$sheet) {
-    die('Dealing sheet not found.');
+    die('Order sheet not found.');
 }
 
 // Get company details
@@ -195,9 +195,65 @@ if ($is_sell) {
 }
 
 // ============================================
+// BANK DETAILS FOR SALE - NEW FUNCTION
+// ============================================
+function getBankDetails($db, $client_id = null) {
+    if ($client_id) {
+        $stmt = $db->prepare("SELECT bank_name, branch, account_name, account_number, swift_code FROM client_bank_details WHERE client_id = ? ORDER BY id DESC LIMIT 1");
+        $stmt->execute([$client_id]);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($result) {
+            return $result;
+        }
+    }
+    
+    // Fallback: get default bank details
+    $stmt = $db->query("SELECT bank_name, branch, account_name, account_number, swift_code FROM bank_details LIMIT 1");
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$result) {
+        // Hardcoded defaults if no DB records exist
+        return [
+            'bank_name' => 'CRDB Bank PLC',
+            'branch' => 'Dar es Salaam',
+            'account_name' => 'Neovam Limited',
+            'account_number' => '01-1234567890',
+            'swift_code' => 'CRDBTZTZ'
+        ];
+    }
+    return $result;
+}
+
+// ============================================
+// TRANSACTION FEES - NEW FUNCTION
+// ============================================
+function calculateTransactionFee($trade_value) {
+    if ($trade_value < 100000) {
+        return 250;
+    } elseif ($trade_value >= 100000 && $trade_value < 10000000) {
+        return 2000;
+    } elseif ($trade_value >= 10000000 && $trade_value < 50000000) {
+        return 6000;
+    } elseif ($trade_value >= 50000000) {
+        return 12000;
+    }
+    return 0;
+}
+
+// Get bank details for sale orders
+$bank_details = null;
+if ($is_sell) {
+    $client_id = $sheet['client_id'] ?? null;
+    $bank_details = getBankDetails($db, $client_id);
+}
+
+// Calculate transaction fee
+$transaction_fee = calculateTransactionFee($consideration);
+
+// ============================================
 // PDF CLASS
 // ============================================
-class DealingSheetPDF extends TCPDF {
+class OrderSheetPDF extends TCPDF {
     use ReportHeaderTrait;
     
     private $company_name = '';
@@ -220,11 +276,11 @@ class DealingSheetPDF extends TCPDF {
 }
 
 // Create PDF
-$pdf = new DealingSheetPDF('P', 'mm', 'A4', true, 'UTF-8', false);
+$pdf = new OrderSheetPDF('P', 'mm', 'A4', true, 'UTF-8', false);
 $pdf->setCompanyName($company_name);
 $pdf->SetCreator($company_name);
 $pdf->SetAuthor($exportedByName);
-$pdf->SetTitle('Dealing Sheet - ' . ($sheet['sheet_reference'] ?? ''));
+$pdf->SetTitle('Order Sheet - ' . ($sheet['sheet_reference'] ?? ''));
 $pdf->SetMargins(15, 30, 15);
 $pdf->SetHeaderMargin(5);
 $pdf->SetFooterMargin(10);
@@ -237,23 +293,14 @@ $pdf->AddPage();
 
 // Title
 $pdf->SetFont('helvetica', 'B', 16);
-$pdf->Cell(0, 8, 'DEALING SHEET (INTERNAL USE)', 0, 1, 'C');
+$pdf->Cell(0, 8, 'ORDER SHEET (INTERNAL USE)', 0, 1, 'C');
 $pdf->Ln(3);
 
-// Document info
+// Document info - REMOVED broker_code and department
 $pdf->SetFont('helvetica', '', 9);
 $pdf->Cell(50, 5, 'Sheet Reference:', 0, 0);
 $pdf->SetFont('helvetica', 'B', 9);
 $pdf->Cell(60, 5, $sheet['sheet_reference'] ?? 'N/A', 0, 0);
-$pdf->SetFont('helvetica', '', 9);
-$pdf->Cell(40, 5, 'Broker Code:', 0, 0);
-$pdf->SetFont('helvetica', 'B', 9);
-$pdf->Cell(0, 5, $sheet['broker_code'] ?? $company_code, 0, 1);
-
-$pdf->SetFont('helvetica', '', 9);
-$pdf->Cell(50, 5, 'Department:', 0, 0);
-$pdf->SetFont('helvetica', 'B', 9);
-$pdf->Cell(60, 5, 'Operations', 0, 0);
 $pdf->SetFont('helvetica', '', 9);
 $pdf->Cell(40, 5, 'Date:', 0, 0);
 $pdf->SetFont('helvetica', 'B', 9);
@@ -297,9 +344,10 @@ $pdf->Cell(45, 7, 'Asset Class:', 0, 0);
 $pdf->SetFont('helvetica', 'B', 10);
 $pdf->Cell(50, 7, ucfirst($sheet['asset_class']), 0, 0);
 $pdf->SetFont('helvetica', '', 10);
-$pdf->Cell(40, 7, 'Security:', 0, 0);
+$pdf->Cell(40, 7, 'Security Code:', 0, 0);
 $pdf->SetFont('helvetica', 'B', 10);
-$pdf->Cell(0, 7, $sheet['security_id'] . ' - ' . ($sheet['security_name'] ?? ''), 0, 1);
+// MODIFIED: Security Code only, no name
+$pdf->Cell(0, 7, $sheet['security_id'] ?? 'N/A', 0, 1);
 
 $pdf->SetFont('helvetica', '', 10);
 $pdf->Cell(45, 7, 'Quantity:', 0, 0);
@@ -321,16 +369,15 @@ $pdf->Cell(45, 7, 'Consideration Value:', 0, 0);
 $pdf->SetFont('helvetica', 'B', 10);
 $pdf->Cell(50, 7, 'TZS ' . number_format($consideration, 2), 0, 0);
 $pdf->SetFont('helvetica', '', 10);
-$pdf->Cell(40, 7, 'Order Date/Time:', 0, 0);
+$pdf->Cell(40, 7, 'Order Date:', 0, 0);
 $pdf->SetFont('helvetica', 'B', 10);
-$order_datetime = ($sheet['order_date'] ?? date('Y-m-d')) . ' ' . ($sheet['order_time'] ?? '');
-$pdf->Cell(0, 7, date('d/m/Y H:i', strtotime($order_datetime)), 0, 1);
+// REMOVED order time, only date
+$order_date = date('d/m/Y', strtotime($sheet['order_date'] ?? date('Y-m-d')));
+$pdf->Cell(0, 7, $order_date, 0, 1);
 
 $pdf->Ln(4);
 
-
-
-// ========== SECTION 4: FEES AND CHARGES ==========
+// ========== SECTION 3: FEES AND CHARGES ==========
 $pdf->SetFont('helvetica', 'B', 11);
 $pdf->SetFillColor(230, 230, 230);
 $pdf->Cell(0, 8, '3. FEES AND CHARGES', 0, 1, 'L', true);
@@ -394,12 +441,18 @@ $pdf->Cell(100, 6, 'CDS Fee', 0, 0, 'L');
 $pdf->Cell(45, 6, $cds_label, 0, 0, 'R');
 $pdf->Cell(40, 6, number_format($fees['csd'], 2), 0, 1, 'R');
 
+// Transaction Fee (flat fee based on trade value)
+$pdf->Cell(100, 6, 'Transaction Processing Fee', 0, 0, 'L');
+$pdf->Cell(45, 6, 'Flat Fee', 0, 0, 'R');
+$pdf->Cell(40, 6, number_format($transaction_fee, 2), 0, 1, 'R');
+
 $pdf->Line(15, $pdf->GetY(), 195, $pdf->GetY());
 
 // Total Charges
+$total_charges = $fees['total'] + $transaction_fee;
 $pdf->SetFont('helvetica', 'B', 10);
 $pdf->Cell(145, 8, 'TOTAL CHARGES', 0, 0, 'R');
-$pdf->Cell(40, 8, number_format($fees['total'], 2), 0, 1, 'R');
+$pdf->Cell(40, 8, number_format($total_charges, 2), 0, 1, 'R');
 
 $pdf->Ln(4);
 
@@ -407,6 +460,12 @@ $pdf->Ln(4);
 $pdf->SetLineWidth(0.5);
 $pdf->Line(15, $pdf->GetY() + 4, 195, $pdf->GetY() + 4);
 $pdf->Ln(8);
+
+if ($is_sell) {
+    $net_amount = $consideration - $total_charges;
+} else {
+    $net_amount = $consideration + $total_charges;
+}
 
 $pdf->SetFont('helvetica', 'B', 12);
 $pdf->Cell(120, 8, $net_label . ':', 0, 0, 'R');
@@ -420,16 +479,47 @@ $pdf->SetFont('helvetica', 'I', 7);
 $pdf->SetTextColor(100, 100, 100);
 
 $pdf->SetTextColor(0, 0, 0);
-$pdf->Ln(12);
+$pdf->Ln(8);
 
-// ========== REMARKS ==========
-
-
-// ========== SIGNATURES ==========
+// ========== SECTION 4: BANK DETAILS (SELL ONLY) ==========
+if ($is_sell && $bank_details) {
+    $pdf->SetFont('helvetica', 'B', 11);
+    $pdf->SetFillColor(230, 230, 230);
+    $pdf->Cell(0, 8, '4. BANK PAYMENT DETAILS', 0, 1, 'L', true);
+    
+    $pdf->SetFont('helvetica', '', 9);
+    $pdf->Cell(45, 6, 'Bank Name:', 0, 0);
+    $pdf->SetFont('helvetica', 'B', 9);
+    $pdf->Cell(0, 6, $bank_details['bank_name'] ?? 'N/A', 0, 1);
+    
+    $pdf->SetFont('helvetica', '', 9);
+    $pdf->Cell(45, 6, 'Branch:', 0, 0);
+    $pdf->SetFont('helvetica', 'B', 9);
+    $pdf->Cell(0, 6, $bank_details['branch'] ?? 'N/A', 0, 1);
+    
+    $pdf->SetFont('helvetica', '', 9);
+    $pdf->Cell(45, 6, 'Account Name:', 0, 0);
+    $pdf->SetFont('helvetica', 'B', 9);
+    $pdf->Cell(0, 6, $bank_details['account_name'] ?? 'N/A', 0, 1);
+    
+    $pdf->SetFont('helvetica', '', 9);
+    $pdf->Cell(45, 6, 'Account Number:', 0, 0);
+    $pdf->SetFont('helvetica', 'B', 9);
+    $pdf->Cell(0, 6, $bank_details['account_number'] ?? 'N/A', 0, 1);
+    
+    if (!empty($bank_details['swift_code'])) {
+        $pdf->SetFont('helvetica', '', 9);
+        $pdf->Cell(45, 6, 'SWIFT Code:', 0, 0);
+        $pdf->SetFont('helvetica', 'B', 9);
+        $pdf->Cell(0, 6, $bank_details['swift_code'], 0, 1);
+    }
+    
+    $pdf->Ln(4);
+}
 
 $pdf->Ln(4);
 
-
+// ========== SIGNATURES ==========
 $pdf->SetFont('helvetica', 'B', 9);
 $pdf->Cell(70, 6, 'Prepared By:', 0, 0);
 $pdf->Cell(70, 6, 'Checked By:', 0, 0);
@@ -449,13 +539,13 @@ $pdf->Ln(8);
 // Disclaimer
 $pdf->SetFont('helvetica', 'I', 6);
 $pdf->SetTextColor(120, 120, 120);
-$disclaimer = "This Dealing Sheet is for internal use only. It does not constitute a contract note or official trade confirmation. " .
+$disclaimer = "This Order Sheet is for internal use only. It does not constitute a contract note or official trade confirmation. " .
               "All trades are subject to the Rules, Regulations and Customs of the Dar es Salaam Stock Exchange.";
 $pdf->MultiCell(0, 3, $disclaimer, 0, 'C');
 $pdf->SetTextColor(0, 0, 0);
 
 // Output PDF
-$filename = 'dealing_sheet_' . preg_replace('/[^a-zA-Z0-9_-]/', '_', $sheet['sheet_reference'] ?? 'export') . '.pdf';
+$filename = 'order_sheet_' . preg_replace('/[^a-zA-Z0-9_-]/', '_', $sheet['sheet_reference'] ?? 'export') . '.pdf';
 $pdf->Output($filename, 'I');
 exit;
 ?>
