@@ -293,7 +293,7 @@ $pdf->AddPage();
 
 // Title
 $pdf->SetFont('helvetica', 'B', 16);
-$pdf->Cell(0, 8, 'ORDER SHEET (INTERNAL USE)', 0, 1, 'C');
+$pdf->Cell(0, 8, 'ORDER SHEET', 0, 1, 'C');
 $pdf->Ln(2);
 
 // Document info - REMOVED broker_code and department
@@ -520,7 +520,7 @@ if (!$is_sell && $broker_bank_details) { // Only for BUY orders
     $pdf->Cell(0, 4, 'Reference: Use Sheet Reference as payment reference', 0, 1, 'L');
     $pdf->SetTextColor(0, 0, 0);
     
-    $pdf->Ln(12);
+    $pdf->Ln(20);
 }
 
 // ========== SIGNATURES - SQUEEZED ==========
