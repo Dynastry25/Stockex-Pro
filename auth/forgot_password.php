@@ -74,8 +74,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'reque
             $_SESSION['otp_user_id'] = $user['id'];
             $_SESSION['otp_email'] = $email;
             $_SESSION['otp_step'] = 2;
-            unset($_SESSION['csrf_token']);
-            $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 
             $mail = new PHPMailer(true);
             $email_sent = false;
@@ -170,8 +168,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'verif
             $db->prepare("UPDATE password_otps SET verified = 1 WHERE id = ?")->execute([$rec['id']]);
             $_SESSION['otp_step'] = 3;
             $_SESSION['otp_verified'] = true;
-            unset($_SESSION['csrf_token']);
-            $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
             $step = 3;
             $success_message = "OTP verified! Set your new password.";
         }
@@ -374,7 +370,7 @@ $page_title = 'Forgot Password';
                         </button>
                     </div>
                     <div class="text-center">
-                        <a href="?cancel=1" class="text-decoration-none small"><i class="bi bi-arrow-left me-1"></i> Back to Login</a>
+                        <a href="login.php" class="text-decoration-none small"><i class="bi bi-arrow-left me-1"></i> Back to Login</a>
                     </div>
                 </form>
 
