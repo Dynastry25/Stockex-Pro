@@ -16,8 +16,7 @@ $results = [];
 error_log("TEST 1: Database Connection");
 try {
     require_once __DIR__ . '/../../config/database.php';
-    $database = new Database();
-    $db = $database->getConnection();
+    $db = getDBConnection();
     
     if ($db) {
         $results['database'] = ['status' => 'OK', 'message' => 'Connected successfully'];
@@ -109,8 +108,7 @@ try {
 error_log("TEST 3: Test Insert Statement");
 try {
     require_once __DIR__ . '/../../config/database.php';
-    $database = new Database();
-    $db = $database->getConnection();
+    $db = getDBConnection();
     
     // Get company ID
     $stmt = $db->prepare("SELECT id FROM stock_companies WHERE symbol = 'CRDB' LIMIT 1");
@@ -192,8 +190,7 @@ try {
 error_log("TEST 4: Check Existing Stock Prices");
 try {
     require_once __DIR__ . '/../../config/database.php';
-    $database = new Database();
-    $db = $database->getConnection();
+    $db = getDBConnection();
     
     $stmt = $db->query("
         SELECT symbol, COUNT(*) as count, MAX(trading_date) as latest_date

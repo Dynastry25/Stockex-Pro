@@ -57,8 +57,7 @@ if (file_exists(__DIR__ . '/../../config/database.php')) {
     require_once __DIR__ . '/../../config/database.php';
     
     try {
-        $database = new Database();
-        $db = $database->getConnection();
+        $db = getDBConnection();
         if ($db) {
             echo "<br><span class='check'>✓ Database connection successful</span>";
         } else {

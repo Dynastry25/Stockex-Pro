@@ -56,6 +56,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     $success_message = 'Profile updated successfully.';
                     // Update session data
                     $_SESSION['full_name'] = $full_name;
+                    // Clear cached user data so next get_logged_in_user() fetches fresh
+                    clear_user_cache();
                     // Refresh user data
                     $user = get_logged_in_user();
                 } else {

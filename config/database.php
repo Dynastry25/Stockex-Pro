@@ -55,8 +55,12 @@ class Database {
     }
 }
 
-// Database connection helper function
+// Database connection helper function (singleton - reuses same PDO per request)
 function getDBConnection() {
-    $database = new Database();
-    return $database->getConnection();
+    static $conn = null;
+    if ($conn === null) {
+        $database = new Database();
+        $conn = $database->getConnection();
+    }
+    return $conn;
 }

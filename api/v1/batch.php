@@ -43,8 +43,7 @@ if (!in_array($_SERVER['REQUEST_METHOD'], ['GET', 'POST'])) {
 
 try {
     // Get database connection
-    $database = new Database();
-    $db = $database->getConnection();
+    $db = getDBConnection();
     
     if (!$db) {
         sendError('Database connection failed', 500);

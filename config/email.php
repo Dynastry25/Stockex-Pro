@@ -79,7 +79,7 @@ function configureMailer($mail) {
         };
     }
 
-    if (file_exists(DKIM_PRIVATE_KEY_FILE)) {
+    if (!empty(DKIM_DOMAIN) && !empty(DKIM_SELECTOR) && file_exists(DKIM_PRIVATE_KEY_FILE)) {
         $mail->DKIM_domain = DKIM_DOMAIN;
         $mail->DKIM_selector = DKIM_SELECTOR;
         $mail->DKIM_private_string = file_get_contents(DKIM_PRIVATE_KEY_FILE);
@@ -91,7 +91,7 @@ function configureMailer($mail) {
         $mail->DKIM_extraHeaders = ['List-Unsubscribe', 'X-Mailer'];
         error_log('DKIM signing enabled for domain: ' . DKIM_DOMAIN);
     } else {
-        error_log('DKIM private key not found at: ' . DKIM_PRIVATE_KEY_FILE . ' - emails will NOT be DKIM-signed');
+        error_log('DKIM signing skipped: domain=' . DKIM_DOMAIN . ' selector=' . DKIM_SELECTOR);
     }
 
     $mail->setFrom(SMTP_FROM_EMAIL, SMTP_FROM_NAME);
