@@ -536,23 +536,47 @@ if (isset($_GET['delete_receipt'])) {
 if (isset($_POST['approve_trade'])) {
     $trade_id = (int)$_POST['trade_id'];
     $action = $_POST['approve_action'] ?? 'approve';
-    $is_approved = ($action === 'approve') ? 1 : 2;
     
-    $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+    // Get the trade's group info (client_name, security_id, trade_date)
+    $stmt = $db->prepare("SELECT client_name, security_id, trade_date FROM trades WHERE id = ?");
     $stmt->execute([$trade_id]);
+    $trade_info = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    if ($stmt->fetch()) {
-        $stmt = $db->prepare("UPDATE numeric_trade_receipts SET is_approved = ?, approved_by = ?, approved_at = NOW() WHERE trade_id = ? AND trade_type = 'trade'");
-        $stmt->execute([$is_approved, $user_name, $trade_id]);
+    if ($trade_info) {
+        // Find ALL trades in the same group
+        $stmt = $db->prepare("SELECT id FROM trades WHERE client_name = ? AND security_id = ? AND DATE(trade_date) = DATE(?)");
+        $stmt->execute([$trade_info['client_name'], $trade_info['security_id'], $trade_info['trade_date']]);
+        $group_trade_ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        
+        foreach ($group_trade_ids as $gid) {
+            if ($action === 'disapprove') {
+                // Reset back to pending
+                $db->prepare("UPDATE numeric_trade_receipts SET is_approved = 0, approved_by = ?, approved_at = NOW() WHERE trade_id = ? AND trade_type = 'trade'")->execute([$user_name, $gid]);
+                $db->prepare("UPDATE trades SET approval_status = 'pending' WHERE id = ?")->execute([$gid]);
+            } else {
+                $is_approved = ($action === 'approve') ? 1 : 2;
+                $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+                $stmt->execute([$gid]);
+                
+                if ($stmt->fetch()) {
+                    $stmt = $db->prepare("UPDATE numeric_trade_receipts SET is_approved = ?, approved_by = ?, approved_at = NOW() WHERE trade_id = ? AND trade_type = 'trade'");
+                    $stmt->execute([$is_approved, $user_name, $gid]);
+                } else {
+                    $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, is_approved, approved_by, approved_at) VALUES (?, 'trade', ?, ?, NOW())");
+                    $stmt->execute([$gid, $is_approved, $user_name]);
+                }
+                
+                $status = ($action === 'approve') ? 'approved' : 'rejected';
+                $db->prepare("UPDATE trades SET approval_status = ? WHERE id = ?")->execute([$status, $gid]);
+            }
+        }
+        
+        $msg = ($action === 'disapprove') ? 'Disapproved' : ucfirst($action) . 'd';
+        $_SESSION['alert'] = [$msg . ' ' . count($group_trade_ids) . ' trade(s) successfully!', 'success'];
     } else {
-        $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, is_approved, approved_by, approved_at) VALUES (?, 'trade', ?, ?, NOW())");
-        $stmt->execute([$trade_id, $is_approved, $user_name]);
+        $_SESSION['alert'] = ['Trade not found.', 'danger'];
     }
     
-    $status = ($action === 'approve') ? 'approved' : 'rejected';
-    $db->prepare("UPDATE trades SET approval_status = ? WHERE id = ?")->execute([$status, $trade_id]);
-    
-    $_SESSION['alert'] = [ucfirst($action) . 'd successfully!', 'success'];
     header('Location: dealing_sheet.php?' . http_build_query(array_filter([
         'filter' => $_GET['filter'] ?? 'pending',
         'asset_class' => $_GET['asset_class'] ?? 'all',
@@ -725,15 +749,24 @@ $stats = ['total' => 0, 'pending' => 0, 'approved' => 0, 'rejected' => 0];
 try {
     $stmt = $db->query("
         SELECT 
-            COUNT(DISTINCT CONCAT(client_name, '|', security_id, '|', DATE(trade_date))) as total,
-            SUM(CASE WHEN tr.is_approved IS NULL OR tr.is_approved = 0 THEN 1 ELSE 0 END) as pending,
-            SUM(CASE WHEN tr.is_approved = 1 THEN 1 ELSE 0 END) as approved,
-            SUM(CASE WHEN tr.is_approved = 2 THEN 1 ELSE 0 END) as rejected
-        FROM trades t
-        LEFT JOIN numeric_trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
-        WHERE t.additional_reference REGEXP '^[0-9]+$'
-        AND t.additional_reference IS NOT NULL
-        AND t.additional_reference != ''
+            COUNT(*) as total,
+            SUM(CASE WHEN grp_pending > 0 THEN 1 ELSE 0 END) as pending,
+            SUM(CASE WHEN grp_approved > 0 AND grp_pending = 0 THEN 1 ELSE 0 END) as approved,
+            SUM(CASE WHEN grp_rejected > 0 AND grp_pending = 0 THEN 1 ELSE 0 END) as rejected
+        FROM (
+            SELECT 
+                CONCAT(t.client_name, '|', t.security_id, '|', DATE(t.trade_date)) as grp,
+                SUM(CASE WHEN tr.is_approved IS NULL OR tr.is_approved = 0 THEN 1 ELSE 0 END) as grp_pending,
+                SUM(CASE WHEN tr.is_approved = 1 THEN 1 ELSE 0 END) as grp_approved,
+                SUM(CASE WHEN tr.is_approved = 2 THEN 1 ELSE 0 END) as grp_rejected
+            FROM trades t
+            LEFT JOIN numeric_trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
+            WHERE t.additional_reference REGEXP '^[0-9]+$'
+            AND t.additional_reference IS NOT NULL
+            AND t.additional_reference != ''
+            AND ((t.asset_class = 'bond') OR (t.asset_class IN ('equity', 'Exchange Traded Funds') AND LOWER(t.trade_side) = 'buy'))
+            GROUP BY grp
+        ) sub
     ");
     $stats = $stmt->fetch(PDO::FETCH_ASSOC) ?: $stats;
 } catch (Exception $e) {
@@ -1283,6 +1316,36 @@ include '../includes/header.php';
                                     </td>
                                     <td class="text-end">
                                         <div class="btn-group btn-group-sm">
+                                            <?php 
+                                            $payment_files = !empty($trade['payment_receipt']) ? array_map('trim', explode(',', $trade['payment_receipt'])) : [];
+                                            $commission_files = !empty($trade['commission_receipt']) ? array_map('trim', explode(',', $trade['commission_receipt'])) : [];
+                                            $payment_files = array_filter($payment_files);
+                                            $commission_files = array_filter($commission_files);
+                                            $receipt_data = [];
+                                            foreach ($payment_files as $pf) {
+                                                $receipt_data[] = ['url' => getReceiptUrl($pf), 'type' => 'payment', 'is_image' => isImageReceipt($pf), 'name' => basename($pf)];
+                                            }
+                                            foreach ($commission_files as $cf) {
+                                                $receipt_data[] = ['url' => getReceiptUrl($cf), 'type' => 'commission', 'is_image' => isImageReceipt($cf), 'name' => basename($cf)];
+                                            }
+                                            ?>
+                                            <button class="btn btn-outline-info" onclick="viewTrade(this)" 
+                                                data-id="<?php echo $trade['id']; ?>"
+                                                data-client="<?php echo htmlspecialchars($trade['client_name']); ?>"
+                                                data-security="<?php echo htmlspecialchars($trade['security_name'] ?? $trade['security_id']); ?>"
+                                                data-side="<?php echo htmlspecialchars($trade['trade_side']); ?>"
+                                                data-qty="<?php echo number_format($trade['quantity'] ?? 0); ?>"
+                                                data-price="<?php echo number_format($trade['price'] ?? 0, ($isBond ? 6 : 2)); ?>"
+                                                data-value="<?php echo number_format($trade['consideration'] ?? 0, 2); ?>"
+                                                data-date="<?php echo htmlspecialchars($trade['trade_date'] ?? ''); ?>"
+                                                data-ref="<?php echo htmlspecialchars($trade['additional_reference'] ?? ''); ?>"
+                                                data-fee-type="<?php echo htmlspecialchars($trade['brokerage_fee_type'] ?? 'normal'); ?>"
+                                                data-status="<?php echo $statusText; ?>"
+                                                data-receipts="<?php echo htmlspecialchars(json_encode($receipt_data)); ?>"
+                                                data-comment="<?php echo htmlspecialchars($trade['receipt_comment'] ?? ''); ?>"
+                                                title="View Trade Details">
+                                                <i class="bi bi-eye"></i>
+                                            </button>
                                             <?php if ($isApproved !== 1): ?>
                                                 <button class="btn btn-outline-secondary" onclick="openUpload(<?php echo $trade['id']; ?>, 'payment')" title="Upload Payment">
                                                     <i class="bi bi-cash"></i>
@@ -1311,6 +1374,16 @@ include '../includes/header.php';
                                                     </button>
                                                 </form>
                                             <?php endif; ?>
+                                            <?php if ($user_role === 'finance_officer' && $isApproved === 1): ?>
+                                                <form method="POST" style="display:inline" onsubmit="return confirm('Disapprove and revert to pending?')">
+                                                    <input type="hidden" name="trade_id" value="<?php echo $trade['id']; ?>">
+                                                    <input type="hidden" name="approve_trade" value="1">
+                                                    <input type="hidden" name="approve_action" value="disapprove">
+                                                    <button type="submit" class="btn btn-outline-warning" title="Disapprove">
+                                                        <i class="bi bi-arrow-counterclockwise"></i>
+                                                    </button>
+                                                </form>
+                                            <?php endif; ?>
                                         </div>
                                     </td>
                                 </tr>
@@ -1319,6 +1392,73 @@ include '../includes/header.php';
                     </table>
                 </div>
             <?php endif; ?>
+        </div>
+    </div>
+</div>
+
+<!-- View Trade Modal -->
+<div class="modal fade" id="viewTradeModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-info text-white">
+                <h5 class="modal-title"><i class="bi bi-eye me-2"></i>Trade Details</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="text-muted small d-block">Client</label>
+                        <strong id="vt_client"></strong>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="text-muted small d-block">Security</label>
+                        <strong id="vt_security"></strong>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="text-muted small d-block">Side</label>
+                        <strong id="vt_side"></strong>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="text-muted small d-block">Quantity</label>
+                        <strong id="vt_qty"></strong>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="text-muted small d-block">Price</label>
+                        <strong id="vt_price"></strong>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="text-muted small d-block">Value (TZS)</label>
+                        <strong id="vt_value"></strong>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="text-muted small d-block">Trade Date</label>
+                        <strong id="vt_date"></strong>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="text-muted small d-block">Reference</label>
+                        <strong id="vt_ref"></strong>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="text-muted small d-block">Fee Type</label>
+                        <strong id="vt_fee_type"></strong>
+                    </div>
+                    <div class="col-md-12">
+                        <label class="text-muted small d-block">Status</label>
+                        <span class="badge" id="vt_status"></span>
+                    </div>
+                    <div class="col-12">
+                        <label class="text-muted small d-block">Attached Files</label>
+                        <div id="vt_receipts" class="d-flex flex-wrap gap-2"></div>
+                    </div>
+                    <div class="col-12" id="vt_comment_row" style="display:none;">
+                        <label class="text-muted small d-block">Comment</label>
+                        <div id="vt_comment" class="bg-light p-2 rounded"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
         </div>
     </div>
 </div>
@@ -1399,6 +1539,79 @@ function viewReceipt(url) {
     }
     
     new bootstrap.Modal(document.getElementById('viewerModal')).show();
+}
+
+// View trade details
+function viewTrade(btn) {
+    const d = btn.dataset;
+    document.getElementById('vt_client').textContent = d.client;
+    document.getElementById('vt_security').textContent = d.security;
+    
+    const sideEl = document.getElementById('vt_side');
+    sideEl.textContent = d.side;
+    sideEl.className = d.side === 'SELL' ? 'text-danger fw-bold' : 'text-success fw-bold';
+    
+    document.getElementById('vt_qty').textContent = d.qty;
+    document.getElementById('vt_price').textContent = 'TZS ' + d.price;
+    document.getElementById('vt_value').textContent = 'TZS ' + d.value;
+    document.getElementById('vt_date').textContent = d.date;
+    document.getElementById('vt_ref').textContent = d.ref || '-';
+    document.getElementById('vt_fee_type').textContent = d.feeType === 'liberty' ? 'Liberty' : 'Normal';
+    
+    const statusEl = document.getElementById('vt_status');
+    statusEl.textContent = d.status;
+    statusEl.className = 'badge bg-' + (d.status === 'Approved' ? 'success' : d.status === 'Rejected' ? 'danger' : 'warning text-dark');
+    
+    // Render receipts
+    const receiptsEl = document.getElementById('vt_receipts');
+    receiptsEl.innerHTML = '';
+    try {
+        const receipts = JSON.parse(d.receipts || '[]');
+        if (receipts.length === 0) {
+            receiptsEl.innerHTML = '<span class="text-muted">No files attached</span>';
+        } else {
+            receipts.forEach(function(r) {
+                const wrapper = document.createElement('div');
+                wrapper.style.cssText = 'position:relative;display:inline-block;border:1px solid #dee2e6;border-radius:8px;overflow:hidden;';
+                
+                const typeBadge = document.createElement('span');
+                typeBadge.textContent = r.type === 'payment' ? 'Payment' : 'Commission';
+                typeBadge.style.cssText = 'position:absolute;top:2px;left:2px;z-index:2;font-size:10px;padding:1px 5px;border-radius:4px;color:#fff;' + (r.type === 'payment' ? 'background:#0d6efd;' : 'background:#6c757d;');
+                
+                if (r.is_image) {
+                    const img = document.createElement('img');
+                    img.src = r.url;
+                    img.style.cssText = 'width:80px;height:80px;object-fit:cover;cursor:pointer;display:block;';
+                    img.onclick = function() { viewReceipt(r.url); };
+                    wrapper.appendChild(typeBadge);
+                    wrapper.appendChild(img);
+                } else {
+                    const link = document.createElement('a');
+                    link.href = r.url;
+                    link.target = '_blank';
+                    link.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;width:80px;height:80px;text-decoration:none;color:#dc3545;';
+                    link.innerHTML = '<i class="bi bi-file-earmark-pdf" style="font-size:28px;"></i><small style="font-size:9px;color:#666;">PDF</small>';
+                    wrapper.appendChild(typeBadge);
+                    wrapper.appendChild(link);
+                }
+                receiptsEl.appendChild(wrapper);
+            });
+        }
+    } catch(e) {
+        receiptsEl.innerHTML = '<span class="text-muted">No files attached</span>';
+    }
+    
+    // Comment
+    const commentEl = document.getElementById('vt_comment');
+    const commentRow = document.getElementById('vt_comment_row');
+    if (d.comment && d.comment.trim()) {
+        commentEl.textContent = d.comment;
+        commentRow.style.display = '';
+    } else {
+        commentRow.style.display = 'none';
+    }
+    
+    new bootstrap.Modal(document.getElementById('viewTradeModal')).show();
 }
 
 // Open upload modal

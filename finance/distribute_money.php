@@ -331,7 +331,7 @@ try {
         FROM receipts r
         LEFT JOIN receipt_distributions rd ON r.id = rd.receipt_id
         WHERE r.money_distribution = 'yes'
-        AND r.receipt_date BETWEEN ? AND ?
+        AND r.receipt_date >= ? AND r.receipt_date < DATE_ADD(?, INTERVAL 1 DAY)
         ORDER BY r.receipt_date DESC
     ");
     $receipts_stmt->execute([$start_date, $end_date]);
@@ -343,7 +343,7 @@ try {
 }
 
 // Fetch distribution activities with filters - FIXED QUERY
-$filter_conditions = ["da.distributed_at BETWEEN ? AND ?"];
+$filter_conditions = ["da.distributed_at >= ?", "da.distributed_at < DATE_ADD(?, INTERVAL 1 DAY)"];
 $filter_params = [$start_date, $end_date];
 
 if (!empty($receipt_no_filter)) {
@@ -371,7 +371,7 @@ try {
     // First, let's try a simpler query to see if we get any data
     $test_query = "
         SELECT COUNT(*) as count FROM distribution_activities da
-        WHERE da.distributed_at BETWEEN ? AND ?
+        WHERE da.distributed_at >= ? AND da.distributed_at < DATE_ADD(?, INTERVAL 1 DAY)
     ";
     $test_stmt = $db->prepare($test_query);
     $test_stmt->execute([$start_date, $end_date]);
@@ -696,7 +696,7 @@ include '../includes/header.php';
                             <div class="col-md-6">
                                 <label class="form-label">Distribution Type</label>
                                 <select class="form-select form-control-sm" name="distribution_type">
-                                    <option value="trade">Trade (Buy/Sell Shares)</option>
+                                    <option value="trade">Trade (Buy Share)</option>
                                     <option value="expense">Expense</option>
                                     <option value="investment">Investment</option>
                                     <option value="other">Other</option>
