@@ -351,8 +351,8 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
                                      coa.account_name
                                      FROM general_ledger gl
                                      LEFT JOIN chart_of_accounts coa ON gl.account_code = coa.account_code
-                                     WHERE (gl.entity_id = ? OR (gl.entity_name != '' AND gl.entity_name IS NOT NULL AND gl.entity_name LIKE ?))";
-                        $gl_params = [$entity_id, '%' . $entity_name . '%'];
+                                     WHERE ((gl.entity_id = ? AND gl.entity_type = ?) OR (gl.entity_name != '' AND gl.entity_name IS NOT NULL AND gl.entity_name LIKE ? AND gl.entity_type = ?))";
+                        $gl_params = [$entity_id, $entity_type, '%' . $entity_name . '%', $entity_type];
                         if ($start_date && $end_date) {
                             $gl_query .= " AND gl.transaction_date BETWEEN ? AND ?";
                             $gl_params[] = $start_date;

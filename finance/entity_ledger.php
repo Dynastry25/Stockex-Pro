@@ -431,9 +431,9 @@ function getEntityTransactions($db, $entity_type, $entity_id, $start_date = null
                             gl.created_by,
                             'GL Entry' as source_label
                          FROM general_ledger gl
-                         WHERE (gl.entity_id = ? OR (gl.entity_name != '' AND gl.entity_name IS NOT NULL AND gl.entity_name LIKE ?))
+                         WHERE ((gl.entity_id = ? AND gl.entity_type = ?) OR (gl.entity_name != '' AND gl.entity_name IS NOT NULL AND gl.entity_name LIKE ? AND gl.entity_type = ?))
                          AND gl.status = 'active'";
-            $gl_params = [$entity_id, '%' . $entity_name . '%'];
+            $gl_params = [$entity_id, $entity_type, '%' . $entity_name . '%', $entity_type];
         }
         
         // Add date filters
