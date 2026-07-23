@@ -13,15 +13,14 @@ $emp_stmt = $db->prepare("
     SELECT u.id as employee_id, u.first_name, u.last_name, d.name as department_name
     FROM users u
     LEFT JOIN departments d ON u.department_id = d.id
-    WHERE u.id = ? AND u.employee_id IS NOT NULL
+    WHERE u.id = ?
     LIMIT 1
 ");
 $emp_stmt->execute([$user['id']]);
 $employee = $emp_stmt->fetch();
 
-// If user is not an employee, redirect with message
 if (!$employee) {
-    show_alert('This page is only available for employees.', 'warning');
+    show_alert('User not found.', 'warning');
     redirect('index.php');
 }
 

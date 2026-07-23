@@ -26,10 +26,12 @@
         // Order Intake badge counts for sidebar
         $order_badge_pending = 0;
         $order_badge_approved = 0;
+        $dealing_sheet_pending = 0;
         try {
             $db = getDBConnection();
             $order_badge_pending = (int)$db->query("SELECT COUNT(*) FROM dealing_sheets WHERE lifecycle_stage = 'order' OR execution_status = 'pending'")->fetchColumn();
             $order_badge_approved = (int)$db->query("SELECT COUNT(*) FROM dealing_sheets WHERE lifecycle_stage = 'approved'")->fetchColumn();
+            $dealing_sheet_pending = (int)$db->query("SELECT COUNT(*) FROM dealing_sheets WHERE execution_status = 'pending'")->fetchColumn();
         } catch (Exception $e) {}
         ?>
         
@@ -253,6 +255,9 @@
                         <a class="nav-link" href="<?php echo BASE_URL; ?>trader/dealing_sheet.php">
                             <i class="bi bi-journal-check"></i>
                             <span>Dealing Sheet</span>
+                            <?php if ($dealing_sheet_pending > 0): ?>
+                                <span class="badge bg-warning text-dark ms-auto"><?php echo $dealing_sheet_pending; ?></span>
+                            <?php endif; ?>
                         </a>
                     </li>
                     <li class="nav-item">

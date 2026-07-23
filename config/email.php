@@ -71,7 +71,11 @@ function configureMailer($mail) {
     if (SMTP_DEBUG > 0) {
         $mail->SMTPDebug = SMTP_DEBUG;
         $mail->Debugoutput = function ($str, $level) {
-            error_log("PHPMailer [lvl $level]: $str");
+            $log_file = dirname(__DIR__) . '/logs/smtp_debug.log';
+            if (!is_dir(dirname($log_file))) {
+                @mkdir(dirname($log_file), 0755, true);
+            }
+            @file_put_contents($log_file, date('[Y-m-d H:i:s]') . " [lvl $level] " . trim($str) . PHP_EOL, FILE_APPEND);
         };
     }
 

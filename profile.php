@@ -175,12 +175,12 @@ include 'includes/header.php';
             <div class="card-body">
                 <?php 
                 try {
-                    // Check if user is an employee by looking for employee_id in users table
+                    // Get user targets
                     $db = getDBConnection();
                     $emp_stmt = $db->prepare("
                         SELECT id as user_id, id as employee_id 
                         FROM users 
-                        WHERE id = ? AND employee_id IS NOT NULL
+                        WHERE id = ?
                         LIMIT 1
                     ");
                     $emp_stmt->execute([$user['id']]);
