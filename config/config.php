@@ -20,6 +20,7 @@ define('APP_DEBUG', env('APP_DEBUG', 'false') === 'true');
 define('BASE_URL', rtrim(env('BASE_URL', env('APP_URL', 'http://localhost')), '/') . '/');
 define('UPLOAD_PATH', 'uploads/');
 define('MAX_FILE_SIZE', 50 * 1024 * 1024); // 50MB in bytes
+define('STORAGE_PATH', sys_get_temp_dir());
 
 // --- Available Departments ---
 // Define all available departments in the system

@@ -31,22 +31,8 @@ $company_phone = $company ? $company['phone'] : '+255 746 177 230';
 $company_address = $company ? $company['address'] : 'P.O BOX 36098 Kigamboni, Dar es Salaam';
 $company_email = $company ? $company['email'] : 'info@neovam.com';
 
-// Ensure temp directory exists and is writable
-$temp_dir = dirname(__FILE__) . '/../temp';
-if (!file_exists($temp_dir)) {
-    if (!mkdir($temp_dir, 0755, true)) {
-        error_log("Failed to create temp directory: $temp_dir");
-        $error_message = "Failed to create temporary directory. Please create folder 'temp' manually.";
-    } else {
-        error_log("Created temp directory: $temp_dir");
-    }
-}
-
-// Check if temp directory is writable
-if (file_exists($temp_dir) && !is_writable($temp_dir)) {
-    error_log("Temp directory not writable: $temp_dir");
-    $error_message = "Temp directory is not writable. Please set permissions to 755.";
-}
+// Use system temp directory - always writable, no permission headaches
+$temp_dir = STORAGE_PATH;
 
 // Function to send email with PHPMailer
 function sendMarketingEmail($to_email, $to_name, $subject, $html_content, $plain_text, $attachment_path = null, $company_name, $from_email, $footer_image = null) {
