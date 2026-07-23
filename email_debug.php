@@ -433,6 +433,7 @@ function sendTestEmail($to, $subject) {
 
         // Possible causes if "sent" but not received
         if ($result) {
+            $fromDomain = substr(strrchr(SMTP_FROM_EMAIL, "@"), 1);
             $summary['possible_issues'] = [
                 'SPF record missing for ' . $fromDomain . ' - Gmail will reject',
                 'DMARC policy is "reject" or "quarantine"',
@@ -766,6 +767,18 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'log') {
             });
         }
         setInterval(refreshLog, 15000);
+
+        // Auto-run DNS check on first page load
+        if (!sessionStorage.getItem('debugLoaded')) {
+            sessionStorage.setItem('debugLoaded', '1');
+            setTimeout(function() {
+                var forms = document.querySelectorAll('form');
+                for (var i = 0; i < forms.length; i++) {
+                    var actionInput = forms[i].querySelector('input[name="action"][value="dns_check"]');
+                    if (actionInput) { forms[i].submit(); break; }
+                }
+            }, 500);
+        }
     </script>
 </body>
 </html>
