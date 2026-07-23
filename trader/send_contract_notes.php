@@ -605,9 +605,10 @@ function sendContractNoteEmail($to_email, $to_name, $subject, $body, $pdf_path, 
         // Apply centralized SMTP + DKIM configuration
         configureMailer($mail);
         
-        // Sender & recipient
-        error_log("Setting From: $from_email, $company_name");
-        $mail->setFrom($from_email, $company_name);
+        // Use relay-authorized From address for deliverability
+        // Company email goes in Reply-To so clients reply to the right address
+        error_log("Setting From: " . SMTP_FROM_EMAIL . ", " . $company_name);
+        $mail->setFrom(SMTP_FROM_EMAIL, $company_name);
         
         error_log("Adding recipient: $to_email, $to_name");
         $mail->addAddress($to_email, $to_name);

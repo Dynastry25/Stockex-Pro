@@ -50,8 +50,9 @@ function sendMarketingEmail($to_email, $to_name, $subject, $html_content, $plain
         // Apply centralized SMTP + DKIM configuration
         configureMailer($mail);
         
-        // Sender & recipient
-        $mail->setFrom($from_email, $company_name);
+        // Use relay-authorized From address for deliverability
+        // Company email goes in Reply-To
+        $mail->setFrom(SMTP_FROM_EMAIL, $company_name);
         $mail->addAddress($to_email, $to_name);
         $mail->addReplyTo($from_email, $company_name);
         
