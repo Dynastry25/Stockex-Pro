@@ -641,9 +641,9 @@ if (isset($_POST['single_payment']) && isset($_POST['trade_id'])) {
                                 payment_no, payment_date, payment_mode, paid_to,
                                 name, record_in_financial, ac_credit,
                                 currency, amount, narration,
-                                created_by_username, created_at, status,
+                                trade_reference, created_by_username, created_at, status,
                                 bank_name, bank_account_number, source_type, source_id
-                            ) VALUES (?, NOW(), ?, ?, ?, 'yes', ?, ?, ?, ?, ?, NOW(), 'active', ?, ?, 'trade_settlement', ?)
+                            ) VALUES (?, NOW(), ?, ?, ?, 'yes', ?, ?, ?, ?, ?, ?, NOW(), 'active', ?, ?, 'trade_settlement', ?)
                         ");
                         
                         $payment_stmt->execute([
@@ -655,6 +655,7 @@ if (isset($_POST['single_payment']) && isset($_POST['trade_id'])) {
                             'Tsh',
                             $amount,
                             $description,
+                            $trade['trade_reference'] ?? null,
                             $username,
                             $bank_account ? $bank_account['bank_name'] : '',
                             $bank_account ? $bank_account['account_number'] : '',
@@ -1525,7 +1526,7 @@ include '../includes/header.php';
                                                 <?php elseif ($trade['settlement_status'] === 'failed'): ?>
                                                     <div class="btn-group btn-group-sm">
                                                         <button type="button" class="btn btn-outline-warning btn-sm" data-bs-toggle="modal" data-bs-target="#failureDetailsModal" 
-                                                                onclick="showFailureDetails(<?php echo $trade['id']; ?>)">
+                                                                 onclick="showFailureDetails(<?php echo $trade['id']; ?>, '<?php echo addslashes($trade['failure_reason'] ?? ''); ?>', '<?php echo addslashes($trade['action_needed'] ?? ''); ?>')">
                                                             <i class="bi bi-info-circle"></i> Details
                                                         </button>
                                                         <button type="button" class="btn btn-outline-success btn-sm" onclick="retryFailed(<?php echo $trade['id']; ?>)">
@@ -1546,7 +1547,7 @@ include '../includes/header.php';
                                                             <i class="bi bi-link"></i> Link
                                                         </button>
                                                         <button type="button" class="btn btn-outline-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-x-lg"></i> Failed
+                                                            <i class="bi bi-x-lg"></i> Cancel
                                                         </button>
                                                         <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
                                                             <i class="bi bi-file-earmark-text"></i>
@@ -1560,7 +1561,7 @@ include '../includes/header.php';
                                                         </button>
                                                         <?php endif; ?>
                                                         <button type="button" class="btn btn-outline-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-x-lg"></i> Failed
+                                                            <i class="bi bi-x-lg"></i> Cancel
                                                         </button>
                                                         <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
                                                             <i class="bi bi-file-earmark-text"></i>
@@ -1699,7 +1700,7 @@ include '../includes/header.php';
                                                             <i class="bi bi-link"></i> Link
                                                         </button>
                                                         <button type="button" class="btn btn-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-x-lg"></i> Failed
+                                                            <i class="bi bi-x-lg"></i> Cancel
                                                         </button>
                                                         <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
                                                             <i class="bi bi-file-earmark-text"></i>
@@ -1713,7 +1714,7 @@ include '../includes/header.php';
                                                         </button>
                                                         <?php endif; ?>
                                                         <button type="button" class="btn btn-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-x-lg"></i> Failed
+                                                            <i class="bi bi-x-lg"></i> Cancel
                                                         </button>
                                                         <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
                                                             <i class="bi bi-file-earmark-text"></i>
@@ -1808,7 +1809,7 @@ include '../includes/header.php';
                                                         </button>
                                                         <?php endif; ?>
                                                         <button type="button" class="btn btn-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-x-lg"></i> Failed
+                                                            <i class="bi bi-x-lg"></i> Cancel
                                                         </button>
                                                         <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
                                                             <i class="bi bi-file-earmark-text"></i>

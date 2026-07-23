@@ -2,6 +2,49 @@
 require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
 require_once '../tcpdf/tcpdf.php';
+require_once '../reports/traits/ReportHeaderTrait.php';
+
+function renderDebtorsPdfHeader($pdf) {
+    $logo_file = __DIR__ . '/../assets/HeaderLogoVfsl.jpg';
+    if (!file_exists($logo_file)) $logo_file = __DIR__ . '/../reports/assets/HeaderLogoVfsl.jpg';
+    
+    $margins = $pdf->getMargins();
+    $lm = $margins['left'];
+    $pw = $pdf->getPageWidth();
+    $lineRight = $pw - $margins['right'];
+
+    if (file_exists($logo_file)) {
+        $pdf->Image($logo_file, $lm + 2, 5, 18, 0, '', '', 'T', false, 300);
+    }
+    $pdf->SetFont('helvetica', 'B', 12);
+    $pdf->SetTextColor(4, 45, 146);
+    $pdf->SetXY($lm, 5);
+    $pdf->Cell(0, 5, 'VICTORY FINANCIAL SERVICES LIMITED', 0, 1, 'C');
+    $pdf->SetFont('helvetica', 'BI', 9);
+    $pdf->SetTextColor(255, 0, 0);
+    $pdf->SetX($lm);
+    $pdf->Cell(0, 4, 'Stockbroker/Dealer, Fund Manager & Investment Advisor', 0, 1, 'C');
+    $pdf->SetFont('helvetica', 'B', 8);
+    $pdf->SetTextColor(4, 45, 146);
+    $pdf->SetX($lm);
+    $pdf->Cell(0, 4, 'Members of the Dar Es Salaam Stock Exchange', 0, 1, 'C');
+    $pdf->SetFont('helvetica', '', 7);
+    $pdf->SetTextColor(4, 45, 146);
+    $pdf->SetX($lm);
+    $pdf->Cell(0, 3, 'House No. 11, Ursino Street, Mikocheni A, P.O Box 8706 - Dar es Salaam', 0, 1, 'C');
+    $pdf->SetFont('helvetica', 'B', 7);
+    $pdf->SetX($lm);
+    $pdf->Cell(0, 3, 'Mob: +255 752 824 977 | Tel: +255 22 211 2691 | Email: info@vfsl.co.tz', 0, 1, 'C');
+    $lineY = $pdf->GetY() + 2;
+    $pdf->SetLineWidth(0.5);
+    $pdf->SetDrawColor(4, 45, 146);
+    $pdf->Line($lm, $lineY, $lineRight, $lineY);
+    $pdf->SetLineWidth(0.3);
+    $pdf->SetDrawColor(255, 0, 0);
+    $pdf->Line($lm, $lineY + 0.8, $lineRight, $lineY + 0.8);
+    $pdf->SetTextColor(0, 0, 0);
+    $pdf->SetY($lineY + 2);
+}
 
 // Security headers
 header("X-Frame-Options: DENY");
@@ -543,6 +586,226 @@ foreach ($all_data as $data) {
 
 // Calculate net balance
 $net_balance = $summary_stats['total_credit_balance'] - $summary_stats['total_debit_balance'];
+
+// ============ EXPORT HANDLERS ============
+if (isset($_GET['export']) && !empty($all_data)) {
+    $export_type = $_GET['export'];
+    $export_date = date('Y-m-d_His');
+    $filename = "Debtors_Report_{$export_date}";
+    
+    // Get ALL data (no pagination) for export
+    $export_result = getAllBalances($db, $entity_type, $as_of_date, $start_date, $end_date, null, 0);
+    $export_data = $export_result['data'];
+    
+    if ($balance_status !== 'all') {
+        $export_data = array_filter($export_data, function($d) use ($balance_status) {
+            $nb = $d['totals']['net_balance'];
+            if ($balance_status === 'credit' && $nb > 0) return true;
+            if ($balance_status === 'debit' && $nb < 0) return true;
+            if ($balance_status === 'settled' && $nb == 0) return true;
+            return false;
+        });
+    }
+    if ($aging_filter !== 'all') {
+        $export_data = array_filter($export_data, function($d) use ($aging_filter) {
+            $or = $d['aging']['overdue_ratio'];
+            if ($aging_filter === 'overdue_high' && $or > 30) return true;
+            if ($aging_filter === 'overdue_medium' && $or > 10 && $or <= 30) return true;
+            if ($aging_filter === 'overdue_low' && $or > 0 && $or <= 10) return true;
+            if ($aging_filter === 'current' && $or == 0) return true;
+            return false;
+        });
+    }
+    $export_data = array_values($export_data);
+    
+    if ($export_type === 'excel') {
+        header('Content-Type: application/vnd.ms-excel; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $filename . '.xls"');
+        header('Pragma: no-cache');
+        header('Expires: 0');
+        echo '<table border="1">';
+        echo '<tr style="background:#1a365d; color:#fff; font-weight:bold;">';
+        echo '<th colspan="10" style="font-size:14px; padding:8px;">DEBTORS & CREDIT TRACKING REPORT — ' . date('d M Y') . '</th>';
+        echo '</tr>';
+        echo '<tr style="background:#e2e8f0; font-weight:bold;">';
+        echo '<th>Type</th><th>Code</th><th>Entity Name</th>';
+        echo '<th>Receipts</th><th>Payments</th><th>Debit Balance</th><th>Credit Balance</th><th>Net Balance</th>';
+        echo '<th>Aging (Current)</th><th>Aging (Overdue)</th>';
+        echo '</tr>';
+        foreach ($export_data as $row) {
+            $ei = $row['entity_info'];
+            $t = $row['totals'];
+            $a = $row['aging'];
+            $nb = $t['net_balance'];
+            $nb_style = $nb > 0 ? 'color:green' : ($nb < 0 ? 'color:red' : '');
+            echo '<tr>';
+            echo '<td>' . ucfirst($ei['type']) . '</td>';
+            echo '<td>' . htmlspecialchars($ei['code']) . '</td>';
+            echo '<td>' . htmlspecialchars($ei['name']) . '</td>';
+            echo '<td style="text-align:right;">' . number_format($t['receipts'], 2) . '</td>';
+            echo '<td style="text-align:right;">' . number_format($t['payments'], 2) . '</td>';
+            echo '<td style="text-align:right;">' . ($t['debit_balance'] > 0 ? number_format($t['debit_balance'], 2) : '-') . '</td>';
+            echo '<td style="text-align:right;">' . ($t['credit_balance'] > 0 ? number_format($t['credit_balance'], 2) : '-') . '</td>';
+            echo '<td style="text-align:right; ' . $nb_style . ';">' . number_format(abs($nb), 2) . '</td>';
+            echo '<td style="text-align:right;">' . number_format($a['buckets']['Current'], 2) . '</td>';
+            echo '<td style="text-align:right;">' . number_format($a['total_overdue'], 2) . '</td>';
+            echo '</tr>';
+        }
+        echo '</table>';
+        exit;
+    }
+    
+    if ($export_type === 'pdf') {
+        set_time_limit(120);
+        $pdf = new TCPDF('L', 'mm', 'A4', true, 'UTF-8', false);
+        $pdf->SetCreator('StockEx Pro');
+        $pdf->SetTitle('Debtors & Credit Tracking Report');
+        $pdf->setHeaderFont(['helvetica', 'B', 9]);
+        $pdf->setFooterFont(['helvetica', '', 8]);
+        $pdf->SetMargins(10, 15, 10);
+        $pdf->SetAutoPageBreak(true, 15);
+        $pdf->SetFont('helvetica', '', 8);
+        $pdf->setPrintHeader(false);
+        $pdf->setPrintFooter(false);
+        $pdf->AddPage();
+        
+        renderDebtorsPdfHeader($pdf);
+        
+        // Report title
+        $pdf->SetFont('helvetica', 'B', 11);
+        $pdf->SetTextColor(4, 45, 146);
+        $pdf->Cell(0, 6, 'Debtors & Credit Tracking Report', 0, 1, 'C');
+        $pdf->SetFont('helvetica', '', 8);
+        $pdf->SetTextColor(100, 100, 100);
+        $pdf->Cell(0, 4, 'As of: ' . date('d M Y', strtotime($as_of_date)) . '  |  Generated: ' . date('d M Y H:i'), 0, 1, 'C');
+        $pdf->Ln(3);
+        
+        // Column widths: A4 landscape = 297mm, margins 10+10 = 20mm, usable = 277mm
+        $col_widths = [20, 16, 54, 27, 27, 27, 27, 29, 25, 25];
+        $headers     = ['Type', 'Code', 'Entity Name', 'Receipts', 'Payments', 'Debit Bal', 'Credit Bal', 'Net Balance', 'Current', 'Overdue'];
+        $aligns      = ['L', 'L', 'L', 'R', 'R', 'R', 'R', 'R', 'R', 'R'];
+        
+        // Table header
+        $pdf->SetDrawColor(0, 0, 0);
+        $pdf->SetFillColor(26, 54, 93);
+        $pdf->SetTextColor(255, 255, 255);
+        $pdf->SetFont('helvetica', 'B', 7);
+        $x = $pdf->GetX();
+        $y = $pdf->GetY();
+        for ($i = 0; $i < count($headers); $i++) {
+            $pdf->SetXY($x, $y);
+            $pdf->Cell($col_widths[$i], 7, $headers[$i], 1, 0, $aligns[$i], true);
+            $x += $col_widths[$i];
+        }
+        $pdf->Ln(7);
+        
+        // Data rows
+        $pdf->SetFont('helvetica', '', 6.5);
+        $pdf->SetDrawColor(0, 0, 0);
+        $row_num = 0;
+        $grand_totals = ['receipts' => 0, 'payments' => 0, 'debit' => 0, 'credit' => 0, 'current' => 0, 'overdue' => 0];
+        
+        foreach ($export_data as $row) {
+            $ei = $row['entity_info'];
+            $t = $row['totals'];
+            $a = $row['aging'];
+            $nb = $t['net_balance'];
+            
+            $grand_totals['receipts'] += $t['receipts'];
+            $grand_totals['payments'] += $t['payments'];
+            $grand_totals['debit'] += $t['debit_balance'];
+            $grand_totals['credit'] += $t['credit_balance'];
+            $grand_totals['current'] += $a['buckets']['Current'];
+            $grand_totals['overdue'] += $a['total_overdue'];
+            
+            $cells = [
+                ucfirst($ei['type']),
+                $ei['code'],
+                $ei['name'],
+                number_format($t['receipts'], 2),
+                number_format($t['payments'], 2),
+                $t['debit_balance'] > 0 ? number_format($t['debit_balance'], 2) : '-',
+                $t['credit_balance'] > 0 ? number_format($t['credit_balance'], 2) : '-',
+                number_format(abs($nb), 2),
+                number_format($a['buckets']['Current'], 2),
+                $a['total_overdue'] > 0 ? number_format($a['total_overdue'], 2) : '-'
+            ];
+            
+            $fill = ($row_num % 2 === 0);
+            if ($fill) {
+                $pdf->SetFillColor(240, 244, 248);
+            }
+            
+            $x = $pdf->GetX();
+            $y = $pdf->GetY();
+            for ($i = 0; $i < count($cells); $i++) {
+                $pdf->SetXY($x, $y);
+                if ($i === 7) {
+                    if ($nb > 0) $pdf->SetTextColor(5, 150, 105);
+                    elseif ($nb < 0) $pdf->SetTextColor(220, 38, 38);
+                    else $pdf->SetTextColor(100, 100, 100);
+                    $pdf->SetFont('helvetica', 'B', 6.5);
+                }
+                $pdf->Cell($col_widths[$i], 5.5, $cells[$i], 1, 0, $aligns[$i], $fill);
+                if ($i === 7) {
+                    $pdf->SetTextColor(0, 0, 0);
+                    $pdf->SetFont('helvetica', '', 6.5);
+                }
+                $x += $col_widths[$i];
+            }
+            $pdf->Ln(5.5);
+            $row_num++;
+            
+            if ($pdf->GetY() > 185) {
+                $pdf->AddPage();
+                renderDebtorsPdfHeader($pdf);
+                $pdf->Ln(3);
+                $pdf->SetDrawColor(0, 0, 0);
+                $pdf->SetFillColor(26, 54, 93);
+                $pdf->SetTextColor(255, 255, 255);
+                $pdf->SetFont('helvetica', 'B', 7);
+                $x = $pdf->GetX();
+                $y = $pdf->GetY();
+                for ($i = 0; $i < count($headers); $i++) {
+                    $pdf->SetXY($x, $y);
+                    $pdf->Cell($col_widths[$i], 7, $headers[$i], 1, 0, $aligns[$i], true);
+                    $x += $col_widths[$i];
+                }
+                $pdf->Ln(7);
+                $pdf->SetFont('helvetica', '', 6.5);
+            }
+        }
+        
+        // Summary totals row
+        $pdf->SetFont('helvetica', 'B', 7);
+        $pdf->SetFillColor(26, 54, 93);
+        $pdf->SetTextColor(255, 255, 255);
+        $summary_cells = [
+            'TOTAL',
+            '',
+            count($export_data) . ' entities',
+            number_format($grand_totals['receipts'], 2),
+            number_format($grand_totals['payments'], 2),
+            number_format($grand_totals['debit'], 2),
+            number_format($grand_totals['credit'], 2),
+            number_format(abs($grand_totals['credit'] - $grand_totals['debit']), 2),
+            number_format($grand_totals['current'], 2),
+            number_format($grand_totals['overdue'], 2)
+        ];
+        $x = $pdf->GetX();
+        $y = $pdf->GetY();
+        for ($i = 0; $i < count($summary_cells); $i++) {
+            $pdf->SetXY($x, $y);
+            $pdf->Cell($col_widths[$i], 7, $summary_cells[$i], 1, 0, $aligns[$i], true);
+            $x += $col_widths[$i];
+        }
+        $pdf->Ln(7);
+        
+        $pdf->SetTextColor(0, 0, 0);
+        $pdf->Output($filename . '.pdf', 'D');
+        exit;
+    }
+}
 
 $page_title = 'Debtors & Credit Tracking';
 include '../includes/header.php';

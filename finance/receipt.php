@@ -58,32 +58,25 @@ function getFiscalPeriod($date) {
 
 function generateReceiptNo($db, $date = null) {
     $prefix = 'RCP';
-    $year = date('Y', strtotime($date ?? 'now'));
-    $month = date('m', strtotime($date ?? 'now'));
-    $day = date('d', strtotime($date ?? 'now'));
     
-    // Format: RCPYYYYMMDDXXXX
-    $base_no = $prefix . $year . $month . $day;
-    
-    // Get last receipt number for this date
+    // Get last receipt number (new format only: RCP + 5 digits)
     $stmt = $db->prepare("
         SELECT receipt_no FROM receipts 
-        WHERE receipt_no LIKE ? 
+        WHERE receipt_no REGEXP '^RCP[0-9]{5}$'
         ORDER BY receipt_no DESC 
         LIMIT 1
     ");
-    $stmt->execute([$base_no . '%']);
+    $stmt->execute();
     $last = $stmt->fetch();
     
     if ($last) {
-        $last_no = $last['receipt_no'];
-        $last_seq = intval(substr($last_no, -4));
-        $new_seq = str_pad($last_seq + 1, 4, '0', STR_PAD_LEFT);
+        $last_seq = intval(substr($last['receipt_no'], strlen($prefix)));
+        $new_seq = str_pad($last_seq + 1, 5, '0', STR_PAD_LEFT);
     } else {
-        $new_seq = '0001';
+        $new_seq = '00001';
     }
     
-    return $base_no . $new_seq;
+    return $prefix . $new_seq;
 }
 
 function generateJournalNo($db) {

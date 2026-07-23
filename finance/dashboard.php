@@ -290,9 +290,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 INSERT INTO payments (
                     payment_date, payment_mode, payment_code, paid_to, name_id, name, ac_credit, 
                     payment_no, currency, account_no, amount, cheque_no,
-                    narration, record_in_financial, created_by, status, source_type, 
+                    narration, trade_reference, record_in_financial, created_by, status, source_type, 
                     bank_name, bank_account_number, pending_pay_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
             ");
             
             $stmt->execute([
@@ -309,6 +309,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $request['amount_paid'],
                 $request['cheque_no'] ?? '',
                 $request['subject'],
+                null,
                 $record_in_financial,
                 $user_id,
                 'pending_pay',

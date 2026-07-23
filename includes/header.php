@@ -27,11 +27,36 @@
         $order_badge_pending = 0;
         $order_badge_approved = 0;
         $dealing_sheet_pending = 0;
+        $settle_due_badge = 0;
         try {
             $db = getDBConnection();
             $order_badge_pending = (int)$db->query("SELECT COUNT(*) FROM dealing_sheets WHERE lifecycle_stage = 'order' OR execution_status = 'pending'")->fetchColumn();
             $order_badge_approved = (int)$db->query("SELECT COUNT(*) FROM dealing_sheets WHERE lifecycle_stage = 'approved'")->fetchColumn();
-            $dealing_sheet_pending = (int)$db->query("SELECT COUNT(*) FROM dealing_sheets WHERE execution_status = 'pending'")->fetchColumn();
+            $dealing_sheet_pending = (int)$db->query("
+                SELECT COUNT(DISTINCT CONCAT(t.client_name, '|', t.security_id, '|', DATE(t.trade_date)))
+                FROM trades t
+                LEFT JOIN numeric_trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
+                WHERE t.additional_reference REGEXP '^[0-9]+$'
+                AND t.additional_reference IS NOT NULL
+                AND t.additional_reference != ''
+                AND ((t.asset_class = 'bond') OR (t.asset_class IN ('equity', 'Exchange Traded Funds') AND LOWER(t.trade_side) = 'buy'))
+                AND (tr.is_approved IS NULL OR tr.is_approved = 0)
+            ")->fetchColumn();
+            $settle_due_badge = (int)$db->query("
+                SELECT COUNT(*) FROM (
+                    SELECT t.client_name, t.client_cds_account, t.security_id, t.security_name, t.asset_class, t.trade_side, DATE(t.trade_date),
+                           MAX(t.settlement_status) as settlement_status,
+                           MIN(t.settlement_date) as settlement_date
+                    FROM trades t
+                    WHERE t.status = 'active'
+                    AND t.settlement_date IS NOT NULL
+                    AND t.settlement_date BETWEEN DATE_SUB(CURDATE(), INTERVAL 30 DAY) AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)
+                    AND t.trade_side = 'sell'
+                    GROUP BY t.client_name, t.client_cds_account, t.security_id, t.security_name, t.asset_class, t.trade_side, DATE(t.trade_date)
+                    HAVING (settlement_status IS NULL OR settlement_status = '' OR settlement_status NOT IN ('paid','linked','failed','cancelled'))
+                    AND settlement_date <= CURDATE()
+                ) as grouped
+            ")->fetchColumn();
         } catch (Exception $e) {}
         ?>
         
@@ -249,6 +274,9 @@
                         <a class="nav-link" href="<?php echo BASE_URL; ?>trader/settlement">
                             <i class="bi bi-currency-exchange"></i>
                             <span>Settle Trades</span>
+                            <?php if ($settle_due_badge > 0): ?>
+                                <span class="badge bg-danger ms-auto"><?php echo $settle_due_badge; ?></span>
+                            <?php endif; ?>
                         </a>
                     </li>
                     <li class="nav-item">
