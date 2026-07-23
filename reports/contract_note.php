@@ -209,14 +209,15 @@ function getFeeConfiguration($fee_type, $applies_to = 'ALL') {
     return $config;
 }
 
-function calculateBankCharges($consideration) {
+function calculateBankCharges($consideration, $trade_side = 'Sell') {
+    if (strtoupper($trade_side) === 'BUY') return 0;
     if ($consideration < 100000) return 250;
     if ($consideration < 10000000) return 2000;
     if ($consideration < 50000000) return 6000;
     return 12000;
 }
 
-function calculateFees($amount, $consideration, $asset_class, $master_data) {
+function calculateFees($amount, $consideration, $asset_class, $master_data, $trade_side = 'Sell') {
     $asset_type_map = [
         'equity' => 'EQUITY',
         'bond' => 'BOND',
@@ -229,7 +230,7 @@ function calculateFees($amount, $consideration, $asset_class, $master_data) {
     
     // For Treasury bonds specifically - use calculateTreasuryBondFees
     if ($asset_class === 'treasury_bond' || $asset_class === 'bond') {
-        return calculateTreasuryBondFees($amount, $consideration);
+        return calculateTreasuryBondFees($amount, $consideration, $trade_side);
     }
     
     // Existing fee calculation for other asset classes (equities)
@@ -258,7 +259,7 @@ function calculateFees($amount, $consideration, $asset_class, $master_data) {
     $cds_rate = $cds_config['rate_percentage'] ?? 0.0708;
     $cds_fee = $amount * ($cds_rate / 100);
     
-    $bank_charges = calculateBankCharges($consideration);
+    $bank_charges = calculateBankCharges($consideration, $trade_side);
     
     return [
         'brokerage_commission' => $brokerage_commission,
@@ -273,7 +274,7 @@ function calculateFees($amount, $consideration, $asset_class, $master_data) {
     ];
 }
 
-function calculateTreasuryBondFees($quantity, $consideration) {
+function calculateTreasuryBondFees($quantity, $consideration, $trade_side = 'Sell') {
     // Treasury Bond specific fees as per your requirements
     $brokerage_rate = 0.02500; // 0.02500% of total quantity
     $vat_rate = 18.00; // 18% of brokerage commission
@@ -288,7 +289,7 @@ function calculateTreasuryBondFees($quantity, $consideration) {
     $csdr_fee = $quantity * ($csdr_rate / 100); // VAT already included
     $dse_fee = $quantity * ($dse_rate / 100);
     
-    $bank_charges = calculateBankCharges($consideration);
+    $bank_charges = calculateBankCharges($consideration, $trade_side);
     $total_charges = $brokerage_commission + $vat_on_brokerage + $cmsa_fee + $csdr_fee + $dse_fee + $bank_charges;
     
     return [
@@ -360,9 +361,9 @@ function generateSummaryContractNote($trades, $watermark, $master_data) {
         
         // Use appropriate calculation based on asset class
         if ($trade['asset_class'] === 'bond') {
-            $fees = calculateTreasuryBondFees(floatval($trade['quantity']), floatval($trade['consideration']));
+            $fees = calculateTreasuryBondFees(floatval($trade['quantity']), floatval($trade['consideration']), $trade['trade_side'] ?? 'Sell');
         } else {
-            $fees = calculateFees(floatval($trade['price']), floatval($trade['consideration']), $trade['asset_class'], $master_data);
+            $fees = calculateFees(floatval($trade['price']), floatval($trade['consideration']), $trade['asset_class'], $master_data, $trade['trade_side'] ?? 'Sell');
         }
         $total_charges += $fees['total_charges'];
     }
@@ -395,7 +396,7 @@ function generateEquityContractNote($trade, $watermark, $master_data) {
     $consideration = floatval($trade['consideration']);
     $price = floatval($trade['price']);
 
-    $fees = calculateFees($price, $consideration, $trade['asset_class'], $master_data);
+    $fees = calculateFees($price, $consideration, $trade['asset_class'], $master_data, $trade['trade_side'] ?? 'Sell');
     
     // FIXED: Use consistent trade side detection
     $trade_side_upper = strtoupper(trim($trade['trade_side']));
@@ -419,7 +420,7 @@ function generateBondContractNote($trade, $watermark, $master_data) {
     $quantity = floatval($trade['quantity']);
     
     // Use Treasury bond specific fee calculation
-    $fees = calculateTreasuryBondFees($quantity, $consideration);
+    $fees = calculateTreasuryBondFees($quantity, $consideration, $trade['trade_side'] ?? 'Sell');
     
     // FIXED: Use consistent trade side detection
     $trade_side_upper = strtoupper(trim($trade['trade_side']));
@@ -516,7 +517,7 @@ function generateEquityContractNoteHTML($trade, $contract_number, $order_number,
         </table>
         
         <?php 
-        $fees = calculateFees($price, $consideration, $trade['asset_class'], []);
+        $fees = calculateFees($price, $consideration, $trade['asset_class'], [], $trade['trade_side'] ?? 'Sell');
         ?>
         <table style="width: 100%; border-collapse: collapse; margin-bottom: 15px; font-size: 10px;">
             <tbody>
@@ -839,9 +840,9 @@ function generateTransactionSummaryReports($trades, $report_type, $report_by, $m
 
         // Use appropriate fee calculation based on asset class
         if ($trade['asset_class'] === 'bond') {
-            $fees = calculateTreasuryBondFees(floatval($trade['quantity']), floatval($trade['consideration']));
+            $fees = calculateTreasuryBondFees(floatval($trade['quantity']), floatval($trade['consideration']), $trade['trade_side'] ?? 'Sell');
         } else {
-            $fees = calculateFees(floatval($trade['price']), floatval($trade['consideration']), $trade['asset_class'], $master_data);
+            $fees = calculateFees(floatval($trade['price']), floatval($trade['consideration']), $trade['asset_class'], $master_data, $trade['trade_side'] ?? 'Sell');
         }
         
         $grouped_trades[$group_key]['trades'][] = $trade;
@@ -918,9 +919,9 @@ function generateSummaryReportHTML($grouped_trades, $report_type, $report_by, $m
                         
                         // Use appropriate fee calculation
                         if ($trade['asset_class'] === 'bond') {
-                            $fees = calculateTreasuryBondFees(floatval($trade['quantity']), $consideration);
+                            $fees = calculateTreasuryBondFees(floatval($trade['quantity']), $consideration, $trade['trade_side'] ?? 'Sell');
                         } else {
-                            $fees = calculateFees($price, $consideration, $trade['asset_class'], $master_data);
+                            $fees = calculateFees($price, $consideration, $trade['asset_class'], $master_data, $trade['trade_side'] ?? 'Sell');
                         }
                         
                         $total_charges = $fees['total_charges'];

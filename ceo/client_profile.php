@@ -607,27 +607,54 @@ if ($show_individual_cds && !empty($individual_cds_trades)) {
 function generateClientTransactionExcel($client) {
     global $db, $company_name;
     
-    // Get all trades for this client - REMOVED uploaded_by restriction
+    // Get merged CDS accounts
+    $stmt = $db->prepare("
+        SELECT c.cds_account
+        FROM clients c
+        INNER JOIN merged_cds_accounts m ON (
+            m.merged_cds_account = c.cds_account OR 
+            m.primary_cds_account = c.cds_account
+        )
+        WHERE (
+            m.primary_cds_account = ? OR 
+            m.merged_cds_account = ?
+        ) 
+        AND c.id != ?
+        AND m.status = 'active'
+        AND c.is_active = 1
+    ");
+    $stmt->execute([$client['cds_account'], $client['cds_account'], $client['id']]);
+    $merged_cds = $stmt->fetchAll(PDO::FETCH_COLUMN);
+    
+    // Build all CDS accounts (main + merged)
+    $cds_accounts = array_merge([$client['cds_account']], $merged_cds);
+    $placeholders = str_repeat('?,', count($cds_accounts) - 1) . '?';
+    $has_merged = count($cds_accounts) > 1;
+    
+    // Get all trades for this client and merged accounts
     $stmt = $db->prepare("
         SELECT t.*, 
                COALESCE(e.stock_name, b.security_id, etf.stock_name) AS asset_name,
                e.share_type,
                b.coupon_rate,
-               b.maturity_date
+               b.maturity_date,
+               c.cds_account AS trade_cds_account
         FROM trades t
         LEFT JOIN equities e ON t.security_id = e.security_id AND t.asset_class = 'equity'
         LEFT JOIN bonds b ON t.security_id = b.security_id AND t.asset_class = 'bond'
         LEFT JOIN equities etf ON t.security_id = etf.security_id AND t.asset_class = 'Exchange Traded Funds'
-        WHERE t.client_cds_account = ? 
+        LEFT JOIN clients c ON t.client_cds_account = c.cds_account
+        WHERE t.client_cds_account IN ($placeholders)
         AND t.status = 'active'
         ORDER BY t.trade_date, t.created_at
     ");
-    $stmt->execute([$client['cds_account']]);
+    $stmt->execute($cds_accounts);
     $all_trades = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // Set headers for Excel download
     header('Content-Type: application/vnd.ms-excel');
-    header('Content-Disposition: attachment; filename="client_transactions_' . $client['cds_account'] . '_' . date('Ymd_His') . '.xls"');
+    $filename = 'client_transactions_' . ($has_merged ? 'combined' : $client['cds_account']) . '_' . date('Ymd_His') . '.xls';
+    header('Content-Disposition: attachment; filename="' . $filename . '"');
     header('Cache-Control: max-age=0');
     
     // Start output
@@ -654,16 +681,17 @@ function generateClientTransactionExcel($client) {
     echo "<table border='1'>";
     
     // Title and header
-    echo "<tr><th colspan='10' style='background-color: #3b82f6; color: white; font-size: 16px; padding: 15px;'>TRANSACTION REPORT - " . htmlspecialchars($company_name) . "</th></tr>";
-    echo "<tr class='header-row'><td colspan='10'>";
+    $colspan = $has_merged ? 11 : 10;
+    echo "<tr><th colspan='" . $colspan . "' style='background-color: #3b82f6; color: white; font-size: 16px; padding: 15px;'>TRANSACTION REPORT - " . htmlspecialchars($company_name) . "</th></tr>";
+    echo "<tr class='header-row'><td colspan='" . $colspan . "'>";
     echo "<strong>Client:</strong> " . htmlspecialchars($client['client_name']) . "<br>";
-    echo "<strong>CDS Account:</strong> " . htmlspecialchars($client['cds_account']) . "<br>";
+    echo "<strong>CDS Account(s):</strong> " . htmlspecialchars(implode(', ', $cds_accounts)) . "<br>";
     echo "<strong>Generated:</strong> " . date('d/m/Y H:i:s');
     echo "</td></tr>";
-    echo "<tr><td colspan='10'></td></tr>"; // Empty row
+    echo "<tr><td colspan='" . $colspan . "'></td></tr>"; // Empty row
     
     // Summary section
-    echo "<tr><th colspan='10' style='background-color: #e9ecef;'>SUMMARY</th></tr>";
+    echo "<tr><th colspan='" . $colspan . "' style='background-color: #e9ecef;'>SUMMARY</th></tr>";
     echo "<tr class='header-row'>";
     echo "<th>Asset Class</th>";
     echo "<th>Transactions</th>";
@@ -722,11 +750,14 @@ function generateClientTransactionExcel($client) {
         }
     }
     
-    echo "<tr><td colspan='10'></td></tr>"; // Empty row
+    echo "<tr><td colspan='" . $colspan . "'></td></tr>"; // Empty row
     
     // Transactions header
-    echo "<tr><th colspan='9' style='background-color: #e9ecef;'>DETAILED TRANSACTIONS</th></tr>";
+    echo "<tr><th colspan='" . $colspan . "' style='background-color: #e9ecef;'>DETAILED TRANSACTIONS</th></tr>";
     echo "<tr class='header-row'>";
+    if ($has_merged) {
+        echo "<th>CDS Account</th>";
+    }
     echo "<th>Date</th>";
     echo "<th>Security ID</th>";
     echo "<th>Asset Name</th>";
@@ -741,11 +772,14 @@ function generateClientTransactionExcel($client) {
     
     // Transactions data (or show "No transactions found" if empty)
     if (empty($all_trades)) {
-        echo "<tr><td colspan='10' class='center'>No transactions found for this client</td></tr>";
+        echo "<tr><td colspan='" . $colspan . "' class='center'>No transactions found for this client</td></tr>";
     } else {
         foreach ($all_trades as $trade) {
             $row_class = $trade['trade_side'] === 'buy' ? 'buy-row' : 'sell-row';
             echo "<tr class='" . $row_class . "'>";
+            if ($has_merged) {
+                echo "<td class='center'>" . htmlspecialchars($trade['trade_cds_account'] ?? $trade['client_cds_account']) . "</td>";
+            }
             echo "<td class='center'>" . $trade['trade_date'] . "</td>";
             echo "<td class='center'>" . htmlspecialchars($trade['security_id']) . "</td>";
             echo "<td class='left'>" . htmlspecialchars($trade['asset_name'] ?? 'N/A') . "</td>";
@@ -761,7 +795,7 @@ function generateClientTransactionExcel($client) {
     }
     
     // Footer
-    echo "<tr><td colspan='10' style='background-color: #f8f9fa; padding: 10px; font-size: 11px;'>";
+    echo "<tr><td colspan='" . $colspan . "' style='background-color: #f8f9fa; padding: 10px; font-size: 11px;'>";
     echo "This report was generated by " . htmlspecialchars($company_name) . " on " . date('d/m/Y H:i:s');
     echo "</td></tr>";
     
@@ -1317,22 +1351,48 @@ function generateFilteredTransactionPDF($client, $date_from, $date_to, $selected
 function generateClientTransactionPDF($client) {
     global $db, $company_name;
     
-    // Get all trades for this client - REMOVED uploaded_by restriction
+    // Get merged CDS accounts
+    $stmt = $db->prepare("
+        SELECT c.cds_account
+        FROM clients c
+        INNER JOIN merged_cds_accounts m ON (
+            m.merged_cds_account = c.cds_account OR 
+            m.primary_cds_account = c.cds_account
+        )
+        WHERE (
+            m.primary_cds_account = ? OR 
+            m.merged_cds_account = ?
+        ) 
+        AND c.id != ?
+        AND m.status = 'active'
+        AND c.is_active = 1
+    ");
+    $stmt->execute([$client['cds_account'], $client['cds_account'], $client['id']]);
+    $merged_cds = $stmt->fetchAll(PDO::FETCH_COLUMN);
+    
+    // Build all CDS accounts (main + merged)
+    $cds_accounts = array_merge([$client['cds_account']], $merged_cds);
+    $placeholders = str_repeat('?,', count($cds_accounts) - 1) . '?';
+    $has_merged = count($cds_accounts) > 1;
+    
+    // Get all trades for this client and merged accounts
     $stmt = $db->prepare("
         SELECT t.*, 
                COALESCE(e.stock_name, b.security_id, etf.stock_name) AS asset_name,
                e.share_type,
                b.coupon_rate,
-               b.maturity_date
+               b.maturity_date,
+               c.cds_account AS trade_cds_account
         FROM trades t
         LEFT JOIN equities e ON t.security_id = e.security_id AND t.asset_class = 'equity'
         LEFT JOIN bonds b ON t.security_id = b.security_id AND t.asset_class = 'bond'
         LEFT JOIN equities etf ON t.security_id = etf.security_id AND t.asset_class = 'Exchange Traded Funds'
-        WHERE t.client_cds_account = ? 
+        LEFT JOIN clients c ON t.client_cds_account = c.cds_account
+        WHERE t.client_cds_account IN ($placeholders)
         AND t.status = 'active'
         ORDER BY t.trade_date, t.created_at
     ");
-    $stmt->execute([$client['cds_account']]);
+    $stmt->execute($cds_accounts);
     $all_trades = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // Separate buy and sell trades
@@ -1409,7 +1469,7 @@ function generateClientTransactionPDF($client) {
     // Client information
     $pdf->SetFont('helvetica', '', 10);
     $pdf->Cell(0, 6, 'Client: ' . strtoupper($client['client_name']), 0, 1);
-    $pdf->Cell(0, 6, 'CDS Account: ' . $client['cds_account'], 0, 1);
+    $pdf->Cell(0, 6, 'CDS Account(s): ' . implode(', ', $cds_accounts), 0, 1);
     $pdf->Cell(0, 6, 'Generated: ' . date('d/m/Y H:i:s'), 0, 1);
     $pdf->Ln(10);
     
@@ -1467,13 +1527,29 @@ function generateClientTransactionPDF($client) {
         $max_rows = max(count($buy_trades), count($sell_trades));
         
         // Create side-by-side tables
+        $col_width = $has_merged ? '11.25%' : '12.5%';
         $transactions_html = '<table border="1" cellpadding="4" cellspacing="0">
             <thead>
                 <tr style="background-color:#f2f2f2;">
-                    <th colspan="4" width="50%" align="center"><b>BUY TRANSACTIONS</b></th>
-                    <th colspan="4" width="50%" align="center"><b>SELL TRANSACTIONS</b></th>
+                    <th colspan="' . ($has_merged ? 5 : 4) . '" width="50%" align="center"><b>BUY TRANSACTIONS</b></th>
+                    <th colspan="' . ($has_merged ? 5 : 4) . '" width="50%" align="center"><b>SELL TRANSACTIONS</b></th>
                 </tr>
-                <tr style="background-color:#e6e6e6;">
+                <tr style="background-color:#e6e6e6;">';
+        
+        if ($has_merged) {
+            $transactions_html .= '
+                    <th width="11.25%" align="center"><b>CDS</b></th>
+                    <th width="11.25%" align="center"><b>Date</b></th>
+                    <th width="11.25%" align="center"><b>Security</b></th>
+                    <th width="11.25%" align="center"><b>Quantity</b></th>
+                    <th width="11.25%" align="center"><b>Value</b></th>
+                    <th width="11.25%" align="center"><b>CDS</b></th>
+                    <th width="11.25%" align="center"><b>Date</b></th>
+                    <th width="11.25%" align="center"><b>Security</b></th>
+                    <th width="11.25%" align="center"><b>Quantity</b></th>
+                    <th width="11.25%" align="center"><b>Value</b></th>';
+        } else {
+            $transactions_html .= '
                     <th width="12.5%" align="center"><b>Date</b></th>
                     <th width="12.5%" align="center"><b>Security</b></th>
                     <th width="12.5%" align="center"><b>Quantity</b></th>
@@ -1481,7 +1557,10 @@ function generateClientTransactionPDF($client) {
                     <th width="12.5%" align="center"><b>Date</b></th>
                     <th width="12.5%" align="center"><b>Security</b></th>
                     <th width="12.5%" align="center"><b>Quantity</b></th>
-                    <th width="12.5%" align="center"><b>Value</b></th>
+                    <th width="12.5%" align="center"><b>Value</b></th>';
+        }
+        
+        $transactions_html .= '
                 </tr>
             </thead>
             <tbody>';
@@ -1492,45 +1571,60 @@ function generateClientTransactionPDF($client) {
             // Buy side
             if (isset($buy_trades[$i])) {
                 $trade = $buy_trades[$i];
+                if ($has_merged) {
+                    $transactions_html .= '
+                        <td align="center">' . ($trade['trade_cds_account'] ?? $trade['client_cds_account']) . '</td>';
+                }
                 $transactions_html .= '
                     <td align="center">' . date('d/m/Y', strtotime($trade['trade_date'])) . '</td>
                     <td align="center">' . $trade['security_id'] . '</td>
                     <td align="right">' . number_format($trade['quantity'], 2) . '</td>
                     <td align="right">TZS ' . number_format($trade['consideration'], 2) . '</td>';
             } else {
-                $transactions_html .= '<td align="center">-</td><td align="center">-</td><td align="center">-</td><td align="center">-</td>';
+                $col_count = $has_merged ? 5 : 4;
+                for ($j = 0; $j < $col_count; $j++) {
+                    $transactions_html .= '<td align="center">-</td>';
+                }
             }
             
             // Sell side
             if (isset($sell_trades[$i])) {
                 $trade = $sell_trades[$i];
+                if ($has_merged) {
+                    $transactions_html .= '
+                        <td align="center">' . ($trade['trade_cds_account'] ?? $trade['client_cds_account']) . '</td>';
+                }
                 $transactions_html .= '
                     <td align="center">' . date('d/m/Y', strtotime($trade['trade_date'])) . '</td>
                     <td align="center">' . $trade['security_id'] . '</td>
                     <td align="right">' . number_format($trade['quantity'], 2) . '</td>
                     <td align="right">TZS ' . number_format($trade['consideration'], 2) . '</td>';
             } else {
-                $transactions_html .= '<td align="center">-</td><td align="center">-</td><td align="center">-</td><td align="center">-</td>';
+                $col_count = $has_merged ? 5 : 4;
+                for ($j = 0; $j < $col_count; $j++) {
+                    $transactions_html .= '<td align="center">-</td>';
+                }
             }
             
             $transactions_html .= '</tr>';
         }
         
         // Add totals row
+        $colspan = $has_merged ? 3 : 2;
         $transactions_html .= '
             <tr style="background-color:#f2f2f2; font-weight:bold;">
-                <td colspan="2" align="center">BUY TOTALS:</td>
+                <td colspan="' . $colspan . '" align="center">BUY TOTALS:</td>
                 <td align="right">' . number_format($total_buy_quantity, 2) . '</td>
                 <td align="right">TZS ' . number_format($total_buy_value, 2) . '</td>
-                <td colspan="2" align="center">SELL TOTALS:</td>
+                <td colspan="' . $colspan . '" align="center">SELL TOTALS:</td>
                 <td align="right">' . number_format($total_sell_quantity, 2) . '</td>
                 <td align="right">TZS ' . number_format($total_sell_value, 2) . '</td>
             </tr>
             <tr style="background-color:#e6f7ff; font-weight:bold;">
-                <td colspan="2" align="center">BALANCE:</td>
+                <td colspan="' . $colspan . '" align="center">BALANCE:</td>
                 <td align="right">' . number_format($total_buy_quantity - $total_sell_quantity, 2) . '</td>
                 <td align="right">TZS ' . number_format($total_buy_value - $total_sell_value, 2) . '</td>
-                <td colspan="2" align="center">NET TOTAL:</td>
+                <td colspan="' . $colspan . '" align="center">NET TOTAL:</td>
                 <td align="center">-</td>
                 <td align="right">TZS ' . number_format($total_buy_net + $total_sell_net, 2) . '</td>
             </tr>
@@ -1596,7 +1690,7 @@ function generateClientTransactionPDF($client) {
     $pdf->Cell(0, 10, 'This report was generated by ' . $company_name . ' on ' . date('d/m/Y H:i:s'), 0, 0, 'C');
     
     // Output PDF
-    $filename = 'transaction_history_' . $client['cds_account'] . '_' . date('Ymd_His') . '.pdf';
+    $filename = 'transaction_history_' . ($has_merged ? 'combined' : $client['cds_account']) . '_' . date('Ymd_His') . '.pdf';
     $pdf->Output($filename, 'I');
 }
 
