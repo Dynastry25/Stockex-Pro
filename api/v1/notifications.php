@@ -37,6 +37,7 @@ ini_set('error_log', __DIR__ . '/../../logs/notifications_errors.log');
 require_once __DIR__ . '/../../phpmailer/src/Exception.php';
 require_once __DIR__ . '/../../phpmailer/src/PHPMailer.php';
 require_once __DIR__ . '/../../phpmailer/src/SMTP.php';
+require_once __DIR__ . '/../../config/email.php';
 
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception as PHPMailerException;
@@ -87,9 +88,9 @@ try {
     $recipients = $data['recipients'] ?? [];
     $attachments = $data['attachments'] ?? [];
     $metadata = $data['metadata'] ?? [];
-    $from_email = $data['from_email'] ?? 'noreply@myshopii.co.tz';
-    $from_name = $data['from_name'] ?? 'MyShopii';
-    $reply_to = $data['reply_to'] ?? 'support@myshopii.co.tz';
+    $from_email = $data['from_email'] ?? SMTP_FROM_EMAIL;
+    $from_name = $data['from_name'] ?? SMTP_FROM_NAME;
+    $reply_to = $data['reply_to'] ?? SMTP_FROM_EMAIL;
     
     error_log("Notification type: $type, Subject: $subject, Recipients: " . json_encode($recipients) . ", Attachments: " . count($attachments));
     
@@ -125,13 +126,13 @@ try {
     
     // Initialize PHPMailer
     $mail = new PHPMailer(true);
-    $mail->isSMTP();
-    $mail->Host = 'localhost';  // or your SMTP server
-    $mail->SMTPAuth = false;    // Assuming local mail server
-    $mail->Port = 25;           // Default SMTP port
-    $mail->CharSet = 'UTF-8';
+
+    // Apply centralized SMTP configuration from .env
+    configureMailer($mail);
     
-    // Set sender
+    // Override from/reply-to with request-specific values if provided
+    $mail->clearAddresses();
+    $mail->clearReplyTos();
     $mail->setFrom($from_email, $from_name);
     $mail->addReplyTo($reply_to, 'Support');
     
@@ -147,7 +148,7 @@ try {
     $emailBody = !empty($html_content) ? $html_content : "<p>" . nl2br(htmlspecialchars($message)) . "</p>";
     $emailBody .= "\n\n<hr style='border:none;border-top:1px solid #ccc;margin:20px 0;'>";
     $emailBody .= "\n<p style='font-size:12px;color:#666;'>";
-    $emailBody .= "This is an automated notification from MyShopii Stockex Platform.<br>";
+    $emailBody .= "This is an automated notification from StockEx Platform.<br>";
     $emailBody .= "Please do not reply to this email. Send inquiries to: {$reply_to}";
     $emailBody .= "</p>";
     

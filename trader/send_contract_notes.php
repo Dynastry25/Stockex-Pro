@@ -412,18 +412,8 @@ function testSMTPConnection($debug = false) {
             };
         }
         
-        $mail->isSMTP();
-        $mail->Host = SMTP_HOST;
-        $mail->SMTPAuth = true;
-        $mail->Username = SMTP_USERNAME;
-        $mail->Password = SMTP_PASSWORD;
-        $mail->SMTPSecure = SMTP_ENCRYPTION === 'ssl'
-            ? PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_SMTPS
-            : PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
-        $mail->Port = SMTP_PORT;
-        $mail->Timeout = SMTP_TIMEOUT;
-        
-        $mail->setFrom(SMTP_FROM_EMAIL, SMTP_FROM_NAME);
+        // Apply centralized SMTP configuration
+        configureMailer($mail);
         $mail->addAddress(SMTP_USERNAME, 'SMTP Test');
         $mail->Subject = 'SMTP Connection Test';
         $mail->Body = 'SMTP connection test successful!';

@@ -2,14 +2,18 @@
 /**
  * EMAIL DEBUG PAGE - TEMPORARY (Enhanced)
  * DELETE THIS FILE AFTER TESTING.
+ *
+ * SECURITY: Admin-only access with IP whitelist + secret key + rate limiting.
  */
 
 error_reporting(E_ALL);
 ini_set('display_errors', 0);
 ini_set('log_errors', 1);
 
+require_once __DIR__ . '/config/config.php';
 require_once __DIR__ . '/config/env_loader.php';
 require_once __DIR__ . '/config/email.php';
+require_once __DIR__ . '/auth/auth_middleware.php';
 
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\SMTP;
@@ -19,8 +23,93 @@ require_once __DIR__ . '/phpmailer/src/PHPMailer.php';
 require_once __DIR__ . '/phpmailer/src/SMTP.php';
 require_once __DIR__ . '/phpmailer/src/Exception.php';
 
-session_start();
+// ─── SECURITY LAYER 1: Admin Authentication ───
+require_login();
+require_admin();
 
+// ─── SECURITY LAYER 2: IP Whitelisting ───
+function getClientIp() {
+    $headers = [
+        'HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR',
+        'HTTP_X_REAL_IP', 'REMOTE_ADDR'
+    ];
+    foreach ($headers as $h) {
+        if (!empty($_SERVER[$h])) {
+            $ip = explode(',', $_SERVER[$h])[0];
+            return trim($ip);
+        }
+    }
+    return '0.0.0.0';
+}
+
+$DEBUG_ACCESS_KEY    = env('DEBUG_ACCESS_KEY', '');
+$DEBUG_ALLOWED_IPS   = env('DEBUG_ALLOWED_IPS', '');
+$DEBUG_MAX_ATTEMPTS  = (int) env('DEBUG_MAX_ATTEMPTS', 5);
+$debug_access_log    = __DIR__ . '/logs/debug_access.log';
+$clientIp            = getClientIp();
+
+if (!is_dir(__DIR__ . '/logs')) {
+    mkdir(__DIR__ . '/logs', 0755, true);
+}
+
+function logDebugAccess($level, $message, $ip, $user = '') {
+    global $debug_access_log;
+    $ts   = date('Y-m-d H:i:s');
+    $user = $user ?: ($_SESSION['username'] ?? 'unknown');
+    $line = "[$ts] [$level] IP=$ip USER=$user MSG=$message\n";
+    file_put_contents($debug_access_log, $line, FILE_APPEND | LOCK_EX);
+}
+
+// IP whitelist check
+if (!empty($DEBUG_ALLOWED_IPS)) {
+    $allowed = array_map('trim', explode(',', $DEBUG_ALLOWED_IPS));
+    if (!in_array($clientIp, $allowed)) {
+        logDebugAccess('BLOCKED', 'IP not in whitelist', $clientIp);
+        http_response_code(403);
+        header('Content-Type: text/html; charset=UTF-8');
+        echo '<!DOCTYPE html><html><head><title>403 Forbidden</title></head><body style="font-family:sans-serif;text-align:center;padding:60px;"><h1 style="color:#c0392b;">403 Forbidden</h1><p>Access denied from your IP address.</p></body></html>';
+        exit;
+    }
+}
+
+// ─── SECURITY LAYER 3: Secret Access Key ───
+if (empty($DEBUG_ACCESS_KEY)) {
+    logDebugAccess('BLOCKED', 'DEBUG_ACCESS_KEY not configured in .env', $clientIp);
+    http_response_code(403);
+    echo '<!DOCTYPE html><html><head><title>403 Forbidden</title></head><body style="font-family:sans-serif;text-align:center;padding:60px;"><h1 style="color:#c0392b;">403 Forbidden</h1><p>Debug page security key not configured. Set DEBUG_ACCESS_KEY in your .env file.</p></body></html>';
+    exit;
+}
+
+$urlKey = $_GET['key'] ?? $_POST['key'] ?? '';
+$currentPageKey = $urlKey;
+if (!hash_equals($DEBUG_ACCESS_KEY, $urlKey)) {
+    logDebugAccess('BLOCKED', 'Invalid or missing access key', $clientIp);
+    http_response_code(403);
+    echo '<!DOCTYPE html><html><head><title>403 Forbidden</title></head><body style="font-family:sans-serif;text-align:center;padding:60px;"><h1 style="color:#c0392b;">403 Forbidden</h1><p>Invalid access key. URL must include <code>?key=YOUR_SECRET_KEY</code></p></body></html>';
+    exit;
+}
+
+// ─── SECURITY LAYER 4: Rate Limiting ───
+$rate_file    = __DIR__ . '/logs/debug_rate_' . md5($clientIp) . '.json';
+$rate_data    = ['attempts' => 0, 'window_start' => time()];
+if (file_exists($rate_file)) {
+    $rate_data = json_decode(file_get_contents($rate_file), true) ?: $rate_data;
+}
+// Reset window after 1 hour
+if ((time() - ($rate_data['window_start'] ?? 0)) > 3600) {
+    $rate_data = ['attempts' => 0, 'window_start' => time()];
+}
+if (($rate_data['attempts'] ?? 0) >= $DEBUG_MAX_ATTEMPTS) {
+    logDebugAccess('BLOCKED', 'Rate limit exceeded (' . $rate_data['attempts'] . ' attempts)', $clientIp);
+    http_response_code(429);
+    echo '<!DOCTYPE html><html><head><title>429 Too Many Requests</title></head><body style="font-family:sans-serif;text-align:center;padding:60px;"><h1 style="color:#c0392b;">429 Too Many Requests</h1><p>Too many failed access attempts. Try again later.</p></body></html>';
+    exit;
+}
+
+// ─── ACCESS GRANTED ───
+logDebugAccess('ACCESS', 'Page accessed successfully', $clientIp);
+
+// ─── Session Setup ───
 $results = [];
 
 if (empty($_SESSION['csrf_token'])) {
@@ -31,7 +120,7 @@ $LOG_DIR = __DIR__ . '/logs';
 $EMAIL_DEBUG_LOG = $LOG_DIR . '/email_debug_full.log';
 
 if (!is_dir($LOG_DIR)) {
-    mkdir($LOG_DIR, 0777, true);
+    mkdir($LOG_DIR, 0755, true);
 }
 
 function writeDebugLog($message) {
@@ -241,30 +330,9 @@ function testSMTPConnection() {
             }
         };
 
-        $mail->isSMTP();
-        $mail->Host = SMTP_HOST;
-        $mail->SMTPAuth = !empty(SMTP_USERNAME);
-        $mail->Username = SMTP_USERNAME;
-        $mail->Password = SMTP_PASSWORD;
-        $mail->Port = SMTP_PORT;
+        // Use the same centralized config as production
+        configureMailer($mail);
         $mail->SMTPKeepAlive = false;
-        $mail->Timeout = 15;
-
-        if (SMTP_ENCRYPTION === 'ssl') {
-            $mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;
-        } elseif (SMTP_ENCRYPTION === 'tls') {
-            $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
-        } else {
-            $mail->SMTPSecure = false;
-        }
-
-        $mail->SMTPOptions = [
-            'ssl' => [
-                'verify_peer' => false,
-                'verify_peer_name' => false,
-                'allow_self_signed' => true,
-            ]
-        ];
 
         $mail->preconnect();
 
@@ -315,30 +383,8 @@ function sendTestEmail($to, $subject) {
             }
         };
 
-        $mail->isSMTP();
-        $mail->Host = SMTP_HOST;
-        $mail->SMTPAuth = !empty(SMTP_USERNAME);
-        $mail->Username = SMTP_USERNAME;
-        $mail->Password = SMTP_PASSWORD;
-        $mail->Port = SMTP_PORT;
-        $mail->SMTPKeepAlive = false;
-        $mail->Timeout = 30;
-
-        if (SMTP_ENCRYPTION === 'ssl') {
-            $mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;
-        } elseif (SMTP_ENCRYPTION === 'tls') {
-            $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
-        } else {
-            $mail->SMTPSecure = false;
-        }
-
-        $mail->SMTPOptions = [
-            'ssl' => [
-                'verify_peer' => false,
-                'verify_peer_name' => false,
-                'allow_self_signed' => true,
-            ]
-        ];
+        // Use the same centralized config as production (forgot_password, contract notes, etc.)
+        configureMailer($mail);
 
         // Clear defaults and set manually to avoid duplicate headers
         $mail->clearAddresses();
@@ -552,6 +598,13 @@ function rawSMTPTest() {
 }
 
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'log') {
+    // AJAX endpoint re-validates key on every request
+    $ajaxKey = $_GET['key'] ?? '';
+    if (!hash_equals($DEBUG_ACCESS_KEY, $ajaxKey)) {
+        http_response_code(403);
+        echo 'Forbidden';
+        exit;
+    }
     header('Content-Type: text/plain');
     echo readDebugLog();
     exit;
@@ -603,6 +656,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'log') {
         <div class="warning-banner">
             <i class="bi bi-exclamation-triangle-fill me-2"></i>
             <strong>TEMPORARY FILE</strong> - Delete after testing: <code>email_debug.php</code>
+            <br><small class="text-muted"><i class="bi bi-shield-lock me-1"></i>Secured: Admin-only + IP whitelist + Secret key | IP: <?php echo htmlspecialchars($clientIp); ?> | User: <?php echo htmlspecialchars($_SESSION['username'] ?? 'unknown'); ?></small>
         </div>
 
         <div class="row">
@@ -612,21 +666,25 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'log') {
                     <div class="card-body">
                         <form method="POST" class="mb-2">
                             <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
+                            <input type="hidden" name="key" value="<?php echo htmlspecialchars($currentPageKey); ?>">
                             <input type="hidden" name="action" value="check_config">
                             <button type="submit" class="btn btn-info w-100 btn-test"><i class="bi bi-gear me-1"></i>Full Config Check</button>
                         </form>
                         <form method="POST" class="mb-2">
                             <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
+                            <input type="hidden" name="key" value="<?php echo htmlspecialchars($currentPageKey); ?>">
                             <input type="hidden" name="action" value="dns_check">
                             <button type="submit" class="btn btn-warning w-100 btn-test"><i class="bi bi-globe me-1"></i>DNS Records Check (SPF/DKIM/DMARC)</button>
                         </form>
                         <form method="POST" class="mb-2">
                             <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
+                            <input type="hidden" name="key" value="<?php echo htmlspecialchars($currentPageKey); ?>">
                             <input type="hidden" name="action" value="test_connection">
                             <button type="submit" class="btn btn-primary w-100 btn-test"><i class="bi bi-plug me-1"></i>SMTP Connection Test</button>
                         </form>
                         <form method="POST" class="mb-2">
                             <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
+                            <input type="hidden" name="key" value="<?php echo htmlspecialchars($currentPageKey); ?>">
                             <input type="hidden" name="action" value="raw_smtp">
                             <button type="submit" class="btn btn-secondary w-100 btn-test"><i class="bi bi-hdd-network me-1"></i>Raw SMTP Test (fsockopen)</button>
                         </form>
@@ -638,6 +696,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'log') {
                     <div class="card-body">
                         <form method="POST">
                             <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
+                            <input type="hidden" name="key" value="<?php echo htmlspecialchars($currentPageKey); ?>">
                             <input type="hidden" name="action" value="send_test">
                             <div class="mb-2">
                                 <input type="email" class="form-control" name="test_email" placeholder="recipient@gmail.com" required
@@ -745,6 +804,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'log') {
                         <div>
                             <form method="POST" class="d-inline">
                                 <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
+                                <input type="hidden" name="key" value="<?php echo htmlspecialchars($currentPageKey); ?>">
                                 <input type="hidden" name="action" value="clear_log">
                                 <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash me-1"></i>Clear</button>
                             </form>
@@ -761,8 +821,9 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'log') {
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
+        var DEBUG_KEY = '<?php echo htmlspecialchars($_GET['key'] ?? ''); ?>';
         function refreshLog() {
-            fetch('email_debug.php?ajax=log').then(r => r.text()).then(t => {
+            fetch('email_debug.php?ajax=log&key=' + encodeURIComponent(DEBUG_KEY)).then(r => r.text()).then(t => {
                 document.getElementById('debugLog').textContent = t;
             });
         }

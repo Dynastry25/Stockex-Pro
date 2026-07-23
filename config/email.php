@@ -94,9 +94,10 @@ function configureMailer($mail) {
         error_log('DKIM signing skipped: domain=' . DKIM_DOMAIN . ' selector=' . DKIM_SELECTOR);
     }
 
-    $mail->setFrom(SMTP_FROM_EMAIL, SMTP_FROM_NAME);
+    // Clean From Name - strip stray quotes that may come from .env
+    $cleanName = trim(SMTP_FROM_NAME, "\"'");
+    $mail->setFrom(SMTP_FROM_EMAIL, $cleanName);
     $mail->addCustomHeader('X-Mailer', 'Stockex Mailer');
-    $mail->addCustomHeader('Date', date('r'));
     $mail->CharSet = EMAIL_CHARSET;
     $mail->Encoding = 'base64';
 }
