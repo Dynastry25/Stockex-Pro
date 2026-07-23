@@ -745,6 +745,105 @@ function safeHtml($string) {
     return htmlspecialchars($string ?? '', ENT_QUOTES, 'UTF-8');
 }
 
+// ============================================
+// EXCEL EXPORT HANDLER
+// ============================================
+if (isset($_GET['export_excel'])) {
+    $company_name = 'StockEx Pro';
+    try {
+        $comp = $db->query("SELECT company_name FROM company_settings LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+        if ($comp) $company_name = $comp['company_name'];
+    } catch (Exception $e) {}
+    
+    $viewLabel = ucfirst($filter === 'all' ? 'All' : $filter);
+    $assetLabel = $asset_class_filter === 'all' ? 'All' : ucfirst($asset_class_filter);
+    
+    header('Content-Type: application/vnd.ms-excel');
+    header('Content-Disposition: attachment; filename="order_intake_' . $filter . '_' . date('Ymd_His') . '.xls"');
+    header('Cache-Control: max-age=0');
+    
+    echo "<html><head><meta charset='UTF-8'>";
+    echo "<style>";
+    echo "table { border-collapse: collapse; width: 100%; }";
+    echo "th { background-color: #3b82f6; color: white; text-align: center; font-weight: bold; border: 1px solid #ddd; padding: 8px; }";
+    echo "td { border: 1px solid #ddd; padding: 6px; }";
+    echo ".header-row { background-color: #e8f4f8; font-weight: bold; }";
+    echo ".center { text-align: center; }";
+    echo ".right { text-align: right; }";
+    echo ".buy { background-color: #d4edda; }";
+    echo ".sell { background-color: #f8d7da; }";
+    echo ".pending { background-color: #fff3cd; }";
+    echo ".approved { background-color: #d4edda; }";
+    echo ".rejected { background-color: #f8d7da; }";
+    echo "</style></head><body>";
+    echo "<table border='1'>";
+    echo "<tr><th colspan='10' style='font-size:16px;padding:15px;'>ORDER INTAKE - " . htmlspecialchars($viewLabel) . " (" . $assetLabel . ") - " . htmlspecialchars($company_name) . "</th></tr>";
+    echo "<tr><td colspan='10' class='header-row'>Generated: " . date('d/m/Y H:i:s') . " | Total Trades: " . count($final_trades) . "</td></tr>";
+    echo "<tr><td colspan='10'></td></tr>";
+    
+    echo "<tr>";
+    echo "<th>Client</th>";
+    echo "<th>Security</th>";
+    echo "<th>Asset Class</th>";
+    echo "<th>Side</th>";
+    echo "<th class='right'>Qty</th>";
+    echo "<th class='right'>Price</th>";
+    echo "<th class='right'>Value (TZS)</th>";
+    echo "<th class='right'>Fees (TZS)</th>";
+    echo "<th class='right'>Net Amount (TZS)</th>";
+    echo "<th>Status</th>";
+    echo "</tr>";
+    
+    if (empty($final_trades)) {
+        echo "<tr><td colspan='10' class='center'>No trades found</td></tr>";
+    } else {
+        foreach ($final_trades as $trade) {
+            $isBond = ($trade['asset_class'] ?? '') === 'bond';
+            $isSell = strtolower($trade['trade_side'] ?? '') === 'sell';
+            $fees = $trade['fees'] ?? [];
+            
+            $rowClass = $isSell ? 'sell' : 'buy';
+            $isApproved = isset($trade['is_approved']) ? (int)$trade['is_approved'] : 0;
+            $statusText = $isApproved === 1 ? 'Approved' : ($isApproved === 2 ? 'Rejected' : 'Pending');
+            
+            $net = floatval($trade['consideration'] ?? 0);
+            if ($isSell) {
+                $net -= floatval($fees['total'] ?? 0);
+            } else {
+                $net += floatval($fees['total'] ?? 0);
+            }
+            
+            echo "<tr class='" . $rowClass . "'>";
+            echo "<td>" . htmlspecialchars($trade['client_name'] ?? '') . "</td>";
+            echo "<td>" . htmlspecialchars($trade['security_id'] ?? '') . "</td>";
+            echo "<td class='center'>" . ucfirst(htmlspecialchars($trade['asset_class'] ?? '')) . "</td>";
+            echo "<td class='center'>" . strtoupper(htmlspecialchars($trade['trade_side'] ?? '')) . "</td>";
+            echo "<td class='right'>" . ($isBond ? 'TZS ' . number_format($trade['quantity'] ?? 0, 2) : number_format($trade['quantity'] ?? 0)) . "</td>";
+            echo "<td class='right'>" . number_format($trade['price'] ?? 0, 4) . "</td>";
+            echo "<td class='right'>" . number_format($trade['consideration'] ?? 0, 2) . "</td>";
+            echo "<td class='right'>" . number_format($fees['total'] ?? 0, 2) . "</td>";
+            echo "<td class='right'>" . number_format($net, 2) . "</td>";
+            echo "<td class='center'>" . $statusText . "</td>";
+            echo "</tr>";
+        }
+        
+        // Totals row
+        $totalValue = array_sum(array_column($final_trades, 'consideration'));
+        $totalFees = array_sum(array_map(fn($t) => $t['fees']['total'] ?? 0, $final_trades));
+        echo "<tr style='background-color:#f2f2f2;font-weight:bold;'>";
+        echo "<td colspan='6' class='center'>TOTALS</td>";
+        echo "<td class='right'>" . number_format($totalValue, 2) . "</td>";
+        echo "<td class='right'>" . number_format($totalFees, 2) . "</td>";
+        echo "<td></td><td></td>";
+        echo "</tr>";
+    }
+    
+    echo "<tr><td colspan='10'></td></tr>";
+    echo "<tr><td colspan='10' style='background-color:#f8f9fa;font-size:11px;'>Generated by " . htmlspecialchars($company_name) . " on " . date('d/m/Y H:i:s') . "</td></tr>";
+    echo "</table></body></html>";
+    exit;
+}
+
 $page_title = 'Receipt Upload';
 include '../includes/header.php';
 ?>
@@ -925,8 +1024,13 @@ include '../includes/header.php';
             <h4 class="mb-0"><i class="bi bi-receipt"></i> Receipt Upload</h4>
             <small class="text-muted">Numeric Reference Trades with Full Fee Calculation</small>
         </div>
-        <div>
+        <div class="d-flex align-items-center gap-2">
             <span class="badge bg-secondary"><?php echo count($final_trades); ?> trades</span>
+            <?php if (!empty($final_trades)): ?>
+            <a href="dealing_sheet.php?filter=<?php echo urlencode($filter); ?>&asset_class=<?php echo urlencode($asset_class_filter); ?>&search=<?php echo urlencode($search); ?>&export_excel=1" class="btn btn-outline-success btn-sm">
+                <i class="bi bi-file-earmark-excel me-1"></i>Export Excel
+            </a>
+            <?php endif; ?>
         </div>
     </div>
 

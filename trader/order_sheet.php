@@ -447,7 +447,7 @@ if (isset($_POST['upload_dealing_receipt']) && isset($_POST['dealing_sheet_id'])
 // ============================================
 // FEES CALCULATION FUNCTION
 // ============================================
-function calculateDealingSheetFees($asset_class, $consideration, $quantity, $price) {
+function calculateDealingSheetFees($asset_class, $consideration, $quantity, $price, $trade_side = 'Sell') {
     $fees = [];
     $fees['tier_details'] = [];
     
@@ -536,11 +536,15 @@ function calculateDealingSheetFees($asset_class, $consideration, $quantity, $pri
     
     $fees['total'] = $fees['brokerage'] + $fees['vat'] + $fees['cmsa'] + $fees['dse'] + $fees['fidelity'] + $fees['csd'];
     
-    // Bank Charges (flat fee based on consideration)
-    if ($consideration < 100000) $fees['bank_charges'] = 250;
-    elseif ($consideration < 10000000) $fees['bank_charges'] = 2000;
-    elseif ($consideration < 50000000) $fees['bank_charges'] = 6000;
-    else $fees['bank_charges'] = 12000;
+    // Bank Charges (flat fee based on consideration, SELL only)
+    if (strtoupper($trade_side) !== 'BUY') {
+        if ($consideration < 100000) $fees['bank_charges'] = 250;
+        elseif ($consideration < 10000000) $fees['bank_charges'] = 2000;
+        elseif ($consideration < 50000000) $fees['bank_charges'] = 6000;
+        else $fees['bank_charges'] = 12000;
+    } else {
+        $fees['bank_charges'] = 0;
+    }
     
     $fees['total'] += $fees['bank_charges'];
     
@@ -827,6 +831,109 @@ if (isset($_GET['ajax_action'])) {
 }
 
 // ============================================
+// EXCEL EXPORT HANDLER
+// ============================================
+if (isset($_GET['export_excel'])) {
+    $db = getDBConnection();
+    $view = $_GET['view'] ?? 'all';
+    
+    $sql = "SELECT * FROM dealing_sheets ORDER BY 
+        CASE priority 
+            WHEN 'Most Important' THEN 1 
+            WHEN 'Urgent' THEN 2 
+            ELSE 3 
+        END,
+        created_at DESC";
+    
+    if ($view === 'orders') {
+        $sql = "SELECT * FROM dealing_sheets WHERE lifecycle_stage = 'order' OR execution_status = 'pending' ORDER BY created_at DESC";
+    } elseif ($view === 'execution') {
+        $sql = "SELECT * FROM dealing_sheets WHERE lifecycle_stage = 'execution' OR execution_status = 'executed' ORDER BY created_at DESC";
+    } elseif ($view === 'approved') {
+        $sql = "SELECT * FROM dealing_sheets WHERE lifecycle_stage = 'approved' ORDER BY created_at DESC";
+    } elseif ($view === 'settled') {
+        $sql = "SELECT * FROM dealing_sheets WHERE lifecycle_stage = 'settled' ORDER BY created_at DESC";
+    }
+    
+    $sheets = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+    
+    $viewLabel = ucfirst($view === 'all' ? 'All' : $view);
+    $company_name = $company['company_name'] ?? 'StockEx Pro';
+    
+    header('Content-Type: application/vnd.ms-excel');
+    header('Content-Disposition: attachment; filename="dealing_sheet_' . $view . '_' . date('Ymd_His') . '.xls"');
+    header('Cache-Control: max-age=0');
+    
+    echo "<html><head><meta charset='UTF-8'>";
+    echo "<style>";
+    echo "table { border-collapse: collapse; width: 100%; }";
+    echo "th { background-color: #3b82f6; color: white; text-align: center; font-weight: bold; border: 1px solid #ddd; padding: 8px; }";
+    echo "td { border: 1px solid #ddd; padding: 6px; }";
+    echo ".header-row { background-color: #e8f4f8; font-weight: bold; }";
+    echo ".center { text-align: center; }";
+    echo ".right { text-align: right; }";
+    echo ".buy { background-color: #d4edda; }";
+    echo ".sell { background-color: #f8d7da; }";
+    echo ".pending { background-color: #fff3cd; }";
+    echo ".executed { background-color: #d1ecf1; }";
+    echo ".approved { background-color: #d4edda; }";
+    echo ".cancelled { background-color: #e2e3e5; }";
+    echo "</style></head><body>";
+    echo "<table border='1'>";
+    echo "<tr><th colspan='11' style='font-size:16px;padding:15px;'>DEALING SHEET - " . htmlspecialchars($viewLabel) . " - " . htmlspecialchars($company_name) . "</th></tr>";
+    echo "<tr><td colspan='11' class='header-row'>Generated: " . date('d/m/Y H:i:s') . " | Total Orders: " . count($sheets) . "</td></tr>";
+    echo "<tr><td colspan='11'></td></tr>";
+    
+    echo "<tr>";
+    echo "<th>Reference</th>";
+    echo "<th>Priority</th>";
+    echo "<th>Client</th>";
+    echo "<th>Security</th>";
+    echo "<th>Side</th>";
+    echo "<th class='right'>Qty</th>";
+    echo "<th class='right'>Price</th>";
+    echo "<th class='right'>Value (TZS)</th>";
+    echo "<th>Date</th>";
+    echo "<th>Status</th>";
+    echo "<th>Asset Class</th>";
+    echo "</tr>";
+    
+    if (empty($sheets)) {
+        echo "<tr><td colspan='11' class='center'>No orders found</td></tr>";
+    } else {
+        foreach ($sheets as $sheet) {
+            $status = 'Pending';
+            if (($sheet['execution_status'] ?? '') === 'executed') $status = 'Executed';
+            elseif (($sheet['lifecycle_stage'] ?? '') === 'cancelled') $status = 'Cancelled';
+            elseif (($sheet['lifecycle_stage'] ?? '') === 'approved') $status = 'Approved';
+            
+            $rowClass = '';
+            if (strtolower($sheet['order_type'] ?? '') === 'sell') $rowClass = 'sell';
+            elseif (strtolower($sheet['order_type'] ?? '') === 'buy') $rowClass = 'buy';
+            
+            echo "<tr class='" . $rowClass . "'>";
+            echo "<td class='center'>" . htmlspecialchars($sheet['sheet_reference'] ?? 'N/A') . "</td>";
+            echo "<td class='center'>" . htmlspecialchars($sheet['priority'] ?? 'Normal') . "</td>";
+            echo "<td>" . htmlspecialchars($sheet['client_name'] ?? '') . "</td>";
+            echo "<td>" . htmlspecialchars($sheet['security_id'] ?? '') . "</td>";
+            echo "<td class='center'>" . strtoupper(htmlspecialchars($sheet['order_type'] ?? '')) . "</td>";
+            echo "<td class='right'>" . number_format(floatval($sheet['quantity'] ?? 0)) . "</td>";
+            echo "<td class='right'>" . number_format(floatval($sheet['order_price'] ?? 0), 2) . "</td>";
+            echo "<td class='right'>" . number_format(floatval($sheet['order_value'] ?? 0), 2) . "</td>";
+            echo "<td class='center'>" . htmlspecialchars($sheet['order_date'] ?? '') . "</td>";
+            echo "<td class='center'>" . $status . "</td>";
+            echo "<td class='center'>" . ucfirst(htmlspecialchars($sheet['asset_class'] ?? '')) . "</td>";
+            echo "</tr>";
+        }
+    }
+    
+    echo "<tr><td colspan='11'></td></tr>";
+    echo "<tr><td colspan='11' style='background-color:#f8f9fa;font-size:11px;'>Generated by " . htmlspecialchars($company_name) . " on " . date('d/m/Y H:i:s') . "</td></tr>";
+    echo "</table></body></html>";
+    exit;
+}
+
+// ============================================
 // GET DATA FOR DISPLAY
 // ============================================
 
@@ -1056,6 +1163,9 @@ include '../includes/header.php';
                 <p class="page-subtitle mb-0">Capture orders, execute trades, and track settlement in one workflow.</p>
             </div>
             <div class="d-flex gap-2 flex-wrap">
+                <a href="order_sheet.php?view=<?php echo urlencode($view); ?>&export_excel=1" class="btn btn-outline-success">
+                    <i class="bi bi-file-earmark-excel me-1"></i>Export Excel
+                </a>
                 <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#orderModal" onclick="resetOrderForm()">
                     <i class="bi bi-plus-circle me-2"></i>New Order
                 </button>

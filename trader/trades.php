@@ -337,7 +337,7 @@ function getEffectiveBrokerageRate($db, $trade, $client) {
 }
 
 // Function to calculate bond fees for contract note - FIXED for liberty rate display
-function calculateBondFeesForContract($face_value, $consideration, $effective_rate = null, $liberty_mode = 'replace_all', $is_liberty = false) {
+function calculateBondFeesForContract($face_value, $consideration, $effective_rate = null, $liberty_mode = 'replace_all', $is_liberty = false, $trade_side = 'Sell') {
     $fees = [];
     
     // Debug logging
@@ -426,11 +426,15 @@ function calculateBondFeesForContract($face_value, $consideration, $effective_ra
     
     $fees['fidelity'] = 0.00;
     
-    // Bank Charges (flat fee based on consideration)
-    if ($consideration < 100000) $fees['bank_charges'] = 250;
-    elseif ($consideration < 10000000) $fees['bank_charges'] = 2000;
-    elseif ($consideration < 50000000) $fees['bank_charges'] = 6000;
-    else $fees['bank_charges'] = 12000;
+    // Bank Charges (flat fee based on consideration, SELL only)
+    if (strtoupper($trade_side) !== 'BUY') {
+        if ($consideration < 100000) $fees['bank_charges'] = 250;
+        elseif ($consideration < 10000000) $fees['bank_charges'] = 2000;
+        elseif ($consideration < 50000000) $fees['bank_charges'] = 6000;
+        else $fees['bank_charges'] = 12000;
+    } else {
+        $fees['bank_charges'] = 0;
+    }
     
     $fees['total'] = array_sum([
         $fees['brokerage'],
@@ -445,7 +449,7 @@ function calculateBondFeesForContract($face_value, $consideration, $effective_ra
 }
 
 // Function to calculate equity fees for contract note
-function calculateEquityFeesForContract($db, $consideration, $effective_rate = null, $liberty_mode = 'replace_all', $is_liberty = false, $standard_rate = null) {
+function calculateEquityFeesForContract($db, $consideration, $effective_rate = null, $liberty_mode = 'replace_all', $is_liberty = false, $standard_rate = null, $trade_side = 'Sell') {
     global $standard_rate_percentage;
     
     if ($standard_rate === null) {
@@ -575,11 +579,15 @@ function calculateEquityFeesForContract($db, $consideration, $effective_rate = n
     // CDS Fee (0.0708% of consideration)
     $fees['csd'] = $consideration * (0.0708 / 100);
     
-    // Bank Charges (flat fee based on consideration)
-    if ($consideration < 100000) $fees['bank_charges'] = 250;
-    elseif ($consideration < 10000000) $fees['bank_charges'] = 2000;
-    elseif ($consideration < 50000000) $fees['bank_charges'] = 6000;
-    else $fees['bank_charges'] = 12000;
+    // Bank Charges (flat fee based on consideration, SELL only)
+    if (strtoupper($trade_side) !== 'BUY') {
+        if ($consideration < 100000) $fees['bank_charges'] = 250;
+        elseif ($consideration < 10000000) $fees['bank_charges'] = 2000;
+        elseif ($consideration < 50000000) $fees['bank_charges'] = 6000;
+        else $fees['bank_charges'] = 12000;
+    } else {
+        $fees['bank_charges'] = 0;
+    }
     
     $fees['total'] = array_sum([
         $fees['brokerage'],
@@ -594,7 +602,7 @@ function calculateEquityFeesForContract($db, $consideration, $effective_rate = n
     return $fees;
 }
 
-function calculateFeesWithEffectiveRate($db, $asset_class, $consideration, $quantity, $price, $effective_rate, $liberty_mode = 'replace_all', $is_liberty = false) {
+function calculateFeesWithEffectiveRate($db, $asset_class, $consideration, $quantity, $price, $effective_rate, $liberty_mode = 'replace_all', $is_liberty = false, $trade_side = 'Sell') {
     $fees = [];
     $fees['tier_details'] = [];
     
@@ -602,7 +610,7 @@ function calculateFeesWithEffectiveRate($db, $asset_class, $consideration, $quan
     
     if ($is_bond) {
         $face_value = $quantity;
-        $bond_fees = calculateBondFeesForContract($face_value, $consideration, $effective_rate, $liberty_mode, $is_liberty);
+        $bond_fees = calculateBondFeesForContract($face_value, $consideration, $effective_rate, $liberty_mode, $is_liberty, $trade_side);
         
         $fees['brokerage'] = $bond_fees['brokerage'];
         $fees['tier_details'] = $bond_fees['tier_details'];
@@ -615,7 +623,7 @@ function calculateFeesWithEffectiveRate($db, $asset_class, $consideration, $quan
         $fees['total'] = $bond_fees['total'];
         
     } else {
-        $equity_fees = calculateEquityFeesForContract($db, $consideration, $effective_rate, $liberty_mode, $is_liberty);
+        $equity_fees = calculateEquityFeesForContract($db, $consideration, $effective_rate, $liberty_mode, $is_liberty, null, $trade_side);
         
         $fees['brokerage'] = $equity_fees['brokerage'];
         $fees['tier_details'] = $equity_fees['tier_details'];
@@ -1228,7 +1236,8 @@ function generateContractNotePDF($trade_id, $contract_type = 'single') {
                          floatval($trade['price']),
                          $effective_rate,
                          $liberty_mode,
-                         $is_liberty);
+                         $is_liberty,
+                         $trade['trade_side'] ?? 'Sell');
     
     $pdf = new ContractNotePDF(PDF_PAGE_ORIENTATION, PDF_UNIT, 'LETTER', true, 'UTF-8', false);
 
@@ -1330,7 +1339,8 @@ function generateSummaryContractNote($client_id, $trade_date, $trade_side, $secu
                              floatval($trade['price']),
                              $effective_rate,
                              $liberty_mode,
-                             $is_liberty);
+                             $is_liberty,
+                             $trade['trade_side'] ?? 'Sell');
         $total_fees += $fees['total'];
     }
     
@@ -1345,7 +1355,7 @@ function generateSummaryContractNote($client_id, $trade_date, $trade_side, $secu
     $summary_trade['liberty_mode'] = $liberty_mode;
     $summary_trade['effective_rate_for_display'] = $effective_rate;
     
-    $summary_fees = calculateFeesWithEffectiveRate($db, $asset_class, $total_consideration, $total_quantity, $average_price, $effective_rate, $liberty_mode, $is_liberty);
+    $summary_fees = calculateFeesWithEffectiveRate($db, $asset_class, $total_consideration, $total_quantity, $average_price, $effective_rate, $liberty_mode, $is_liberty, $first_trade['trade_side'] ?? 'Sell');
     
     $pdf = new ContractNotePDF(PDF_PAGE_ORIENTATION, PDF_UNIT, 'LETTER', true, 'UTF-8', false);
 
@@ -1456,7 +1466,8 @@ function generateDetailedContractNotes($client_id, $trade_date, $trade_side, $se
                              floatval($trade['price']),
                              $effective_rate,
                              $liberty_mode,
-                             $is_liberty);
+                             $is_liberty,
+                             $trade['trade_side'] ?? 'Sell');
         
         $trade_side_upper = strtoupper(trim($trade['trade_side']));
         $contract_number = ($trade_side_upper === 'SELL' ? 'S' : 'P') . str_pad($trade['id'], 6, '0', STR_PAD_LEFT);

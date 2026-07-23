@@ -22,6 +22,17 @@
             header("Location: " . BASE_URL . "auth/login");
             exit();
         }
+        
+        // Order Intake badge counts for sidebar
+        $order_badge_pending = 0;
+        $order_badge_approved = 0;
+        $dealing_sheet_pending = 0;
+        try {
+            $db = getDBConnection();
+            $order_badge_pending = (int)$db->query("SELECT COUNT(*) FROM dealing_sheets WHERE lifecycle_stage = 'order' OR execution_status = 'pending'")->fetchColumn();
+            $order_badge_approved = (int)$db->query("SELECT COUNT(*) FROM dealing_sheets WHERE lifecycle_stage = 'approved'")->fetchColumn();
+            $dealing_sheet_pending = (int)$db->query("SELECT COUNT(*) FROM dealing_sheets WHERE execution_status = 'pending'")->fetchColumn();
+        } catch (Exception $e) {}
         ?>
         
         <!-- Added sidebar navigation system for better page control -->
@@ -155,6 +166,9 @@
                         <a class="nav-link" href="<?php echo BASE_URL; ?>trader/order_sheet.php">
                             <i class="bi bi-journal-text"></i>
                             <span>Order Intake</span>
+                            <?php if ($order_badge_approved > 0): ?>
+                                <span class="badge bg-success ms-auto"><?php echo $order_badge_approved; ?></span>
+                            <?php endif; ?>
                         </a>
                     </li>
                     <li class="nav-item">
@@ -231,6 +245,30 @@
                             <span>Payment</span>
                         </a>
                     </li>
+                                        <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/settlement">
+                            <i class="bi bi-currency-exchange"></i>
+                            <span>Settle Trades</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/dealing_sheet.php">
+                            <i class="bi bi-journal-check"></i>
+                            <span>Dealing Sheet</span>
+                            <?php if ($dealing_sheet_pending > 0): ?>
+                                <span class="badge bg-warning text-dark ms-auto"><?php echo $dealing_sheet_pending; ?></span>
+                            <?php endif; ?>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/order_sheet">
+                            <i class="bi bi-journal-text"></i>
+                            <span>Order Intake</span>
+                            <?php if ($order_badge_pending > 0): ?>
+                                <span class="badge bg-warning text-dark ms-auto"><?php echo $order_badge_pending; ?></span>
+                            <?php endif; ?>
+                        </a>
+                    </li>
                     <li class="nav-item">
                         <a class="nav-link" href="<?php echo BASE_URL; ?>finance/upload_mtp">
                             <i class="bi bi-cash-stack"></i>
@@ -238,7 +276,12 @@
                         </a>
                     </li>
                   
-                    
+                        <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/budget">
+                            <i class="bi bi-cash-stack"></i>
+                            <span>Budget</span>
+                        </a>
+                    </li>
                     <li class="nav-item">
                         <a class="nav-link" href="<?php echo BASE_URL; ?>finance/chart_of_accounts">
                             <i class="bi bi-cash-stack"></i>
@@ -275,24 +318,7 @@
                             <span>Reconciliation</span>
                         </a>
                     </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/settlement">
-                            <i class="bi bi-currency-exchange"></i>
-                            <span>Settle Trades</span>
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/dealing_sheet.php">
-                            <i class="bi bi-journal-check"></i>
-                            <span>Dealing Sheet</span>
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/order_sheet">
-                            <i class="bi bi-journal-text"></i>
-                            <span>Order Intake</span>
-                        </a>
-                    </li>
+
                     <?php endif; ?>
 
                     <?php if ($current_user['role'] == 'human_resource' || $current_user['role'] == 'hr' || $current_user['role'] == 'hr_manager' || $current_user['role'] == 'system_admin'): ?>

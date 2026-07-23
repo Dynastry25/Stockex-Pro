@@ -440,7 +440,7 @@ function testSMTPConnection($debug = false) {
 }
 
 // Function to calculate fees
-function calculateFees($db, $asset_class, $consideration, $quantity, $price) {
+function calculateFees($db, $asset_class, $consideration, $quantity, $price, $trade_side = 'Sell') {
     $fees = [];
     $fees['tier_details'] = [];
     
@@ -590,11 +590,15 @@ function calculateFees($db, $asset_class, $consideration, $quantity, $price) {
         $fees['csd'] = $consideration * ($cds_rate / 100);
     }
     
-    // Bank Charges (flat fee based on consideration)
-    if ($consideration < 100000) $fees['bank_charges'] = 250;
-    elseif ($consideration < 10000000) $fees['bank_charges'] = 2000;
-    elseif ($consideration < 50000000) $fees['bank_charges'] = 6000;
-    else $fees['bank_charges'] = 12000;
+    // Bank Charges (flat fee based on consideration, SELL only)
+    if (strtoupper($trade_side) !== 'BUY') {
+        if ($consideration < 100000) $fees['bank_charges'] = 250;
+        elseif ($consideration < 10000000) $fees['bank_charges'] = 2000;
+        elseif ($consideration < 50000000) $fees['bank_charges'] = 6000;
+        else $fees['bank_charges'] = 12000;
+    } else {
+        $fees['bank_charges'] = 0;
+    }
     
     $fees['total'] = array_sum([
         $fees['brokerage'] ?? 0,
@@ -973,7 +977,7 @@ function generateSummaryContractNote($client_id, $trade_date, $trade_side, $secu
     $summary_trade['consideration'] = $total_consideration;
     
     // Calculate fees for the total consideration
-    $summary_fees = calculateFees($db, $asset_class, $total_consideration, $total_quantity, $average_price);
+    $summary_fees = calculateFees($db, $asset_class, $total_consideration, $total_quantity, $average_price, $trade_side);
     
     // Create PDF document
     $pdf = new ContractNotePDF(PDF_PAGE_ORIENTATION, PDF_UNIT, 'LETTER', true, 'UTF-8', false);
@@ -1084,7 +1088,8 @@ function generateDetailedContractNotes($client_id, $trade_date, $trade_side, $se
         $fees = calculateFees($db, $trade['asset_class'], 
                              floatval($trade['consideration']), 
                              floatval($trade['quantity']), 
-                             floatval($trade['price']));
+                             floatval($trade['price']),
+                             $trade['trade_side'] ?? 'Sell');
         
         $trade_side_upper = strtoupper(trim($trade['trade_side']));
         $contract_number = ($trade_side_upper === 'SELL' ? 'S' : 'P') . str_pad($trade['id'], 6, '0', STR_PAD_LEFT);
@@ -1124,7 +1129,8 @@ function generateSingleContractNote($trade, $company_name, $temp_dir) {
     $fees = calculateFees($db, $trade['asset_class'], 
                          floatval($trade['consideration']), 
                          floatval($trade['quantity']), 
-                         floatval($trade['price']));
+                         floatval($trade['price']),
+                         $trade['trade_side'] ?? 'Sell');
     
     // Create PDF document
     $pdf = new ContractNotePDF(PDF_PAGE_ORIENTATION, PDF_UNIT, 'LETTER', true, 'UTF-8', false);
@@ -1232,7 +1238,8 @@ function generateContractNotePDF($trades, $client_info, $send_type = 'individual
                 $fees = calculateFees($db, $trade['asset_class'], 
                                      floatval($trade['consideration']), 
                                      floatval($trade['quantity']), 
-                                     floatval($trade['price']));
+                                     floatval($trade['price']),
+                                     $trade['trade_side'] ?? 'Sell');
                 
                 $trade_side_upper = strtoupper(trim($trade['trade_side']));
                 $contract_number = ($trade_side_upper === 'SELL' ? 'S' : 'P') . str_pad($trade['id'], 6, '0', STR_PAD_LEFT);

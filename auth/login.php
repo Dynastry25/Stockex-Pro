@@ -414,6 +414,11 @@ $page_title = 'Login';
                                 <i class="bi bi-eye text-muted"></i>
                             </button>
                         </div>
+                        <div class="text-end mt-2">
+                            <a href="forgot_password.php" class="text-decoration-none small fw-medium" style="color: #0e7490;">
+                                <i class="bi bi-key me-1"></i> Forgot Password?
+                            </a>
+                        </div>
                     </div>
                     
                     <div class="d-grid mb-4">
