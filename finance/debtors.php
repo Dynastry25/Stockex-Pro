@@ -254,13 +254,14 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
             $entity_id = $entity['id'];
             
             // Get receipts for this entity
+            $ledger_code = getLedgerCode($entity_type);
             $receipts_query = "SELECT receipt_date, amount, currency, narration, receipt_no, 
                               account_no as bank_account 
                               FROM receipts 
                               WHERE (account_of = ? OR (account_of = 'O' AND source_type = ?))
                               AND name_id = ? 
                               AND record_in_financial = 'yes'";
-            $receipts_params = [getLedgerCode($entity_type), $entity_type, $entity_id];
+            $receipts_params = [$ledger_code, $entity_type, $entity_id];
             
             if ($start_date && $end_date) {
                 $receipts_query .= " AND receipt_date BETWEEN ? AND ?";
@@ -282,7 +283,7 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
                               WHERE (paid_to = ? OR (paid_to = 'O' AND source_type = ?))
                               AND name_id = ? 
                               AND record_in_financial = 'yes'";
-            $payments_params = [getLedgerCode($entity_type), $entity_type, $entity_id];
+            $payments_params = [$ledger_code, $entity_type, $entity_id];
             
             if ($start_date && $end_date) {
                 $payments_query .= " AND payment_date BETWEEN ? AND ?";
@@ -340,6 +341,30 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
                             $gl_stmt->execute($trade_refs);
                             $gl_entries = $gl_stmt->fetchAll();
                         }
+                    }
+                } else {
+                    // For custodian, agent, broker, employee, supplier - search by entity_id or entity_name
+                    $entity_name = $entity['name'] ?? '';
+                    if (!empty($entity_id) || !empty($entity_name)) {
+                        $gl_query = "SELECT gl.transaction_date, gl.description, gl.reference_no,
+                                     gl.debit_amount, gl.credit_amount, gl.account_code,
+                                     coa.account_name
+                                     FROM general_ledger gl
+                                     LEFT JOIN chart_of_accounts coa ON gl.account_code = coa.account_code
+                                     WHERE (gl.entity_id = ? OR (gl.entity_name != '' AND gl.entity_name IS NOT NULL AND gl.entity_name LIKE ?))";
+                        $gl_params = [$entity_id, '%' . $entity_name . '%'];
+                        if ($start_date && $end_date) {
+                            $gl_query .= " AND gl.transaction_date BETWEEN ? AND ?";
+                            $gl_params[] = $start_date;
+                            $gl_params[] = $end_date;
+                        } elseif ($as_of_date) {
+                            $gl_query .= " AND gl.transaction_date <= ?";
+                            $gl_params[] = $as_of_date;
+                        }
+                        $gl_query .= " ORDER BY gl.transaction_date ASC";
+                        $gl_stmt = $db->prepare($gl_query);
+                        $gl_stmt->execute($gl_params);
+                        $gl_entries = $gl_stmt->fetchAll();
                     }
                 }
             } catch (Exception $e) {
