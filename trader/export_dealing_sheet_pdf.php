@@ -1,9 +1,9 @@
 <?php
 /**
- * Export Dealing Sheet as PDF
+ * Export Order Sheet as PDF
  * Separate file to avoid conflicts with main page
  * 
- * Usage: export_dealing_sheet_pdf.php?id=123
+ * Usage: export_order_sheet_pdf.php?id=123
  */
 
 // Error reporting for debugging (disable in production)
@@ -19,7 +19,7 @@ while (ob_get_level() > 0) {
 
 // Check if ID is provided
 if (!isset($_GET['id']) || !is_numeric($_GET['id'])) {
-    die('Invalid request. No dealing sheet ID provided.');
+    die('Invalid request. No order sheet ID provided.');
 }
 
 $sheet_id = (int) $_GET['id'];
@@ -52,17 +52,17 @@ if ($user_role !== 'system_admin') {
 $db = getDBConnection();
 $current_user = get_logged_in_user() ?: get_session_user();
 
-// Get the dealing sheet data
-function getDealingSheetById($db, $id) {
+// Get the order sheet data
+function getOrderSheetById($db, $id) {
     $stmt = $db->prepare("SELECT * FROM dealing_sheets WHERE id = ?");
     $stmt->execute([$id]);
     return $stmt->fetch(PDO::FETCH_ASSOC);
 }
 
-$sheet = getDealingSheetById($db, $sheet_id);
+$sheet = getOrderSheetById($db, $sheet_id);
 
 if (!$sheet) {
-    die('Dealing sheet not found.');
+    die('Order sheet not found.');
 }
 
 // Get company details
@@ -131,7 +131,7 @@ function calculateFees($asset_class, $consideration, $quantity, $price) {
         // EQUITY/ETF FEES - based on CONSIDERATION
         if ($consideration <= 10000000) {
             $fees['brokerage'] = $consideration * (1.70 / 100);
-            $fees['tier_details'][] = ['fee' => $fees['brokerage'], 'label' => 'Up to 10M @ 1.7000%'];
+            $fees['tier_details'][] = ['fee' => $fees['brokerage'], 'label' => 'Below 10M @ 1.7000%'];
         } elseif ($consideration <= 50000000) {
             $tier1 = 10000000 * (1.70 / 100);
             $tier2 = ($consideration - 10000000) * (1.50 / 100);
@@ -183,21 +183,77 @@ $is_bond = ($sheet['asset_class'] === 'bond');
 $trade_side = strtoupper($sheet['order_type'] ?? 'BUY');
 $is_sell = ($trade_side === 'SELL');
 
-// CORRECTED FORMULA: 
-// For BUY: Total Payable = Consideration + Total Charges
-// For SELL: Total Receivable = Consideration - Total Charges
+// ============================================
+// BROKER BANK DETAILS FOR BUY ORDERS
+// ============================================
+function getBrokerBankDetails($db) {
+    // Try to get active broker bank accounts
+    $stmt = $db->prepare("SELECT bank_name, account_name, account_number, branch_name, swift_code 
+                          FROM banks_accounts 
+                          WHERE status = 'active' AND is_active = '1'
+                          ORDER BY id ASC LIMIT 1");
+    $stmt->execute();
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($result) {
+        return $result;
+    }
+    
+    // Fallback: hardcoded defaults if no DB records exist
+    return [
+        'bank_name' => 'National Microfinance Bank',
+        'account_name' => 'VICTORY FINANCIAL SERVICES LTD',
+        'account_number' => '0112345678901',
+        'branch_name' => 'Dar es Salaam Main Branch',
+        'swift_code' => 'NMIBTZTZ'
+    ];
+}
+
+// ============================================
+// TRANSACTION FEES - based on trade value (ONLY FOR SELL)
+// ============================================
+function calculateTransactionFee($trade_value) {
+    if ($trade_value < 100000) {
+        return 250;
+    } elseif ($trade_value >= 100000 && $trade_value < 10000000) {
+        return 2000;
+    } elseif ($trade_value >= 10000000 && $trade_value < 50000000) {
+        return 6000;
+    } elseif ($trade_value >= 50000000) {
+        return 12000;
+    }
+    return 0;
+}
+
+// Get broker bank details for BUY orders
+$broker_bank_details = null;
+if (!$is_sell) { // BUY order
+    $broker_bank_details = getBrokerBankDetails($db);
+}
+
+// Calculate transaction fee - ONLY FOR SELL
+$transaction_fee = 0;
 if ($is_sell) {
-    $net_amount = $consideration - $fees['total'];
+    $transaction_fee = calculateTransactionFee($consideration);
+}
+
+// CORRECTED FORMULA: 
+// For BUY: Total Payable = Consideration + Total Charges (NO transaction fee)
+// For SELL: Total Receivable = Consideration - Total Charges (WITH transaction fee)
+if ($is_sell) {
+    $total_charges = $fees['total'] + $transaction_fee;
+    $net_amount = $consideration - $total_charges;
     $net_label = 'NET AMOUNT RECEIVABLE';
 } else {
-    $net_amount = $consideration + $fees['total'];
+    $total_charges = $fees['total']; // No transaction fee for BUY
+    $net_amount = $consideration + $total_charges;
     $net_label = 'NET AMOUNT PAYABLE';
 }
 
 // ============================================
 // PDF CLASS
 // ============================================
-class DealingSheetPDF extends TCPDF {
+class OrderSheetPDF extends TCPDF {
     use ReportHeaderTrait;
     
     private $company_name = '';
@@ -220,11 +276,11 @@ class DealingSheetPDF extends TCPDF {
 }
 
 // Create PDF
-$pdf = new DealingSheetPDF('P', 'mm', 'A4', true, 'UTF-8', false);
+$pdf = new OrderSheetPDF('P', 'mm', 'A4', true, 'UTF-8', false);
 $pdf->setCompanyName($company_name);
 $pdf->SetCreator($company_name);
 $pdf->SetAuthor($exportedByName);
-$pdf->SetTitle('Dealing Sheet - ' . ($sheet['sheet_reference'] ?? ''));
+$pdf->SetTitle('Order Sheet - ' . ($sheet['sheet_reference'] ?? ''));
 $pdf->SetMargins(15, 30, 15);
 $pdf->SetHeaderMargin(5);
 $pdf->SetFooterMargin(10);
@@ -237,225 +293,265 @@ $pdf->AddPage();
 
 // Title
 $pdf->SetFont('helvetica', 'B', 16);
-$pdf->Cell(0, 8, 'DEALING SHEET (INTERNAL USE)', 0, 1, 'C');
-$pdf->Ln(3);
+$pdf->Cell(0, 8, 'ORDER SHEET', 0, 1, 'C');
+$pdf->Ln(2);
 
-// Document info
+// Document info - REMOVED broker_code and department
 $pdf->SetFont('helvetica', '', 9);
 $pdf->Cell(50, 5, 'Sheet Reference:', 0, 0);
 $pdf->SetFont('helvetica', 'B', 9);
 $pdf->Cell(60, 5, $sheet['sheet_reference'] ?? 'N/A', 0, 0);
 $pdf->SetFont('helvetica', '', 9);
-$pdf->Cell(40, 5, 'Broker Code:', 0, 0);
-$pdf->SetFont('helvetica', 'B', 9);
-$pdf->Cell(0, 5, $sheet['broker_code'] ?? $company_code, 0, 1);
-
-$pdf->SetFont('helvetica', '', 9);
-$pdf->Cell(50, 5, 'Department:', 0, 0);
-$pdf->SetFont('helvetica', 'B', 9);
-$pdf->Cell(60, 5, 'Operations', 0, 0);
-$pdf->SetFont('helvetica', '', 9);
 $pdf->Cell(40, 5, 'Date:', 0, 0);
 $pdf->SetFont('helvetica', 'B', 9);
 $pdf->Cell(0, 5, date('d/m/Y', strtotime($sheet['order_date'] ?? date('Y-m-d'))), 0, 1);
 
-$pdf->Ln(6);
+$pdf->Ln(4);
 
 // ========== SECTION 1: CLIENT DETAILS ==========
-$pdf->SetFont('helvetica', 'B', 11);
+$pdf->SetFont('helvetica', 'B', 10);
 $pdf->SetFillColor(230, 230, 230);
-$pdf->Cell(0, 8, '1. CLIENT DETAILS', 0, 1, 'L', true);
+$pdf->Cell(0, 7, '1. CLIENT DETAILS', 0, 1, 'L', true);
 
-$pdf->SetFont('helvetica', '', 10);
-$pdf->Cell(40, 7, 'Client Name:', 0, 0);
-$pdf->SetFont('helvetica', 'B', 10);
-$pdf->Cell(0, 7, $sheet['client_name'], 0, 1);
+$pdf->SetFont('helvetica', '', 9);
+$pdf->Cell(40, 6, 'Client Name:', 0, 0);
+$pdf->SetFont('helvetica', 'B', 9);
+$pdf->Cell(0, 6, $sheet['client_name'], 0, 1);
 
-$pdf->SetFont('helvetica', '', 10);
-$pdf->Cell(40, 7, 'CDS Account:', 0, 0);
-$pdf->SetFont('helvetica', 'B', 10);
-$pdf->Cell(0, 7, $sheet['client_cds_account'] ?? 'N/A', 0, 1);
+$pdf->SetFont('helvetica', '', 9);
+$pdf->Cell(40, 6, 'CDS Account:', 0, 0);
+$pdf->SetFont('helvetica', 'B', 9);
+$pdf->Cell(0, 6, $sheet['client_cds_account'] ?? 'N/A', 0, 1);
 
-$pdf->Ln(4);
+$pdf->Ln(2);
 
 // ========== SECTION 2: ORDER DETAILS ==========
-$pdf->SetFont('helvetica', 'B', 11);
+$pdf->SetFont('helvetica', 'B', 10);
 $pdf->SetFillColor(230, 230, 230);
-$pdf->Cell(0, 8, '2. ORDER DETAILS', 0, 1, 'L', true);
+$pdf->Cell(0, 7, '2. ORDER DETAILS', 0, 1, 'L', true);
 
-$pdf->SetFont('helvetica', '', 10);
-$pdf->Cell(45, 7, 'Order Type:', 0, 0);
-$pdf->SetFont('helvetica', 'B', 10);
-$pdf->Cell(50, 7, $trade_side, 0, 0);
-$pdf->SetFont('helvetica', '', 10);
-$pdf->Cell(40, 7, 'Priority:', 0, 0);
-$pdf->SetFont('helvetica', 'B', 10);
-$pdf->Cell(0, 7, $sheet['priority'] ?? 'Normal', 0, 1);
+// Two-column layout for order details to save space
+$pdf->SetFont('helvetica', '', 9);
 
-$pdf->SetFont('helvetica', '', 10);
-$pdf->Cell(45, 7, 'Asset Class:', 0, 0);
-$pdf->SetFont('helvetica', 'B', 10);
-$pdf->Cell(50, 7, ucfirst($sheet['asset_class']), 0, 0);
-$pdf->SetFont('helvetica', '', 10);
-$pdf->Cell(40, 7, 'Security:', 0, 0);
-$pdf->SetFont('helvetica', 'B', 10);
-$pdf->Cell(0, 7, $sheet['security_id'] . ' - ' . ($sheet['security_name'] ?? ''), 0, 1);
+// Row 1
+$pdf->Cell(45, 6, 'Order Type:', 0, 0);
+$pdf->SetFont('helvetica', 'B', 9);
+$pdf->Cell(40, 6, $trade_side, 0, 0);
+$pdf->SetFont('helvetica', '', 9);
+$pdf->Cell(30, 6, 'Priority:', 0, 0);
+$pdf->SetFont('helvetica', 'B', 9);
+$pdf->Cell(0, 6, $sheet['priority'] ?? 'Normal', 0, 1);
 
-$pdf->SetFont('helvetica', '', 10);
-$pdf->Cell(45, 7, 'Quantity:', 0, 0);
-$pdf->SetFont('helvetica', 'B', 10);
-$pdf->Cell(50, 7, number_format($order_qty, ($is_bond ? 2 : 0)), 0, 0);
-$pdf->SetFont('helvetica', '', 10);
-$pdf->Cell(40, 7, 'Price:', 0, 0);
-$pdf->SetFont('helvetica', 'B', 10);
+// Row 2
+$pdf->SetFont('helvetica', '', 9);
+$pdf->Cell(45, 6, 'Asset Class:', 0, 0);
+$pdf->SetFont('helvetica', 'B', 9);
+$pdf->Cell(40, 6, ucfirst($sheet['asset_class']), 0, 0);
+$pdf->SetFont('helvetica', '', 9);
+$pdf->Cell(30, 6, 'Security Code:', 0, 0);
+$pdf->SetFont('helvetica', 'B', 9);
+$pdf->Cell(0, 6, $sheet['security_id'] ?? 'N/A', 0, 1);
 
-// FIX: For Bonds, display price as percentage
+// Row 3
+$pdf->SetFont('helvetica', '', 9);
+$pdf->Cell(45, 6, 'Quantity:', 0, 0);
+$pdf->SetFont('helvetica', 'B', 9);
+$pdf->Cell(40, 6, number_format($order_qty, ($is_bond ? 2 : 0)), 0, 0);
+$pdf->SetFont('helvetica', '', 9);
+$pdf->Cell(30, 6, 'Price:', 0, 0);
+$pdf->SetFont('helvetica', 'B', 9);
 if ($is_bond) {
-    $pdf->Cell(0, 7, number_format($order_price, 2) . '%', 0, 1);
+    $pdf->Cell(0, 6, number_format($order_price, 2) . '%', 0, 1);
 } else {
-    $pdf->Cell(0, 7, 'TZS ' . number_format($order_price, 2), 0, 1);
+    $pdf->Cell(0, 6, 'TZS ' . number_format($order_price, 2), 0, 1);
 }
 
-$pdf->SetFont('helvetica', '', 10);
-$pdf->Cell(45, 7, 'Consideration Value:', 0, 0);
+// Row 4
+$pdf->SetFont('helvetica', '', 9);
+$pdf->Cell(45, 6, 'Consideration Value:', 0, 0);
+$pdf->SetFont('helvetica', 'B', 9);
+$pdf->Cell(40, 6, 'TZS ' . number_format($consideration, 2), 0, 0);
+$pdf->SetFont('helvetica', '', 9);
+$pdf->Cell(30, 6, 'Order Date:', 0, 0);
+$pdf->SetFont('helvetica', 'B', 9);
+$order_date = date('d/m/Y', strtotime($sheet['order_date'] ?? date('Y-m-d')));
+$pdf->Cell(0, 6, $order_date, 0, 1);
+
+$pdf->Ln(2);
+
+// ========== SECTION 3: FEES AND CHARGES ==========
 $pdf->SetFont('helvetica', 'B', 10);
-$pdf->Cell(50, 7, 'TZS ' . number_format($consideration, 2), 0, 0);
-$pdf->SetFont('helvetica', '', 10);
-$pdf->Cell(40, 7, 'Order Date/Time:', 0, 0);
-$pdf->SetFont('helvetica', 'B', 10);
-$order_datetime = ($sheet['order_date'] ?? date('Y-m-d')) . ' ' . ($sheet['order_time'] ?? '');
-$pdf->Cell(0, 7, date('d/m/Y H:i', strtotime($order_datetime)), 0, 1);
-
-$pdf->Ln(4);
-
-
-
-// ========== SECTION 4: FEES AND CHARGES ==========
-$pdf->SetFont('helvetica', 'B', 11);
 $pdf->SetFillColor(230, 230, 230);
-$pdf->Cell(0, 8, '3. FEES AND CHARGES', 0, 1, 'L', true);
+$pdf->Cell(0, 7, '3. FEES AND CHARGES', 0, 1, 'L', true);
 
 // Table header
-$pdf->SetFont('helvetica', 'B', 9);
-$pdf->Cell(100, 7, 'Description', 0, 0, 'L');
-$pdf->Cell(45, 7, 'Rate', 0, 0, 'R');
-$pdf->Cell(40, 7, 'Amount (TZS)', 0, 1, 'R');
+$pdf->SetFont('helvetica', 'B', 8);
+$pdf->Cell(100, 6, 'Description', 0, 0, 'L');
+$pdf->Cell(45, 6, 'Rate', 0, 0, 'R');
+$pdf->Cell(40, 6, 'Amount (TZS)', 0, 1, 'R');
 $pdf->SetLineWidth(0.2);
 $pdf->Line(15, $pdf->GetY(), 195, $pdf->GetY());
 
-$pdf->SetFont('helvetica', '', 9);
+$pdf->SetFont('helvetica', '', 8);
 
 // Brokerage
-$pdf->Cell(100, 6, 'Brokerage Commission', 0, 0, 'L');
-$pdf->Cell(45, 6, $is_bond ? 'Tiered' : 'Tiered', 0, 0, 'R');
-$pdf->Cell(40, 6, number_format($fees['brokerage'], 2), 0, 1, 'R');
+$pdf->Cell(100, 5, 'Brokerage Commission', 0, 0, 'L');
+$pdf->Cell(45, 5, $is_bond ? 'Tiered' : 'Tiered', 0, 0, 'R');
+$pdf->Cell(40, 5, number_format($fees['brokerage'], 2), 0, 1, 'R');
 
 // Tier details
 if (!empty($fees['tier_details'])) {
-    $pdf->SetFont('helvetica', 'I', 7);
+    $pdf->SetFont('helvetica', 'I', 6.5);
     foreach ($fees['tier_details'] as $tier) {
         $pdf->Cell(20, 4, '', 0, 0);
         $pdf->Cell(80, 4, $tier['label'], 0, 0, 'L');
         $pdf->Cell(45, 4, '', 0, 0, 'R');
         $pdf->Cell(40, 4, number_format($tier['fee'], 2), 0, 1, 'R');
     }
-    $pdf->SetFont('helvetica', '', 9);
+    $pdf->SetFont('helvetica', '', 8);
 }
 
 // VAT
-$pdf->Cell(100, 6, 'VAT on Brokerage', 0, 0, 'L');
-$pdf->Cell(45, 6, '@ 18.00%', 0, 0, 'R');
-$pdf->Cell(40, 6, number_format($fees['vat'], 2), 0, 1, 'R');
+$pdf->Cell(100, 5, 'VAT on Brokerage', 0, 0, 'L');
+$pdf->Cell(45, 5, '@ 18.00%', 0, 0, 'R');
+$pdf->Cell(40, 5, number_format($fees['vat'], 2), 0, 1, 'R');
 
 // CMSA
 $cmsa_rate = $is_bond ? '0.0100%' : '0.1400%';
-$pdf->Cell(100, 6, 'CMSA Transaction Fee', 0, 0, 'L');
-$pdf->Cell(45, 6, '@ ' . $cmsa_rate, 0, 0, 'R');
-$pdf->Cell(40, 6, number_format($fees['cmsa'], 2), 0, 1, 'R');
+$pdf->Cell(100, 5, 'CMSA Transaction Fee', 0, 0, 'L');
+$pdf->Cell(45, 5, '@ ' . $cmsa_rate, 0, 0, 'R');
+$pdf->Cell(40, 5, number_format($fees['cmsa'], 2), 0, 1, 'R');
 
 // DSE
 $dse_rate = $is_bond ? '0.02006%' : '0.1652%';
-$dse_label = $is_bond ? '@ ' . $dse_rate . ' (on Face Value)' : '@ ' . $dse_rate;
-$pdf->Cell(100, 6, 'DSE Transaction Fee', 0, 0, 'L');
-$pdf->Cell(45, 6, $dse_label, 0, 0, 'R');
-$pdf->Cell(40, 6, number_format($fees['dse'], 2), 0, 1, 'R');
+$dse_label = $is_bond ? '@ ' . $dse_rate . ' (FV)' : '@ ' . $dse_rate;
+$pdf->Cell(100, 5, 'DSE Transaction Fee', 0, 0, 'L');
+$pdf->Cell(45, 5, $dse_label, 0, 0, 'R');
+$pdf->Cell(40, 5, number_format($fees['dse'], 2), 0, 1, 'R');
 
 // Fidelity (Equity/ETF only)
 if (!$is_bond) {
-    $pdf->Cell(100, 6, 'Fidelity Fee', 0, 0, 'L');
-    $pdf->Cell(45, 6, '@ 0.0200%', 0, 0, 'R');
-    $pdf->Cell(40, 6, number_format($fees['fidelity'], 2), 0, 1, 'R');
+    $pdf->Cell(100, 5, 'Fidelity Fee', 0, 0, 'L');
+    $pdf->Cell(45, 5, '@ 0.0200%', 0, 0, 'R');
+    $pdf->Cell(40, 5, number_format($fees['fidelity'], 2), 0, 1, 'R');
 }
 
 // CDS
 $cds_rate = $is_bond ? '0.0118%' : '0.0708%';
-$cds_label = $is_bond ? '@ ' . $cds_rate . ' (on Face Value)' : '@ ' . $cds_rate;
-$pdf->Cell(100, 6, 'CDS Fee', 0, 0, 'L');
-$pdf->Cell(45, 6, $cds_label, 0, 0, 'R');
-$pdf->Cell(40, 6, number_format($fees['csd'], 2), 0, 1, 'R');
+$cds_label = $is_bond ? '@ ' . $cds_rate . ' (FV)' : '@ ' . $cds_rate;
+$pdf->Cell(100, 5, 'CDS Fee', 0, 0, 'L');
+$pdf->Cell(45, 5, $cds_label, 0, 0, 'R');
+$pdf->Cell(40, 5, number_format($fees['csd'], 2), 0, 1, 'R');
+
+// Transaction Fee - ONLY FOR SELL
+if ($is_sell) {
+    $pdf->Cell(100, 5, 'Transaction Processing Fee', 0, 0, 'L');
+    $pdf->Cell(45, 5, 'Flat Fee', 0, 0, 'R');
+    $pdf->Cell(40, 5, number_format($transaction_fee, 2), 0, 1, 'R');
+}
 
 $pdf->Line(15, $pdf->GetY(), 195, $pdf->GetY());
 
 // Total Charges
-$pdf->SetFont('helvetica', 'B', 10);
-$pdf->Cell(145, 8, 'TOTAL CHARGES', 0, 0, 'R');
-$pdf->Cell(40, 8, number_format($fees['total'], 2), 0, 1, 'R');
+$pdf->SetFont('helvetica', 'B', 9);
+$pdf->Cell(145, 7, 'TOTAL CHARGES', 0, 0, 'R');
+$pdf->Cell(40, 7, number_format($total_charges, 2), 0, 1, 'R');
 
-$pdf->Ln(4);
+$pdf->Ln(2);
 
 // ========== NET AMOUNT / TOTAL PAYABLE ==========
 $pdf->SetLineWidth(0.5);
-$pdf->Line(15, $pdf->GetY() + 4, 195, $pdf->GetY() + 4);
-$pdf->Ln(8);
+$pdf->Line(15, $pdf->GetY() + 2, 195, $pdf->GetY() + 2);
+$pdf->Ln(5);
 
-$pdf->SetFont('helvetica', 'B', 12);
-$pdf->Cell(120, 8, $net_label . ':', 0, 0, 'R');
-$pdf->SetFont('helvetica', 'B', 12);
+$pdf->SetFont('helvetica', 'B', 11);
+$pdf->Cell(120, 7, $net_label . ':', 0, 0, 'R');
+$pdf->SetFont('helvetica', 'B', 11);
 $pdf->SetTextColor(0, 100, 0);
-$pdf->Cell(40, 8, 'TZS ' . number_format($net_amount, 2), 0, 1, 'R');
+$pdf->Cell(40, 7, 'TZS ' . number_format($net_amount, 2), 0, 1, 'R');
 $pdf->SetTextColor(0, 0, 0);
 
-// Add breakdown explanation
-$pdf->SetFont('helvetica', 'I', 7);
-$pdf->SetTextColor(100, 100, 100);
+$pdf->Ln(3);
 
-$pdf->SetTextColor(0, 0, 0);
-$pdf->Ln(12);
+// ========== SECTION 4: BROKER BANK DETAILS (BUY ONLY) - SINGLE COLUMN ==========
+if (!$is_sell && $broker_bank_details) { // Only for BUY orders
+    $pdf->SetFont('helvetica', 'B', 9);
+    $pdf->SetFillColor(230, 230, 230);
+    $pdf->Cell(0, 6, '4. PAYMENT INSTRUCTIONS - BROKER BANK DETAILS', 0, 1, 'L', true);
+    
+    $pdf->SetFont('helvetica', 'B', 7);
+    $pdf->SetTextColor(150, 0, 0);
+    $pdf->Cell(0, 4, 'Transfer the NET AMOUNT PAYABLE to:', 0, 1, 'L');
+    $pdf->SetTextColor(0, 0, 0);
+    $pdf->Ln(1);
+    
+    // Single column bank details
+    $pdf->SetFont('helvetica', '', 8);
+    $pdf->Cell(35, 5, 'Bank:', 0, 0);
+    $pdf->SetFont('helvetica', 'B', 8);
+    $pdf->Cell(0, 5, $broker_bank_details['bank_name'] ?? 'N/A', 0, 1);
+    
+    $pdf->SetFont('helvetica', '', 8);
+    $pdf->Cell(35, 5, 'Account Name:', 0, 0);
+    $pdf->SetFont('helvetica', 'B', 8);
+    $pdf->Cell(0, 5, $broker_bank_details['account_name'] ?? 'N/A', 0, 1);
+    
+    $pdf->SetFont('helvetica', '', 8);
+    $pdf->Cell(35, 5, 'Account Number:', 0, 0);
+    $pdf->SetFont('helvetica', 'B', 8);
+    $pdf->Cell(0, 5, $broker_bank_details['account_number'] ?? 'N/A', 0, 1);
+    
+    if (!empty($broker_bank_details['branch_name'])) {
+        $pdf->SetFont('helvetica', '', 8);
+        $pdf->Cell(35, 5, 'Branch:', 0, 0);
+        $pdf->SetFont('helvetica', 'B', 8);
+        $pdf->Cell(0, 5, $broker_bank_details['branch_name'], 0, 1);
+    }
+    
+    if (!empty($broker_bank_details['swift_code'])) {
+        $pdf->SetFont('helvetica', '', 8);
+        $pdf->Cell(35, 5, 'SWIFT Code:', 0, 0);
+        $pdf->SetFont('helvetica', 'B', 8);
+        $pdf->Cell(0, 5, $broker_bank_details['swift_code'], 0, 1);
+    }
+    
+    $pdf->SetFont('helvetica', 'I', 6);
+    $pdf->SetTextColor(100, 100, 100);
+    $pdf->Cell(0, 4, 'Reference: Use Sheet Reference as payment reference', 0, 1, 'L');
+    $pdf->SetTextColor(0, 0, 0);
+    
+    $pdf->Ln(28);
+}
 
-// ========== REMARKS ==========
-
-
-// ========== SIGNATURES ==========
-
-$pdf->Ln(4);
-
-
+// ========== SIGNATURES - SQUEEZED ==========
 $pdf->SetFont('helvetica', 'B', 9);
-$pdf->Cell(70, 6, 'Prepared By:', 0, 0);
-$pdf->Cell(70, 6, 'Checked By:', 0, 0);
-$pdf->Cell(0, 6, 'Approved By:', 0, 1);
+$pdf->Cell(70, 5, 'Prepared By:', 0, 0);
+$pdf->Cell(70, 5, 'Checked By:', 0, 0);
+$pdf->Cell(0, 5, 'Approved By:', 0, 1);
 
 $pdf->SetLineWidth(0.2);
-$pdf->Line(15, $pdf->GetY() + 8, 70, $pdf->GetY() + 8);
-$pdf->Line(85, $pdf->GetY() + 8, 140, $pdf->GetY() + 8);
-$pdf->Line(150, $pdf->GetY() + 8, 195, $pdf->GetY() + 8);
+$y_pos = $pdf->GetY();
+$pdf->Line(15, $y_pos + 6, 70, $y_pos + 6);
+$pdf->Line(85, $y_pos + 6, 140, $y_pos + 6);
+$pdf->Line(150, $y_pos + 6, 195, $y_pos + 6);
 
 $pdf->SetFont('helvetica', 'I', 7);
-$pdf->Cell(70, 12, $exportedByName, 0, 0, 'L');
-$pdf->Cell(70, 12, '', 0, 0, 'L');
-$pdf->Cell(0, 12, '', 0, 1, 'L');
-$pdf->Ln(8);
+$pdf->Cell(70, 10, $exportedByName, 0, 0, 'L');
+$pdf->Cell(70, 10, '', 0, 0, 'L');
+$pdf->Cell(0, 10, '', 0, 1, 'L');
+
+$pdf->Ln(2);
 
 // Disclaimer
 $pdf->SetFont('helvetica', 'I', 6);
 $pdf->SetTextColor(120, 120, 120);
-$disclaimer = "This Dealing Sheet is for internal use only. It does not constitute a contract note or official trade confirmation. " .
+$disclaimer = "This Order Sheet is for internal use only. It does not constitute a contract note or official trade confirmation. " .
               "All trades are subject to the Rules, Regulations and Customs of the Dar es Salaam Stock Exchange.";
 $pdf->MultiCell(0, 3, $disclaimer, 0, 'C');
 $pdf->SetTextColor(0, 0, 0);
 
 // Output PDF
-$filename = 'dealing_sheet_' . preg_replace('/[^a-zA-Z0-9_-]/', '_', $sheet['sheet_reference'] ?? 'export') . '.pdf';
+$filename = 'order_sheet_' . preg_replace('/[^a-zA-Z0-9_-]/', '_', $sheet['sheet_reference'] ?? 'export') . '.pdf';
 $pdf->Output($filename, 'I');
 exit;
 ?>
