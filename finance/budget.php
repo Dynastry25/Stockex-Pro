@@ -8,7 +8,7 @@ header("X-Frame-Options: DENY");
 header("X-Content-Type-Options: nosniff");
 header("X-XSS-Protection: 1; mode=block");
 header("Referrer-Policy: strict-origin-when-cross-origin");
-header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; font-src 'self' https://cdn.jsdelivr.net");
+header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' https://cdn.jsdelivr.net https://fonts.gstatic.com");
 
 require_finance_officer();
 
@@ -123,7 +123,7 @@ function createBudgetTables($db) {
             )
         ");
 
-        // Budget Monitoring Table (Track actual vs budget)
+        // Budget Monitoring Table
         $db->exec("
             CREATE TABLE IF NOT EXISTS budget_monitoring (
                 id INT PRIMARY KEY AUTO_INCREMENT,
@@ -148,7 +148,7 @@ function createBudgetTables($db) {
             )
         ");
 
-        // Budget Comments/History Table
+        // Budget History Table
         $db->exec("
             CREATE TABLE IF NOT EXISTS budget_history (
                 id INT PRIMARY KEY AUTO_INCREMENT,
@@ -165,12 +165,6 @@ function createBudgetTables($db) {
                 INDEX idx_action (action)
             )
         ");
-
-        // Insert default budget categories if empty
-        $stmt = $db->query("SELECT COUNT(*) FROM budget_categories LIMIT 1");
-        if ($stmt->fetchColumn() == 0) {
-            // We'll insert default categories when first budget is created
-        }
 
         return true;
     } catch (PDOException $e) {
@@ -357,6 +351,264 @@ function getFiscalYears($year = null) {
     return $years;
 }
 
+function updateBudgetTotals($db, $budget_id) {
+    try {
+        // Update category totals
+        $stmt = $db->prepare("
+            UPDATE budget_categories c
+            SET actual_amount = (
+                SELECT COALESCE(SUM(actual_amount), 0)
+                FROM budget_monitoring
+                WHERE category_id = c.id
+            ),
+            variance = budget_amount - (
+                SELECT COALESCE(SUM(actual_amount), 0)
+                FROM budget_monitoring
+                WHERE category_id = c.id
+            ),
+            variance_percentage = CASE 
+                WHEN budget_amount > 0 THEN 
+                    ((budget_amount - (SELECT COALESCE(SUM(actual_amount), 0) FROM budget_monitoring WHERE category_id = c.id)) / budget_amount) * 100
+                ELSE 0
+            END,
+            progress_percentage = CASE 
+                WHEN budget_amount > 0 THEN 
+                    ((SELECT COALESCE(SUM(actual_amount), 0) FROM budget_monitoring WHERE category_id = c.id) / budget_amount) * 100
+                ELSE 0
+            END
+            WHERE budget_id = ?
+        ");
+        $stmt->execute([$budget_id]);
+        
+        // Update budget totals
+        $stmt = $db->prepare("
+            UPDATE budgets b
+            SET 
+                total_budget = (
+                    SELECT COALESCE(SUM(budget_amount), 0)
+                    FROM budget_categories
+                    WHERE budget_id = b.id AND category_type != 'goal'
+                ),
+                total_actual = (
+                    SELECT COALESCE(SUM(actual_amount), 0)
+                    FROM budget_categories
+                    WHERE budget_id = b.id AND category_type != 'goal'
+                ),
+                total_variance = (
+                    SELECT COALESCE(SUM(budget_amount - actual_amount), 0)
+                    FROM budget_categories
+                    WHERE budget_id = b.id AND category_type != 'goal'
+                ),
+                variance_percentage = CASE 
+                    WHEN (
+                        SELECT COALESCE(SUM(budget_amount), 0)
+                        FROM budget_categories
+                        WHERE budget_id = b.id AND category_type != 'goal'
+                    ) > 0 THEN 
+                        ((
+                            SELECT COALESCE(SUM(budget_amount - actual_amount), 0)
+                            FROM budget_categories
+                            WHERE budget_id = b.id AND category_type != 'goal'
+                        ) / (
+                            SELECT COALESCE(SUM(budget_amount), 0)
+                            FROM budget_categories
+                            WHERE budget_id = b.id AND category_type != 'goal'
+                        )) * 100
+                    ELSE 0
+                END,
+                updated_at = NOW()
+            WHERE id = ?
+        ");
+        $stmt->execute([$budget_id]);
+        
+        return true;
+    } catch (PDOException $e) {
+        error_log("Error updating budget totals: " . $e->getMessage());
+        return false;
+    }
+}
+
+// =====================================================
+// CHART OF ACCOUNTS INTEGRATION FUNCTIONS
+// =====================================================
+
+function getChartAccountsForBudget($db, $account_type = null, $level_min = 3) {
+    $params = [];
+    $conditions = ["is_active = 1", "(is_group_account = 0 OR level >= ?)"];
+    $params[] = $level_min;
+    
+    if ($account_type) {
+        $conditions[] = "account_type = ?";
+        $params[] = $account_type;
+    }
+    
+    $where = implode(" AND ", $conditions);
+    
+    $stmt = $db->prepare("
+        SELECT account_code, account_name, account_type, level, normal_balance, id
+        FROM chart_of_accounts 
+        WHERE $where
+        ORDER BY account_type, account_code
+    ");
+    $stmt->execute($params);
+    return $stmt->fetchAll();
+}
+
+function getIncomeAccounts($db) {
+    return getChartAccountsForBudget($db, 'income', 3);
+}
+
+function getExpenseAccounts($db) {
+    return getChartAccountsForBudget($db, 'expense', 3);
+}
+
+function getAssetAccounts($db) {
+    return getChartAccountsForBudget($db, 'asset', 3);
+}
+
+function getLiabilityAccounts($db) {
+    return getChartAccountsForBudget($db, 'liability', 3);
+}
+
+function getEquityAccounts($db) {
+    return getChartAccountsForBudget($db, 'equity', 3);
+}
+
+function mapAccountTypeToBudgetType($account_type) {
+    $mapping = [
+        'income' => 'income',
+        'expense' => 'expense',
+        'asset' => 'goal',
+        'liability' => 'goal',
+        'equity' => 'goal'
+    ];
+    return $mapping[$account_type] ?? 'expense';
+}
+
+function createBudgetWithChartAccounts($db, $data) {
+    try {
+        $db->beginTransaction();
+        
+        // Create budget
+        $budget_code = generateBudgetCode($db, $data['fiscal_year'], $data['fiscal_period']);
+        
+        $stmt = $db->prepare("
+            INSERT INTO budgets (
+                budget_code, fiscal_year, fiscal_period, budget_type,
+                description, status, notes,
+                created_by, created_by_username, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        ");
+        $stmt->execute([
+            $budget_code, $data['fiscal_year'], $data['fiscal_period'], $data['budget_type'],
+            $data['description'], $data['status'], $data['notes'],
+            $data['user_id'], $data['username']
+        ]);
+        
+        $budget_id = $db->lastInsertId();
+        
+        // Fetch categories from chart of accounts
+        $income_accounts = getIncomeAccounts($db);
+        $expense_accounts = getExpenseAccounts($db);
+        $added = 0;
+        
+        // Create income categories
+        foreach ($income_accounts as $account) {
+            $stmt = $db->prepare("
+                INSERT INTO budget_categories (
+                    budget_id, category_code, category_name, category_type,
+                    budget_amount, actual_amount, description, status, created_at
+                ) VALUES (?, ?, ?, 'income', 0, 0, ?, 'active', NOW())
+            ");
+            $stmt->execute([
+                $budget_id,
+                $account['account_code'],
+                $account['account_name'],
+                "Auto-created from chart: Income - " . $account['account_type']
+            ]);
+            $added++;
+        }
+        
+        // Create expense categories
+        foreach ($expense_accounts as $account) {
+            $stmt = $db->prepare("
+                INSERT INTO budget_categories (
+                    budget_id, category_code, category_name, category_type,
+                    budget_amount, actual_amount, description, status, created_at
+                ) VALUES (?, ?, ?, 'expense', 0, 0, ?, 'active', NOW())
+            ");
+            $stmt->execute([
+                $budget_id,
+                $account['account_code'],
+                $account['account_name'],
+                "Auto-created from chart: Expense - " . $account['account_type']
+            ]);
+            $added++;
+        }
+        
+        logBudgetHistory($db, $budget_id, 'create', null, null, null, "Budget created from chart of accounts: $budget_code");
+        
+        $db->commit();
+        
+        return [
+            'success' => true,
+            'budget_id' => $budget_id,
+            'budget_code' => $budget_code,
+            'categories_added' => $added
+        ];
+        
+    } catch (Exception $e) {
+        $db->rollBack();
+        error_log("Budget creation error: " . $e->getMessage());
+        throw $e;
+    }
+}
+
+function syncBudgetCategoriesFromChart($db, $budget_id) {
+    try {
+        $db->beginTransaction();
+        
+        $income_accounts = getIncomeAccounts($db);
+        $expense_accounts = getExpenseAccounts($db);
+        $all_accounts = array_merge($income_accounts, $expense_accounts);
+        $added = 0;
+        
+        foreach ($all_accounts as $account) {
+            // Check if category already exists
+            $stmt = $db->prepare("
+                SELECT id FROM budget_categories 
+                WHERE budget_id = ? AND category_code = ?
+            ");
+            $stmt->execute([$budget_id, $account['account_code']]);
+            $existing = $stmt->fetch();
+            
+            if (!$existing) {
+                $type = in_array($account, $income_accounts) ? 'income' : 'expense';
+                $stmt = $db->prepare("
+                    INSERT INTO budget_categories (
+                        budget_id, category_code, category_name, category_type,
+                        budget_amount, actual_amount, description, status, created_at
+                    ) VALUES (?, ?, ?, ?, 0, 0, ?, 'active', NOW())
+                ");
+                $stmt->execute([
+                    $budget_id,
+                    $account['account_code'],
+                    $account['account_name'],
+                    $type,
+                    "Synced from chart of accounts"
+                ]);
+                $added++;
+            }
+        }
+        
+        $db->commit();
+        return $added;
+    } catch (Exception $e) {
+        $db->rollBack();
+        throw $e;
+    }
+}
+
 // =====================================================
 // AJAX HANDLERS
 // =====================================================
@@ -424,7 +676,6 @@ if (isset($_GET['ajax'])) {
             $category = $stmt->fetch();
             
             if ($category) {
-                // Get actual amounts
                 $actual_data = getActualAmountsForBudget($db, $category['budget_id'], $category['id']);
                 $category['actual_amount'] = $actual_data['total_actual'];
                 $category['records_count'] = $actual_data['records_count'];
@@ -480,7 +731,6 @@ if (isset($_GET['ajax'])) {
         $budget_id = $_GET['budget_id'] ?? 0;
         
         try {
-            // Get budget totals
             $stmt = $db->prepare("
                 SELECT 
                     COALESCE(SUM(budget_amount), 0) as total_budget,
@@ -491,7 +741,6 @@ if (isset($_GET['ajax'])) {
             $stmt->execute([$budget_id]);
             $totals = $stmt->fetch();
             
-            // Get income vs expense breakdown
             $stmt = $db->prepare("
                 SELECT 
                     category_type,
@@ -504,7 +753,6 @@ if (isset($_GET['ajax'])) {
             $stmt->execute([$budget_id]);
             $breakdown = $stmt->fetchAll();
             
-            // Get goal progress
             $stmt = $db->prepare("
                 SELECT 
                     COUNT(*) as total_goals,
@@ -540,7 +788,6 @@ function exportBudgetToExcel($db, $budget_id) {
 
     echo "\xEF\xBB\xBF";
     
-    // Get budget details
     $stmt = $db->prepare("SELECT * FROM budgets WHERE id = ?");
     $stmt->execute([$budget_id]);
     $budget = $stmt->fetch();
@@ -632,7 +879,6 @@ function exportBudgetToExcel($db, $budget_id) {
 }
 
 function exportBudgetToPDF($db, $budget_id) {
-    // We'll use TCPDF for PDF export
     require_once '../tcpdf/tcpdf.php';
     
     $stmt = $db->prepare("SELECT * FROM budgets WHERE id = ?");
@@ -650,14 +896,12 @@ function exportBudgetToPDF($db, $budget_id) {
     $pdf->SetMargins(10, 15, 10);
     $pdf->AddPage();
     
-    // Title
     $pdf->SetFont('helvetica', 'B', 16);
     $pdf->Cell(0, 10, 'BUDGET REPORT', 0, 1, 'C');
     $pdf->SetFont('helvetica', 'B', 14);
     $pdf->Cell(0, 8, $budget['budget_code'] . ' - ' . $budget['fiscal_year'] . ' (' . $budget['fiscal_period'] . ')', 0, 1, 'C');
     $pdf->Ln(5);
     
-    // Summary
     $pdf->SetFont('helvetica', 'B', 12);
     $pdf->Cell(0, 8, 'Budget Summary', 0, 1, 'L');
     $pdf->SetFont('helvetica', '', 10);
@@ -676,8 +920,8 @@ function exportBudgetToPDF($db, $budget_id) {
     $pdf->Cell(0, 8, 'Budget Categories', 0, 1, 'L');
     
     $pdf->SetFont('helvetica', 'B', 8);
-    $pdf->Cell(35, 6, 'Code', 1, 0, 'C');
-    $pdf->Cell(55, 6, 'Category Name', 1, 0, 'C');
+    $pdf->Cell(30, 6, 'Code', 1, 0, 'C');
+    $pdf->Cell(50, 6, 'Category Name', 1, 0, 'C');
     $pdf->Cell(25, 6, 'Type', 1, 0, 'C');
     $pdf->Cell(30, 6, 'Budget', 1, 0, 'R');
     $pdf->Cell(30, 6, 'Actual', 1, 0, 'R');
@@ -693,8 +937,8 @@ function exportBudgetToPDF($db, $budget_id) {
     
     $pdf->SetFont('helvetica', '', 8);
     while ($cat = $cat_stmt->fetch()) {
-        $pdf->Cell(35, 5, $cat['category_code'], 1, 0);
-        $pdf->Cell(55, 5, substr($cat['category_name'], 0, 25), 1, 0);
+        $pdf->Cell(30, 5, $cat['category_code'], 1, 0);
+        $pdf->Cell(50, 5, substr($cat['category_name'], 0, 25), 1, 0);
         $pdf->Cell(25, 5, $cat['category_type'], 1, 0);
         $pdf->Cell(30, 5, number_format($cat['budget_amount'], 0), 1, 0, 'R');
         $pdf->Cell(30, 5, number_format($cat['actual_amount'], 0), 1, 0, 'R');
@@ -734,7 +978,6 @@ function exportBudgetToPDF($db, $budget_id) {
         $pdf->Cell(25, 5, getBudgetStatusLabel($goal['status']), 1, 1, 'C');
     }
     
-    // Output
     $pdf->Output('budget_' . $budget['budget_code'] . '.pdf', 'I');
     exit;
 }
@@ -777,57 +1020,30 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     $success_message = "Budget updated successfully!";
                     
                 } else {
-                    // Create new budget
-                    $budget_code = generateBudgetCode($db, $fiscal_year, $fiscal_period);
-                    
-                    $stmt = $db->prepare("
-                        INSERT INTO budgets (
-                            budget_code, fiscal_year, fiscal_period, budget_type,
-                            description, status, notes,
-                            created_by, created_by_username, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-                    ");
-                    $stmt->execute([
-                        $budget_code, $fiscal_year, $fiscal_period, $budget_type,
-                        $description, $status, $notes,
-                        $user_id, $username
+                    // Create new budget with chart of accounts
+                    $result = createBudgetWithChartAccounts($db, [
+                        'fiscal_year' => $fiscal_year,
+                        'fiscal_period' => $fiscal_period,
+                        'budget_type' => $budget_type,
+                        'description' => $description,
+                        'status' => $status,
+                        'notes' => $notes,
+                        'user_id' => $user_id,
+                        'username' => $username
                     ]);
                     
-                    $budget_id = $db->lastInsertId();
-                    
-                    // Create default categories
-                    $default_categories = [
-                        ['INC-001', 'Revenue from Operations', 'income', 0],
-                        ['INC-002', 'Investment Income', 'income', 0],
-                        ['EXP-001', 'Operating Expenses', 'expense', 0],
-                        ['EXP-002', 'Staff Costs', 'expense', 0],
-                        ['EXP-003', 'Administrative Expenses', 'expense', 0],
-                        ['EXP-004', 'Marketing & Sales', 'expense', 0],
-                        ['EXP-005', 'IT & Technology', 'expense', 0],
-                        ['EXP-006', 'Professional Services', 'expense', 0],
-                        ['EXP-007', 'Travel & Entertainment', 'expense', 0],
-                        ['EXP-008', 'Office & Supplies', 'expense', 0],
-                        ['GOL-001', 'Revenue Growth', 'goal', 0],
-                        ['GOL-002', 'Cost Reduction', 'goal', 0],
-                    ];
-                    
-                    foreach ($default_categories as $cat) {
-                        $stmt = $db->prepare("
-                            INSERT INTO budget_categories (
-                                budget_id, category_code, category_name, category_type,
-                                budget_amount, actual_amount, status, created_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, 'active', NOW())
-                        ");
-                        $stmt->execute([$budget_id, $cat[0], $cat[1], $cat[2], $cat[3], 0]);
+                    if ($result['success']) {
+                        $success_message = "Budget created successfully! Budget Code: {$result['budget_code']}<br>";
+                        $success_message .= "Categories added: {$result['categories_added']} from chart of accounts.";
+                        $budget_id = $result['budget_id'];
                     }
-                    
-                    logBudgetHistory($db, $budget_id, 'create', null, null, null, "Budget created: $budget_code");
-                    $success_message = "Budget created successfully! Budget Code: $budget_code";
                 }
                 
                 $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
             } catch (PDOException $e) {
                 $error_message = "Database error: " . $e->getMessage();
+            } catch (Exception $e) {
+                $error_message = "Error: " . $e->getMessage();
             }
         }
         
@@ -881,13 +1097,28 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                         $success_message = "Category created successfully!";
                     }
                     
-                    // Update budget totals
                     updateBudgetTotals($db, $budget_id);
-                    
                     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
                 } catch (PDOException $e) {
                     $error_message = "Database error: " . $e->getMessage();
                 }
+            }
+        }
+        
+        // ============ SYNC CATEGORIES FROM CHART ============
+        if (isset($_POST['sync_categories'])) {
+            $budget_id = (int)($_POST['sync_budget_id'] ?? 0);
+            
+            try {
+                $added = syncBudgetCategoriesFromChart($db, $budget_id);
+                if ($added > 0) {
+                    $success_message = "Synced $added new categories from chart of accounts.";
+                } else {
+                    $success_message = "No new categories to sync. All chart accounts already exist.";
+                }
+                $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+            } catch (Exception $e) {
+                $error_message = "Error syncing categories: " . $e->getMessage();
             }
         }
         
@@ -971,7 +1202,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 $error_message = "Invalid status.";
             } else {
                 try {
-                    // Check if user has permission for this action
                     $can_approve = in_array($user_role, ['system_admin', 'ceo', 'managing_director']);
                     $can_review = in_array($user_role, ['system_admin', 'ceo', 'managing_director', 'finance_manager']);
                     
@@ -1028,7 +1258,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 $error_message = "Please select a category and enter a valid amount.";
             } else {
                 try {
-                    // Get current actual amount for this category
                     $cat_stmt = $db->prepare("SELECT actual_amount, budget_amount FROM budget_categories WHERE id = ?");
                     $cat_stmt->execute([$category_id]);
                     $category = $cat_stmt->fetch();
@@ -1038,7 +1267,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     } else {
                         $new_actual = $category['actual_amount'] + $actual_amount;
                         
-                        // Insert monitoring record
                         $stmt = $db->prepare("
                             INSERT INTO budget_monitoring (
                                 budget_id, category_id, monitoring_date,
@@ -1059,7 +1287,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             $user_id, $username
                         ]);
                         
-                        // Update category actual amount
                         $update_stmt = $db->prepare("
                             UPDATE budget_categories SET
                                 actual_amount = ?,
@@ -1079,9 +1306,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             $category_id
                         ]);
                         
-                        // Update budget totals
                         updateBudgetTotals($db, $budget_id);
-                        
                         $success_message = "Monitoring record added successfully!";
                     }
                     
@@ -1147,87 +1372,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 }
             }
         }
-    }
-}
-
-// =====================================================
-// UPDATE BUDGET TOTALS FUNCTION
-// =====================================================
-
-function updateBudgetTotals($db, $budget_id) {
-    try {
-        // Update category totals
-        $stmt = $db->prepare("
-            UPDATE budget_categories c
-            SET actual_amount = (
-                SELECT COALESCE(SUM(actual_amount), 0)
-                FROM budget_monitoring
-                WHERE category_id = c.id
-            ),
-            variance = budget_amount - (
-                SELECT COALESCE(SUM(actual_amount), 0)
-                FROM budget_monitoring
-                WHERE category_id = c.id
-            ),
-            variance_percentage = CASE 
-                WHEN budget_amount > 0 THEN 
-                    ((budget_amount - (SELECT COALESCE(SUM(actual_amount), 0) FROM budget_monitoring WHERE category_id = c.id)) / budget_amount) * 100
-                ELSE 0
-            END,
-            progress_percentage = CASE 
-                WHEN budget_amount > 0 THEN 
-                    ((SELECT COALESCE(SUM(actual_amount), 0) FROM budget_monitoring WHERE category_id = c.id) / budget_amount) * 100
-                ELSE 0
-            END
-            WHERE budget_id = ?
-        ");
-        $stmt->execute([$budget_id]);
-        
-        // Update budget totals
-        $stmt = $db->prepare("
-            UPDATE budgets b
-            SET 
-                total_budget = (
-                    SELECT COALESCE(SUM(budget_amount), 0)
-                    FROM budget_categories
-                    WHERE budget_id = b.id AND category_type != 'goal'
-                ),
-                total_actual = (
-                    SELECT COALESCE(SUM(actual_amount), 0)
-                    FROM budget_categories
-                    WHERE budget_id = b.id AND category_type != 'goal'
-                ),
-                total_variance = (
-                    SELECT COALESCE(SUM(budget_amount - actual_amount), 0)
-                    FROM budget_categories
-                    WHERE budget_id = b.id AND category_type != 'goal'
-                ),
-                variance_percentage = CASE 
-                    WHEN (
-                        SELECT COALESCE(SUM(budget_amount), 0)
-                        FROM budget_categories
-                        WHERE budget_id = b.id AND category_type != 'goal'
-                    ) > 0 THEN 
-                        ((
-                            SELECT COALESCE(SUM(budget_amount - actual_amount), 0)
-                            FROM budget_categories
-                            WHERE budget_id = b.id AND category_type != 'goal'
-                        ) / (
-                            SELECT COALESCE(SUM(budget_amount), 0)
-                            FROM budget_categories
-                            WHERE budget_id = b.id AND category_type != 'goal'
-                        )) * 100
-                    ELSE 0
-                END,
-                updated_at = NOW()
-            WHERE id = ?
-        ");
-        $stmt->execute([$budget_id]);
-        
-        return true;
-    } catch (PDOException $e) {
-        error_log("Error updating budget totals: " . $e->getMessage());
-        return false;
     }
 }
 
@@ -1304,7 +1448,7 @@ if ($selected_budget_id > 0) {
             $goal_stmt->execute([$selected_budget_id]);
             $selected_goals = $goal_stmt->fetchAll();
             
-            // Get monitoring data (last 30 days or limited)
+            // Get monitoring data
             $mon_stmt = $db->prepare("
                 SELECT m.*, 
                        c.category_code, c.category_name, c.category_type
@@ -1322,7 +1466,7 @@ if ($selected_budget_id > 0) {
     }
 }
 
-// For edit mode, get existing data
+// For edit mode
 $edit_budget = null;
 if (isset($_GET['edit']) && $selected_budget_id > 0) {
     $edit_budget = $selected_budget;
@@ -1397,20 +1541,6 @@ include '../includes/header.php';
         font-size: 0.85rem;
         color: #6c757d;
         margin-top: 5px;
-    }
-    
-    .filter-section {
-        background: #f8f9fa;
-        border-radius: 8px;
-        padding: 10px 15px;
-    }
-    
-    .monitoring-chart-container {
-        height: 300px;
-        background: white;
-        border-radius: 8px;
-        padding: 15px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
     }
 </style>
 
@@ -1596,10 +1726,12 @@ include '../includes/header.php';
                                                         <i class="bi bi-pencil"></i>
                                                     </a>
                                                 <?php endif; ?>
-                                                <button class="btn btn-outline-danger delete-budget" data-id="<?php echo (int)$budget['id']; ?>" 
-                                                        data-code="<?php echo htmlspecialchars($budget['budget_code']); ?>">
-                                                    <i class="bi bi-trash"></i>
-                                                </button>
+                                                <?php if (in_array($user_role, ['finance_officer', 'hr_officer', 'system_admin']) && in_array($budget['status'], ['draft', 'pending', 'rejected'])): ?>
+                                                    <button class="btn btn-outline-danger delete-budget" data-id="<?php echo (int)$budget['id']; ?>" 
+                                                            data-code="<?php echo htmlspecialchars($budget['budget_code']); ?>">
+                                                        <i class="bi bi-trash"></i>
+                                                    </button>
+                                                <?php endif; ?>
                                             </div>
                                         </td>
                                     </tr>
@@ -1643,6 +1775,20 @@ include '../includes/header.php';
                                 <button class="btn btn-sm btn-primary" onclick="updateBudgetStatus(<?php echo $selected_budget['id']; ?>, 'active')">
                                     <i class="bi bi-play-circle me-1"></i>Activate
                                 </button>
+                            <?php endif; ?>
+                            <?php if (in_array($user_role, ['finance_officer', 'hr_officer', 'system_admin']) && in_array($selected_budget['status'], ['draft', 'pending', 'rejected'])): ?>
+                                <a href="budget_delete.php?id=<?php echo $selected_budget['id']; ?>" class="btn btn-sm btn-danger" onclick="return confirm('Are you sure you want to delete this budget? This will delete all associated data.')">
+                                    <i class="bi bi-trash me-1"></i>Delete
+                                </a>
+                            <?php endif; ?>
+                            <?php if (in_array($user_role, ['finance_officer', 'system_admin'])): ?>
+                                <form method="POST" class="d-inline">
+                                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
+                                    <input type="hidden" name="sync_budget_id" value="<?php echo $selected_budget['id']; ?>">
+                                    <button type="submit" name="sync_categories" class="btn btn-sm btn-info">
+                                        <i class="bi bi-arrow-repeat me-1"></i>Sync Categories
+                                    </button>
+                                </form>
                             <?php endif; ?>
                         </div>
                     </div>
@@ -1738,6 +1884,7 @@ include '../includes/header.php';
                                         <button class="btn btn-sm btn-primary" data-bs-toggle="collapse" data-bs-target="#addCategoryForm">
                                             <i class="bi bi-plus-circle me-1"></i>Add Category
                                         </button>
+                                        <small class="text-muted ms-2">Categories are automatically synced from Chart of Accounts</small>
                                     </div>
                                     <div class="collapse mb-3" id="addCategoryForm">
                                         <div class="card card-body p-2">
@@ -1749,11 +1896,11 @@ include '../includes/header.php';
                                                 <div class="row g-2">
                                                     <div class="col-md-2">
                                                         <label class="form-label">Category Code</label>
-                                                        <input type="text" class="form-control form-control-sm" name="category_code" required>
+                                                        <input type="text" class="form-control form-control-sm" name="category_code" required placeholder="e.g., 411">
                                                     </div>
                                                     <div class="col-md-3">
                                                         <label class="form-label">Category Name</label>
-                                                        <input type="text" class="form-control form-control-sm" name="category_name" required>
+                                                        <input type="text" class="form-control form-control-sm" name="category_name" required placeholder="e.g., Brokerage Income">
                                                     </div>
                                                     <div class="col-md-2">
                                                         <label class="form-label">Type</label>
@@ -1765,7 +1912,7 @@ include '../includes/header.php';
                                                     </div>
                                                     <div class="col-md-2">
                                                         <label class="form-label">Budget Amount</label>
-                                                        <input type="number" class="form-control form-control-sm" name="budget_amount" step="0.01" min="0">
+                                                        <input type="number" class="form-control form-control-sm" name="budget_amount" step="0.01" min="0" placeholder="0.00">
                                                     </div>
                                                     <div class="col-md-3">
                                                         <label class="form-label">Description</label>
@@ -2015,7 +2162,7 @@ include '../includes/header.php';
                                                             <i class="bi bi-arrow-up-circle me-1"></i>Update Progress
                                                         </button>
                                                         <?php if ($goal['progress_notes']): ?>
-                                                            <small class="text-muted d-block mt-1"><?php echo nl2br(htmlspecialchars($goal['progress_notes'])); ?></small>
+                                                            <small class="text-muted d-block mt-1"><?php echo nl2br(htmlspecialchars(substr($goal['progress_notes'], 0, 200))); ?></small>
                                                         <?php endif; ?>
                                                     </div>
                                                 <?php endif; ?>
@@ -2249,6 +2396,12 @@ include '../includes/header.php';
                                            placeholder="Additional notes">
                                 </div>
                                 <div class="col-12">
+                                    <div class="alert alert-info">
+                                        <i class="bi bi-info-circle me-2"></i>
+                                        <strong>Note:</strong> When creating a new budget, categories will be automatically created from the Chart of Accounts (Income and Expense accounts with level ≥ 3).
+                                    </div>
+                                </div>
+                                <div class="col-12">
                                     <hr>
                                     <div class="d-flex justify-content-end gap-2">
                                         <a href="budget.php" class="btn btn-secondary btn-sm">Cancel</a>
@@ -2345,28 +2498,6 @@ include '../includes/header.php';
                 <button type="button" class="btn btn-warning btn-sm" id="confirmStatusUpdate">
                     <i class="bi bi-check-circle me-1"></i>Confirm
                 </button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Delete Budget Modal -->
-<div class="modal fade" id="deleteBudgetModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header bg-danger text-white">
-                <h5 class="modal-title"><i class="bi bi-exclamation-triangle me-2"></i>Delete Budget</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <p>Are you sure you want to delete budget <strong id="deleteBudgetCode"></strong>?</p>
-                <p class="text-danger small">This action cannot be undone. All associated categories, goals, and monitoring data will be deleted.</p>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
-                <a href="#" id="confirmDeleteBtn" class="btn btn-danger btn-sm">
-                    <i class="bi bi-trash me-1"></i>Delete Budget
-                </a>
             </div>
         </div>
     </div>
@@ -2471,10 +2602,9 @@ document.addEventListener('DOMContentLoaded', function() {
             const budgetId = this.dataset.id;
             const budgetCode = this.dataset.code;
             
-            document.getElementById('deleteBudgetCode').textContent = budgetCode;
-            document.getElementById('confirmDeleteBtn').href = 'budget_delete.php?id=' + budgetId;
-            
-            new bootstrap.Modal(document.getElementById('deleteBudgetModal')).show();
+            if (confirm(`Are you sure you want to delete budget ${budgetCode}? This will delete all associated categories, goals, monitoring records, and history.`)) {
+                window.location.href = `budget_delete.php?id=${budgetId}`;
+            }
         });
     });
 
@@ -2492,12 +2622,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // =============== KEYBOARD SHORTCUTS ===============
     document.addEventListener('keydown', function(e) {
-        // Ctrl+N for new budget
         if (e.ctrlKey && e.key === 'n') {
             window.location.href = '?new=1';
             e.preventDefault();
         }
-        // Ctrl+F for search focus
         if (e.ctrlKey && e.key === 'f') {
             document.getElementById('budgetSearch').focus();
             e.preventDefault();
