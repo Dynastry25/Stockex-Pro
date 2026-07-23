@@ -325,6 +325,10 @@ function update_user_session($user_data) {
     if (isset($user_data['mandate_enabled'])) {
         $_SESSION['mandate_enabled'] = (bool)$user_data['mandate_enabled'];
     }
+    // Clear cached user data so next get_logged_in_user() fetches fresh
+    if (function_exists('clear_user_cache')) {
+        clear_user_cache();
+    }
 }
 
 /**

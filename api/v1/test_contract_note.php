@@ -18,8 +18,7 @@ if (file_exists($db_config_path)) {
     require_once $db_config_path;
     
     try {
-        $database = new Database();
-        $db = $database->getConnection();
+        $db = getDBConnection();
         if ($db) {
             echo "✓ Database connection successful<br>";
         } else {

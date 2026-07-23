@@ -12,31 +12,19 @@ $db = getDBConnection();
 
 // --- Fetch Dashboard Data ---
 
-// 1. Total Trade Value (for both BUY and SELL trades)
-$total_trade_value_query = "SELECT SUM(consideration) AS total_value FROM trades";
-$stmt = $db->query($total_trade_value_query);
-$total_trade_value = $stmt->fetchColumn();
+// 1-3. Trade overview stats (single query replaces 3 separate queries)
+$trades_stats = $db->query("
+    SELECT 
+        COALESCE(SUM(consideration), 0) AS total_value,
+        COUNT(*) AS total_trades,
+        COUNT(DISTINCT client_cds_account) AS unique_clients
+    FROM trades
+")->fetch();
+$total_trade_value = $trades_stats['total_value'];
+$total_trades = $trades_stats['total_trades'];
+$unique_clients = $trades_stats['unique_clients'];
 
-// 2. Total Number of Trades
-$total_trades_query = "SELECT COUNT(*) AS total_trades FROM trades";
-$stmt = $db->query($total_trades_query);
-$total_trades = $stmt->fetchColumn();
-
-// 3. Number of Unique Clients
-$unique_clients_query = "SELECT COUNT(DISTINCT client_cds_account) AS unique_clients FROM trades";
-$stmt = $db->query($unique_clients_query);
-$unique_clients = $stmt->fetchColumn();
-
-// 4. Number of Pending Payment Requests for CEO Approval
-$pending_payments_query = "
-    SELECT COUNT(*) as pending_count 
-    FROM pending_pay 
-    WHERE status = 'pending' AND ceo_approved_at IS NULL
-";
-$stmt = $db->query($pending_payments_query);
-$pending_payments = $stmt->fetchColumn();
-
-// 5. Pending Payment Requests for CEO Approval (max 5)
+// 4-5. Pending payment requests (count derived from rows, reduces 2 queries to 1)
 $pending_requests_query = "
     SELECT pp.*, 
            u.full_name as requested_by_name,
@@ -49,17 +37,15 @@ $pending_requests_query = "
     ORDER BY pp.requested_at ASC
     LIMIT 5
 ";
-$stmt = $db->query($pending_requests_query);
-$pending_requests = $stmt->fetchAll();
+$pending_requests = $db->query($pending_requests_query)->fetchAll();
+$pending_payments = count($pending_requests);
 
 // 6. Total Payment Requests (for CEO)
-$total_payment_requests_query = "
-    SELECT COUNT(*) as total_payments 
+$total_payment_requests = $db->query("
+    SELECT COUNT(*) 
     FROM pending_pay 
     WHERE ceo_approved_at IS NOT NULL OR status = 'pending'
-";
-$stmt = $db->query($total_payment_requests_query);
-$total_payment_requests = $stmt->fetchColumn();
+")->fetchColumn();
 
 // 7. Recent Trades (last 10)
 $recent_trades_query = "

@@ -8,7 +8,7 @@ $db = getDBConnection();
 $page_title = 'HR Dashboard';
 include '../includes/header.php';
 
-// Get statistics with proper error handling
+// Get statistics - consolidated where possible
 try {
     $total_employees = $db->query("SELECT COUNT(*) FROM users WHERE status = 'active' AND role IN ('trader', 'finance_officer', 'ceo', 'hr_manager', 'hr_officer')")->fetchColumn();
 } catch (Exception $e) {
@@ -39,22 +39,25 @@ try {
     $pending_payroll = 0;
 }
 
+// Performance targets: active + overdue in single query (replaces 2 separate queries)
 try {
-    $active_targets = $db->query("SELECT COUNT(*) FROM performance_targets WHERE status = 'active'")->fetchColumn();
+    $target_stats = $db->query("
+        SELECT 
+            COUNT(*) as active_targets,
+            SUM(end_date < CURDATE()) as overdue_targets
+        FROM performance_targets WHERE status = 'active'
+    ")->fetch();
+    $active_targets = $target_stats['active_targets'];
+    $overdue_targets = $target_stats['overdue_targets'] ?? 0;
 } catch (Exception $e) {
     $active_targets = 0;
+    $overdue_targets = 0;
 }
 
 try {
     $new_applications = $db->query("SELECT COUNT(*) FROM job_applications WHERE status = 'received'")->fetchColumn();
 } catch (Exception $e) {
     $new_applications = 0;
-}
-
-try {
-    $overdue_targets = $db->query("SELECT COUNT(*) FROM performance_targets WHERE status = 'active' AND end_date < CURDATE()")->fetchColumn();
-} catch (Exception $e) {
-    $overdue_targets = 0;
 }
 
 // Get recent activities with error handling

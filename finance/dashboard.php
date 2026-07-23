@@ -28,62 +28,45 @@ if (empty($_SESSION['csrf_token'])) {
 
 // --- Fetch Dashboard Data ---
 
-// 1. Get finance statistics
 $stats = [];
-
-// Get current date range for calculations
 $current_month = date('m');
 $current_year = date('Y');
 $start_of_month = date('Y-m-01');
 $end_of_month = date('Y-m-t');
 
-// Get total revenue this month
-$stmt = $db->prepare("
-    SELECT COALESCE(SUM(gl.credit_amount), 0) as total 
+// Revenue + expenses (single query replaces 2 separate queries)
+$income_expense = $db->prepare("
+    SELECT 
+        COALESCE(SUM(CASE WHEN coa.account_type = 'income' THEN gl.credit_amount ELSE 0 END), 0) as total_revenue,
+        COALESCE(SUM(CASE WHEN coa.account_type = 'expense' THEN gl.debit_amount ELSE 0 END), 0) as total_expenses
     FROM general_ledger gl
     JOIN chart_of_accounts coa ON gl.account_id = coa.id
     WHERE gl.transaction_date BETWEEN ? AND ?
     AND gl.status = 'active'
-    AND coa.account_type = 'income'
-    AND gl.credit_amount > 0
+    AND coa.account_type IN ('income', 'expense')
+    AND (gl.credit_amount > 0 OR gl.debit_amount > 0)
 ");
-$stmt->execute([$start_of_month, $end_of_month]);
-$stats['monthly_revenue'] = $stmt->fetch()['total'];
-
-// Get total expenses this month
-$stmt = $db->prepare("
-    SELECT COALESCE(SUM(gl.debit_amount), 0) as total 
-    FROM general_ledger gl
-    JOIN chart_of_accounts coa ON gl.account_id = coa.id
-    WHERE gl.transaction_date BETWEEN ? AND ?
-    AND gl.status = 'active'
-    AND coa.account_type = 'expense'
-    AND gl.debit_amount > 0
-");
-$stmt->execute([$start_of_month, $end_of_month]);
-$stats['monthly_expenses'] = $stmt->fetch()['total'];
-
-// Net position this month
+$income_expense->execute([$start_of_month, $end_of_month]);
+$ie = $income_expense->fetch();
+$stats['monthly_revenue'] = $ie['total_revenue'];
+$stats['monthly_expenses'] = $ie['total_expenses'];
 $stats['net_position'] = $stats['monthly_revenue'] - $stats['monthly_expenses'];
 
-// Count pending receipts
-$stmt = $db->query("SELECT COUNT(*) as total FROM receipts WHERE status = 'active' AND record_in_financial = 'no'");
-$stats['pending_receipts'] = $stmt->fetch()['total'];
+// Pending receipts + payments (single query replaces 2 separate queries)
+$pending_counts = $db->query("
+    SELECT 
+        SUM(type = 'receipt') as pending_receipts,
+        SUM(type = 'payment') as pending_payments
+    FROM (
+        SELECT 'receipt' as type FROM receipts WHERE status = 'active' AND record_in_financial = 'no'
+        UNION ALL
+        SELECT 'payment' as type FROM payments WHERE status = 'active' AND record_in_financial = 'no'
+    ) t
+")->fetch();
+$stats['pending_receipts'] = $pending_counts['pending_receipts'] ?? 0;
+$stats['pending_payments'] = $pending_counts['pending_payments'] ?? 0;
 
-// Count pending payments
-$stmt = $db->query("SELECT COUNT(*) as total FROM payments WHERE status = 'active' AND record_in_financial = 'no'");
-$stats['pending_payments'] = $stmt->fetch()['total'];
-
-// Number of Pending Payment Requests for Finance Approval
-$pending_payments_query = "
-    SELECT COUNT(*) as pending_count 
-    FROM pending_pay 
-    WHERE status = 'approved_ceo' AND finance_approved_at IS NULL
-";
-$stmt = $db->query($pending_payments_query);
-$pending_ceo_approvals = $stmt->fetchColumn();
-
-// Pending Payment Requests for Finance Approval (max 5)
+// Pending finance approvals (count derived from rows - eliminates separate count query)
 $pending_requests_query = "
     SELECT pp.*, 
            u.full_name as requested_by_name,
@@ -104,22 +87,29 @@ $pending_requests_query = "
     ORDER BY pp.ceo_approved_at ASC
     LIMIT 5
 ";
-$stmt = $db->query($pending_requests_query);
-$pending_requests = $stmt->fetchAll();
+$pending_requests = $db->query($pending_requests_query)->fetchAll();
+$pending_ceo_approvals = count($pending_requests);
 
 // Update total pending approvals
 $stats['pending_approvals'] = $stats['pending_receipts'] + $stats['pending_payments'] + $pending_ceo_approvals;
 
-// Financial Reports Statistics
-$balance_sheet_items = $db->query("SELECT COUNT(*) as total FROM chart_of_accounts WHERE account_type IN ('asset', 'liability', 'equity') AND is_active = 1")->fetch()['total'];
-$income_statement_items = $db->query("SELECT COUNT(*) as total FROM chart_of_accounts WHERE account_type IN ('income', 'expense') AND is_active = 1")->fetch()['total'];
+// Financial Reports Statistics - consolidated (single query replaces 3 separate counts)
+$coa_stats = $db->query("
+    SELECT 
+        SUM(account_type IN ('asset', 'liability', 'equity') AND is_active = 1) as balance_sheet_items,
+        SUM(account_type IN ('income', 'expense') AND is_active = 1) as income_statement_items,
+        SUM(is_active = 1) as total_accounts
+    FROM chart_of_accounts
+")->fetch();
+$balance_sheet_items = $coa_stats['balance_sheet_items'] ?? 0;
+$income_statement_items = $coa_stats['income_statement_items'] ?? 0;
 
 // Get cash flow components count
 $cashflow_components = $db->query("SELECT COUNT(*) as total FROM payment_methods WHERE status = 'active'")->fetch()['total'];
 
 // Recent transactions from general ledger
 $stmt = $db->query("
-    SELECT gl.*, coa.account_name, coa.account_type,
+    SELECT gl.*, coa.account_name, coa.account_type, coa.account_code,
            DATE_FORMAT(gl.transaction_date, '%d/%m/%Y') as transaction_date_display,
            CASE 
                WHEN gl.debit_amount > 0 THEN 'Debit'
@@ -1382,10 +1372,9 @@ include '../includes/header.php';
                         </div>
                     </div>
                     <?php 
-                    $total_accounts = 0;
+                    // Already fetched total_accounts above from consolidated COA query
                     $total_entries = 0;
                     try {
-                        $total_accounts = $db->query("SELECT COUNT(*) as total FROM chart_of_accounts WHERE is_active = 1")->fetch()['total'];
                         $total_entries = $db->query("SELECT COUNT(*) as total FROM general_ledger WHERE status = 'active'")->fetch()['total'];
                     } catch (PDOException $e) {
                         // Silently handle error
@@ -1449,18 +1438,7 @@ include '../includes/header.php';
                                             <td><?php echo $transaction['transaction_date_display']; ?></td>
                                             <td>
                                                 <span class="badge bg-secondary">
-                                                    <?php 
-                                                    $account_code = 'N/A';
-                                                    try {
-                                                        $stmt = $db->prepare("SELECT account_code FROM chart_of_accounts WHERE id = ?");
-                                                        $stmt->execute([$transaction['account_id']]);
-                                                        $result = $stmt->fetch();
-                                                        $account_code = $result['account_code'] ?? 'N/A';
-                                                    } catch (PDOException $e) {
-                                                        // Silently handle error
-                                                    }
-                                                    echo htmlspecialchars($account_code);
-                                                    ?>
+                                                    <?php echo htmlspecialchars($transaction['account_code'] ?? 'N/A'); ?>
                                                 </span>
                                             </td>
                                             <td><?php echo htmlspecialchars($transaction['account_name']); ?></td>

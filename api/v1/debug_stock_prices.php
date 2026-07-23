@@ -7,8 +7,7 @@ header('Content-Type: application/json; charset=UTF-8');
 
 try {
     require_once __DIR__ . '/../../config/database.php';
-    $database = new Database();
-    $db = $database->getConnection();
+    $db = getDBConnection();
     
     if (!$db) {
         http_response_code(500);

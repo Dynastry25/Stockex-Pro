@@ -31,8 +31,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
 
 try {
     // Get database connection
-    $database = new Database();
-    $db = $database->getConnection();
+    $db = getDBConnection();
     
     if (!$db) {
         sendError('Database connection failed', 500);

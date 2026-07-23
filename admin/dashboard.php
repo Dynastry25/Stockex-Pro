@@ -6,43 +6,42 @@ require_admin();
 
 $db = getDBConnection();
 
-// Get system statistics
+// Get system statistics - consolidated queries
 $stats = [];
 
-// Total users
-$stmt = $db->query("SELECT COUNT(*) as total FROM users WHERE is_active = 1");
-$stats['total_users'] = $stmt->fetch()['total'];
-
-// Users by role
-$stmt = $db->query("SELECT role, COUNT(*) as count FROM users WHERE is_active = 1 GROUP BY role");
+// Users stats: total + by role (single query)
+$role_rows = $db->query("SELECT role, COUNT(*) as count FROM users WHERE is_active = 1 GROUP BY role")->fetchAll();
+$stats['total_users'] = 0;
 $role_stats = [];
-while ($row = $stmt->fetch()) {
+foreach ($role_rows as $row) {
     $role_stats[$row['role']] = $row['count'];
+    $stats['total_users'] += $row['count'];
 }
 
-// Active trades
-$stmt = $db->query("SELECT COUNT(*) as total FROM trades WHERE status = 'active'");
-$stats['active_trades'] = $stmt->fetch()['total'];
+// Trades stats: active count + today's value (single query)
+$trades_row = $db->query("
+    SELECT 
+        COUNT(*) as active_trades,
+        COALESCE(SUM(CASE WHEN DATE(trade_date) = CURDATE() THEN total_value ELSE 0 END), 0) as today_value
+    FROM trades WHERE status = 'active'
+")->fetch();
+$stats['active_trades'] = $trades_row['active_trades'];
+$stats['today_trade_value'] = $trades_row['today_value'];
 
-// Total trade value today
-$stmt = $db->query("SELECT COALESCE(SUM(total_value), 0) as total FROM trades WHERE DATE(trade_date) = CURDATE() AND status = 'active'");
-$stats['today_trade_value'] = $stmt->fetch()['total'];
+// Assets stats: bonds + equities (single query)
+$assets_row = $db->query("
+    SELECT 
+        (SELECT COUNT(*) FROM bonds WHERE status = 'active') as active_bonds,
+        (SELECT COUNT(*) FROM equities WHERE status = 'active') as active_equities
+")->fetch();
+$stats['active_bonds'] = $assets_row['active_bonds'] ?? 0;
+$stats['active_equities'] = $assets_row['active_equities'] ?? 0;
 
-// Active bonds
-$stmt = $db->query("SELECT COUNT(*) as total FROM bonds WHERE status = 'active'");
-$stats['active_bonds'] = $stmt->fetch()['total'];
-
-// Active equities
-$stmt = $db->query("SELECT COUNT(*) as total FROM equities WHERE status = 'active'");
-$stats['active_equities'] = $stmt->fetch()['total'];
-
-// Get fee configurations
-$stmt = $db->query("SELECT * FROM fee_configurations ORDER BY fee_type, applies_to");
-$fee_configs = $stmt->fetchAll();
+// Fee configurations
+$fee_configs = $db->query("SELECT * FROM fee_configurations ORDER BY fee_type, applies_to")->fetchAll();
 
 // Users needing mandate approval
-$stmt = $db->query("SELECT * FROM users WHERE mandate_enabled = 0 AND role != 'system_admin' AND is_active = 1 ORDER BY created_at DESC");
-$pending_mandates = $stmt->fetchAll();
+$pending_mandates = $db->query("SELECT * FROM users WHERE mandate_enabled = 0 AND role != 'system_admin' AND is_active = 1 ORDER BY created_at DESC")->fetchAll();
 
 $page_title = 'Admin Dashboard';
 include '../includes/header.php';

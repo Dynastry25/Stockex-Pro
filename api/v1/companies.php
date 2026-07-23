@@ -30,8 +30,7 @@ try {
     }
     
     // Get database connection
-    $database = new Database();
-    $db = $database->getConnection();
+    $db = getDBConnection();
 
     if (!$db) {
         error_log("Database connection failed");
