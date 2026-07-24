@@ -169,6 +169,13 @@ function get_logged_in_user(): ?array
  * @param string $required_role The minimum role required (e.g., 'finance_officer').
  * @return bool True if the user has permission, false otherwise.
  */
+function clear_user_cache(): void
+{
+    // Placeholder for any future user data caching layer.
+    // Currently get_logged_in_user() always queries the DB fresh,
+    // so this is a no-op but ensures calls don't fatal.
+}
+
 function check_permission(string $required_role): bool
 {
     $user = get_logged_in_user();
