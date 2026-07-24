@@ -1046,7 +1046,8 @@ include '../includes/header.php';
                                     <th>Description</th>
                                     <th>Payment Method</th>
                                     <th>Cheque/Ref No.</th>
-                                    <th class="text-end">Amount</th>
+                                    <th class="text-end">Debit</th>
+                                    <th class="text-end">Credit</th>
                                     <th class="text-end">Running Balance</th>
                                 </tr>
                             </thead>
@@ -1120,16 +1121,21 @@ include '../includes/header.php';
                                                 <span class="badge bg-warning">No Ref</span>
                                             <?php endif; ?>
                                         </td>
-                                        <td class="text-end <?php echo $amount_class; ?>">
-                                            <strong>
-                                                <?php if (in_array($transaction['source_type'], ['receipt', 'gl_entry']) && $transaction['debit_amount'] > 0): ?>
-                                                    + <?php echo htmlspecialchars($company['currency']); ?> 
-                                                    <?php echo number_format($amount, 2); ?>
-                                                <?php else: ?>
-                                                    - <?php echo htmlspecialchars($company['currency']); ?> 
-                                                    <?php echo number_format($amount, 2); ?>
-                                                <?php endif; ?>
-                                            </strong>
+                                        <td class="text-end">
+                                            <?php if ($transaction['debit_amount'] > 0): ?>
+                                                <strong class="text-success">
+                                                    <?php echo htmlspecialchars($company['currency']); ?> 
+                                                    <?php echo number_format($transaction['debit_amount'], 2); ?>
+                                                </strong>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td class="text-end">
+                                            <?php if ($transaction['credit_amount'] > 0): ?>
+                                                <strong class="text-danger">
+                                                    <?php echo htmlspecialchars($company['currency']); ?> 
+                                                    <?php echo number_format($transaction['credit_amount'], 2); ?>
+                                                </strong>
+                                            <?php endif; ?>
                                         </td>
                                         <td class="text-end">
                                             <strong class="<?php echo $running_balance >= 0 ? 'text-success' : 'text-danger'; ?>">
@@ -1144,14 +1150,15 @@ include '../includes/header.php';
                                 <tr class="table-light">
                                     <th colspan="7" class="text-end">Month End Total:</th>
                                     <th class="text-end">
-                                        <strong class="<?php echo $gl_total_movement >= 0 ? 'text-success' : 'text-danger'; ?>">
-                                            <?php if ($gl_total_movement >= 0): ?>
-                                                + <?php echo htmlspecialchars($company['currency']); ?> 
-                                                <?php echo number_format($gl_total_movement, 2); ?>
-                                            <?php else: ?>
-                                                - <?php echo htmlspecialchars($company['currency']); ?> 
-                                                <?php echo number_format(abs($gl_total_movement), 2); ?>
-                                            <?php endif; ?>
+                                        <strong class="text-success">
+                                            <?php echo htmlspecialchars($company['currency']); ?> 
+                                            <?php echo number_format($total_debits, 2); ?>
+                                        </strong>
+                                    </th>
+                                    <th class="text-end">
+                                        <strong class="text-danger">
+                                            <?php echo htmlspecialchars($company['currency']); ?> 
+                                            <?php echo number_format($total_credits, 2); ?>
                                         </strong>
                                     </th>
                                     <th class="text-end">
