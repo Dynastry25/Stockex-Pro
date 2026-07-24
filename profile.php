@@ -10,59 +10,49 @@ $error_message = '';
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $full_name = sanitize_input($_POST['full_name']);
-    $email = sanitize_input($_POST['email']);
     $current_password = $_POST['current_password'];
     $new_password = $_POST['new_password'];
     $confirm_password = $_POST['confirm_password'];
-    
+
     $db = getDBConnection();
-    
+
     // Validate inputs
-    if (empty($full_name) || empty($email)) {
-        $error_message = 'Full name and email are required.';
-    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $error_message = 'Please enter a valid email address.';
+    if (empty($full_name)) {
+        $error_message = 'Full name is required.';
     } else {
-        // Check if email is already taken by another user
-        $stmt = $db->prepare("SELECT id FROM users WHERE email = ? AND id != ?");
-        $stmt->execute([$email, $user['id']]);
-        if ($stmt->fetch()) {
-            $error_message = 'Email address is already in use.';
-        } else {
-            // Update profile
-            $update_query = "UPDATE users SET full_name = ?, email = ? WHERE id = ?";
-            $update_params = [$full_name, $email, $user['id']];
-            
-            // If password change is requested
-            if (!empty($current_password) || !empty($new_password)) {
-                if (empty($current_password) || empty($new_password) || empty($confirm_password)) {
-                    $error_message = 'All password fields are required to change password.';
-                } elseif ($new_password !== $confirm_password) {
-                    $error_message = 'New passwords do not match.';
-                } elseif (strlen($new_password) < 6) {
-                    $error_message = 'New password must be at least 6 characters long.';
-                } elseif (!password_verify($current_password, $user['password_hash'])) {
-                    $error_message = 'Current password is incorrect.';
-                } else {
-                    // Include password in update
-                    $update_query = "UPDATE users SET full_name = ?, email = ?, password_hash = ? WHERE id = ?";
-                    $update_params = [$full_name, $email, password_hash($new_password, PASSWORD_DEFAULT), $user['id']];
-                }
+        // Update profile (email is not editable — it's an identity field)
+        $update_query = "UPDATE users SET full_name = ? WHERE id = ?";
+        $update_params = [$full_name, $user['id']];
+
+        // If password change is requested
+        if (!empty($current_password) || !empty($new_password)) {
+            if (empty($current_password) || empty($new_password) || empty($confirm_password)) {
+                $error_message = 'All password fields are required to change password.';
+            } elseif ($new_password !== $confirm_password) {
+                $error_message = 'New passwords do not match.';
+            } elseif (strlen($new_password) < 6) {
+                $error_message = 'New password must be at least 6 characters long.';
+            } elseif (!password_verify($current_password, $user['password_hash'])) {
+                $error_message = 'Current password is incorrect.';
+            } else {
+                // Include password in update
+                $update_query = "UPDATE users SET full_name = ?, password_hash = ? WHERE id = ?";
+                $update_params = [$full_name, password_hash($new_password, PASSWORD_DEFAULT), $user['id']];
             }
-            
-            if (empty($error_message)) {
-                $stmt = $db->prepare($update_query);
-                if ($stmt->execute($update_params)) {
-                    $success_message = 'Profile updated successfully.';
-                    // Update session data
-                    $_SESSION['full_name'] = $full_name;
-                    // Clear cached user data so next get_logged_in_user() fetches fresh
-                    clear_user_cache();
-                    // Refresh user data
-                    $user = get_logged_in_user();
-                } else {
-                    $error_message = 'Error updating profile. Please try again.';
-                }
+        }
+
+        if (empty($error_message)) {
+            $stmt = $db->prepare($update_query);
+            if ($stmt->execute($update_params)) {
+                $success_message = 'Profile updated successfully.';
+                // Update session data
+                $_SESSION['full_name'] = $full_name;
+                // Clear cached user data so next get_logged_in_user() fetches fresh
+                clear_user_cache();
+                // Refresh user data
+                $user = get_logged_in_user();
+            } else {
+                $error_message = 'Error updating profile. Please try again.';
             }
         }
     }
@@ -119,8 +109,11 @@ include 'includes/header.php';
                     
                     <div class="mb-3">
                         <label for="email" class="form-label">Email Address</label>
-                        <input type="email" class="form-control" id="email" name="email" 
-                               value="<?php echo htmlspecialchars($user['email']); ?>" required>
+                        <input type="email" class="form-control" id="email" name="email"
+                               value="<?php echo htmlspecialchars($user['email']); ?>" readonly disabled>
+                        <div class="form-text text-muted">
+                            <i class="bi bi-lock-fill me-1"></i>Email is an identity field and cannot be changed. Contact the system administrator to update it.
+                        </div>
                     </div>
                     
                     <div class="mb-3">

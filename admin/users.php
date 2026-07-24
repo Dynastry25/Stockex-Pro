@@ -110,6 +110,37 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['create_user'])) {
     }
 }
 
+// Handle edit user (admin-only: can change email, full_name, role)
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['edit_user'])) {
+    $edit_user_id = (int) $_POST['user_id'];
+    $edit_email = sanitize_input($_POST['email']);
+    $edit_full_name = sanitize_input($_POST['full_name']);
+    $edit_role = sanitize_input($_POST['role']);
+
+    if ($edit_user_id <= 0) {
+        $error_message = 'Invalid user.';
+    } elseif (empty($edit_email) || empty($edit_full_name) || empty($edit_role)) {
+        $error_message = 'All fields are required.';
+    } elseif (!filter_var($edit_email, FILTER_VALIDATE_EMAIL)) {
+        $error_message = 'Please enter a valid email address.';
+    } else {
+        // Check if email is taken by another user
+        $stmt = $db->prepare("SELECT id FROM users WHERE email = ? AND id != ?");
+        $stmt->execute([$edit_email, $edit_user_id]);
+        if ($stmt->fetch()) {
+            $error_message = 'Email address is already in use by another user.';
+        } else {
+            $stmt = $db->prepare("UPDATE users SET email = ?, full_name = ?, role = ? WHERE id = ?");
+            if ($stmt->execute([$edit_email, $edit_full_name, $edit_role, $edit_user_id])) {
+                show_alert('User updated successfully.', 'success');
+                redirect('admin/users.php');
+            } else {
+                $error_message = 'Error updating user. Please try again.';
+            }
+        }
+    }
+}
+
 // Get all users
 $stmt = $db->query("SELECT * FROM users ORDER BY created_at DESC");
 $users = $stmt->fetchAll();
@@ -197,6 +228,12 @@ include '../includes/header.php';
                             <td>
                                 <?php if ($user['role'] != 'system_admin'): ?>
                                     <div class="btn-group btn-group-sm">
+                                        <button type="button" class="btn btn-outline-primary"
+                                                onclick='editUser(<?php echo json_encode($user); ?>)'
+                                                title="Edit User">
+                                            <i class="bi bi-pencil"></i>
+                                        </button>
+
                                         <?php if ($user['mandate_enabled']): ?>
                                             <a href="?action=disable_mandate&id=<?php echo $user['id']; ?>" 
                                                class="btn btn-outline-warning" 
@@ -230,7 +267,11 @@ include '../includes/header.php';
                                         <?php endif; ?>
                                     </div>
                                 <?php else: ?>
-                                    <span class="text-muted">System Admin</span>
+                                    <button type="button" class="btn btn-sm btn-outline-primary"
+                                            onclick='editUser(<?php echo json_encode($user); ?>)'
+                                            title="Edit Admin">
+                                        <i class="bi bi-pencil"></i>
+                                    </button>
                                 <?php endif; ?>
                             </td>
                         </tr>
@@ -294,11 +335,71 @@ include '../includes/header.php';
     </div>
 </div>
 
+<!-- Edit User Modal -->
+<div class="modal fade" id="editUserModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="">
+                <div class="modal-header">
+                    <h5 class="modal-title">Edit User</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" name="user_id" id="edit_user_id">
+
+                    <div class="mb-3">
+                        <label class="form-label">Username</label>
+                        <input type="text" class="form-control" id="edit_username" readonly disabled>
+                        <div class="form-text text-muted"><i class="bi bi-lock-fill me-1"></i>Username cannot be changed.</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="edit_email" class="form-label">Email <span class="text-danger">*</span></label>
+                        <input type="email" class="form-control" id="edit_email" name="email" required>
+                        <div class="form-text text-muted">This is an identity field — change with caution.</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="edit_full_name" class="form-label">Full Name <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="edit_full_name" name="full_name" required>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="edit_role" class="form-label">Role <span class="text-danger">*</span></label>
+                        <select class="form-select" id="edit_role" name="role" required>
+                            <option value="trader">Trader</option>
+                            <option value="ceo">CEO</option>
+                            <option value="finance_officer">Finance Officer</option>
+                            <option value="hr_manager">HR Manager</option>
+                            <option value="hr_officer">HR Officer</option>
+                            <option value="system_admin">System Admin</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" name="edit_user" class="btn btn-primary">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <script>
 // Initialize table search
 document.addEventListener('DOMContentLoaded', function() {
     initTableSearch('usersTable', 'userSearch');
 });
+
+function editUser(user) {
+    document.getElementById('edit_user_id').value = user.id;
+    document.getElementById('edit_username').value = user.username;
+    document.getElementById('edit_email').value = user.email;
+    document.getElementById('edit_full_name').value = user.full_name;
+    document.getElementById('edit_role').value = user.role;
+    var modal = new bootstrap.Modal(document.getElementById('editUserModal'));
+    modal.show();
+}
 </script>
 
 <?php include '../includes/footer.php'; ?>

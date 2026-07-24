@@ -16,7 +16,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             // Update user (employee) details
             $user_id = (int)$_POST['user_id'];
             $full_name = sanitize_input($_POST['full_name']);
-            $email = sanitize_input($_POST['email']);
             $phone = sanitize_input($_POST['phone']);
             $role = sanitize_input($_POST['role']);
             $department = sanitize_input($_POST['department']);
@@ -27,20 +26,14 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $status = sanitize_input($_POST['status']);
             $address = sanitize_input($_POST['address']);
             $national_id = sanitize_input($_POST['national_id']);
-            
-            // Check if email already exists for another user
-            $check_stmt = $db->prepare("SELECT id FROM users WHERE email = ? AND id != ?");
-            $check_stmt->execute([$email, $user_id]);
-            if ($check_stmt->fetch()) {
-                $error_message = 'Email already exists for another user.';
-            } else {
-                $stmt = $db->prepare("
-                    UPDATE users 
-                    SET full_name = ?, email = ?, role = ?, status = ?, updated_at = NOW()
-                    WHERE id = ?
-                ");
+
+            $stmt = $db->prepare("
+                UPDATE users 
+                SET full_name = ?, role = ?, status = ?, updated_at = NOW()
+                WHERE id = ?
+            ");
                 
-                if ($stmt->execute([$full_name, $email, $role, $status, $user_id])) {
+            if ($stmt->execute([$full_name, $role, $status, $user_id])) {
                     // Update user details in user_details table if it exists, or store in a separate table
                     // For now, we'll log the HR-specific details in a separate table or store as metadata
                     // Let's create a user_hr_details table if it doesn't exist
@@ -61,7 +54,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 } else {
                     $error_message = 'Error updating employee.';
                 }
-            }
             
         } elseif (isset($_POST['terminate_user'])) {
             // Terminate user (employee)
@@ -535,8 +527,9 @@ $roles = [
                             <small class="form-text text-muted">Username cannot be changed</small>
                         </div>
                         <div class="col-md-6 mb-3">
-                            <label class="form-label">Email <span class="text-danger">*</span></label>
-                            <input type="email" name="email" class="form-control" id="editEmail" required>
+                            <label class="form-label">Email</label>
+                            <input type="email" class="form-control" id="editEmail" readonly disabled>
+                            <small class="form-text text-muted"><i class="bi bi-lock-fill me-1"></i>Email is an identity field — only a system admin can change it.</small>
                         </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Full Name <span class="text-danger">*</span></label>
