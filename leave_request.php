@@ -106,6 +106,44 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     }
 }
 
+// AJAX handler for viewing leave details
+if (isset($_GET['ajax']) && $_GET['ajax'] == '1' && isset($_GET['action']) && $_GET['action'] == 'view' && isset($_GET['id'])) {
+    try {
+        $leave_id = (int)$_GET['id'];
+        $stmt = $db->prepare("
+            SELECT lr.*, 
+                   COALESCE(e.full_name, CONCAT(e.first_name, ' ', e.last_name)) as employee_name,
+                   COALESCE(e.employee_id, e.username) as employee_code,
+                   d.name as department_name,
+                   lt.name as leave_type_name,
+                   approver.full_name as approved_by_name,
+                   ceo_user.full_name as ceo_approved_by_name,
+                   hr_user.full_name as hr_action_by_name
+            FROM leave_requests lr
+            JOIN users e ON lr.employee_id = e.id
+            LEFT JOIN departments d ON e.department_id = d.id
+            LEFT JOIN leave_types lt ON lr.leave_type_id = lt.id
+            LEFT JOIN users approver ON lr.approved_by = approver.id
+            LEFT JOIN users ceo_user ON lr.ceo_approved_by = ceo_user.id
+            LEFT JOIN users hr_user ON lr.hr_action_by = hr_user.id
+            WHERE lr.id = ? AND lr.employee_id = ?
+        ");
+        $stmt->execute([$leave_id, $_SESSION['user_id']]);
+        $leave = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        header('Content-Type: application/json');
+        if ($leave) {
+            echo json_encode(['success' => true, 'leave' => $leave]);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Leave request not found.']);
+        }
+    } catch (Exception $e) {
+        header('Content-Type: application/json');
+        echo json_encode(['success' => false, 'message' => 'Error: ' . $e->getMessage()]);
+    }
+    exit();
+}
+
 // Check for success message from session
 if (isset($_SESSION['success_message'])) {
     $success_message = $_SESSION['success_message'];
@@ -168,17 +206,20 @@ try {
     if ($emp) {
         $stats_stmt = $db->prepare("
             SELECT 
+                COUNT(*) as total_requests,
+                COUNT(CASE WHEN status = 'approved' OR ceo_decision_status = 'ceo_approved' THEN 1 END) as approved_count,
                 SUM(CASE WHEN status = 'approved' OR ceo_decision_status = 'ceo_approved' THEN total_days ELSE 0 END) as approved_days,
+                COUNT(CASE WHEN status = 'pending' AND requires_ceo_approval = 0 THEN 1 END) as pending_count,
                 SUM(CASE WHEN status = 'pending' AND requires_ceo_approval = 0 THEN total_days ELSE 0 END) as pending_days,
-                SUM(CASE WHEN requires_ceo_approval = 1 AND ceo_decision_status = 'pending_ceo' THEN total_days ELSE 0 END) as pending_ceo_days,
-                COUNT(*) as total_requests
+                COUNT(CASE WHEN requires_ceo_approval = 1 AND ceo_decision_status = 'pending_ceo' THEN 1 END) as pending_ceo_count,
+                SUM(CASE WHEN requires_ceo_approval = 1 AND ceo_decision_status = 'pending_ceo' THEN total_days ELSE 0 END) as pending_ceo_days
             FROM leave_requests 
             WHERE employee_id = ?
         ");
         $stats_stmt->execute([$emp['id']]);
         $leave_stats = $stats_stmt->fetch();
     } else {
-        $leave_stats = ['approved_days' => 0, 'pending_days' => 0, 'pending_ceo_days' => 0, 'total_requests' => 0];
+        $leave_stats = ['total_requests' => 0, 'approved_count' => 0, 'approved_days' => 0, 'pending_count' => 0, 'pending_days' => 0, 'pending_ceo_count' => 0, 'pending_ceo_days' => 0];
     }
 } catch (Exception $e) {
     $leave_stats = ['approved_days' => 0, 'pending_days' => 0, 'pending_ceo_days' => 0, 'total_requests' => 0];
@@ -237,8 +278,9 @@ include 'includes/header.php';
                 <div class="card-body">
                     <div class="row no-gutters align-items-center">
                         <div class="col mr-2">
-                            <div class="text-xs font-weight-bold text-success text-uppercase mb-1">Approved Days</div>
-                            <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo $leave_stats['approved_days']; ?></div>
+                            <div class="text-xs font-weight-bold text-success text-uppercase mb-1">Approved</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo $leave_stats['approved_count']; ?> <small class="text-muted">request(s)</small></div>
+                            <div class="text-xs text-muted"><?php echo $leave_stats['approved_days']; ?> day(s)</div>
                         </div>
                         <div class="col-auto">
                             <i class="bi bi-check-circle fs-2 text-success"></i>
@@ -253,7 +295,8 @@ include 'includes/header.php';
                     <div class="row no-gutters align-items-center">
                         <div class="col mr-2">
                             <div class="text-xs font-weight-bold text-warning text-uppercase mb-1">Pending (HR)</div>
-                            <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo $leave_stats['pending_days']; ?></div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo $leave_stats['pending_count']; ?> <small class="text-muted">request(s)</small></div>
+                            <div class="text-xs text-muted"><?php echo $leave_stats['pending_days']; ?> day(s)</div>
                         </div>
                         <div class="col-auto">
                             <i class="bi bi-clock-history fs-2 text-warning"></i>
@@ -268,7 +311,8 @@ include 'includes/header.php';
                     <div class="row no-gutters align-items-center">
                         <div class="col mr-2">
                             <div class="text-xs font-weight-bold text-info text-uppercase mb-1">Pending (CEO)</div>
-                            <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo $leave_stats['pending_ceo_days']; ?></div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo $leave_stats['pending_ceo_count']; ?> <small class="text-muted">request(s)</small></div>
+                            <div class="text-xs text-muted"><?php echo $leave_stats['pending_ceo_days']; ?> day(s)</div>
                         </div>
                         <div class="col-auto">
                             <i class="bi bi-arrow-up-circle fs-2 text-info"></i>

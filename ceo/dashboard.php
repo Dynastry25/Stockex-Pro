@@ -360,17 +360,21 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel' && $current_payroll) {
 }
 
 // Handle AJAX requests for payment approval
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+$is_ajax_post = $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']);
+$is_get_download = $_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['action'] === 'download_attachment';
+if ($is_ajax_post || $is_get_download) {
     header('Content-Type: application/json');
     
-    // Verify CSRF token
-    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
-        echo json_encode(['success' => false, 'message' => 'Invalid CSRF token']);
-        exit;
+    $action = $_POST['action'] ?? $_GET['action'] ?? '';
+    $request_id = (int)($_POST['request_id'] ?? $_GET['id'] ?? 0);
+
+    if ($is_ajax_post) {
+        // Verify CSRF token for POST actions
+        if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+            echo json_encode(['success' => false, 'message' => 'Invalid CSRF token']);
+            exit;
+        }
     }
-    
-    $action = $_POST['action'];
-    $request_id = (int)($_POST['request_id'] ?? 0);
     
     if (!$request_id) {
         echo json_encode(['success' => false, 'message' => 'Invalid request ID']);
@@ -461,9 +465,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $request_details = $stmt->fetch();
             
             if ($request_details) {
+                unset($request_details['attachment_data']);
                 echo json_encode(['success' => true, 'data' => $request_details]);
             } else {
                 echo json_encode(['success' => false, 'message' => 'Request not found']);
+            }
+        } elseif ($action === 'download_attachment') {
+            $stmt = $db->prepare("SELECT attachment_data, attachment_name, attachment_mime FROM pending_pay WHERE id = ?");
+            $stmt->execute([$request_id]);
+            $att = $stmt->fetch();
+            if ($att && !empty($att['attachment_data'])) {
+                header_remove('Content-Type');
+                header('Content-Type: ' . ($att['attachment_mime'] ?: 'application/octet-stream'));
+                header('Content-Disposition: inline; filename="' . ($att['attachment_name'] ?: 'attachment') . '"');
+                header('Content-Length: ' . strlen($att['attachment_data']));
+                echo $att['attachment_data'];
+            } else {
+                http_response_code(404);
+                echo 'Attachment not found';
             }
         } else {
             echo json_encode(['success' => false, 'message' => 'Invalid action']);

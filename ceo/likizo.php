@@ -63,7 +63,7 @@ function ceo_approve_leave($leave_id, $decision, $ceo_user_id, $reason = '') {
         
         // Get current leave details
         $stmt = $db->prepare("
-            SELECT lr.*, e.employee_id, CONCAT(e.first_name, ' ', e.last_name) as employee_name,
+            SELECT lr.*, e.employee_id, COALESCE(e.full_name, CONCAT(e.first_name, ' ', e.last_name)) as employee_name,
                    e.department_id, e.position_id
             FROM leave_requests lr
             JOIN users e ON lr.employee_id = e.id
@@ -187,10 +187,10 @@ if (isset($_SESSION['success_message'])) {
 try {
     $all_leaves_stmt = $db->prepare("
         SELECT lr.*, 
-               CONCAT(e.first_name, ' ', e.last_name) as employee_name,
-               e.employee_id as employee_code,
+               COALESCE(e.full_name, CONCAT(e.first_name, ' ', e.last_name)) as employee_name,
+               COALESCE(e.employee_id, e.username) as employee_code,
                d.name as department_name, 
-               jp.title as position_name,
+               COALESCE(jp.title, 'N/A') as position_name,
                lt.name as leave_type_name,
                lt.days_per_year as leave_type_days,
                hr_user.full_name as hr_action_by_name,
@@ -233,10 +233,10 @@ try {
 try {
     $pending_stmt = $db->prepare("
         SELECT lr.*, 
-               CONCAT(e.first_name, ' ', e.last_name) as employee_name,
-               e.employee_id as employee_code,
+               COALESCE(e.full_name, CONCAT(e.first_name, ' ', e.last_name)) as employee_name,
+               COALESCE(e.employee_id, e.username) as employee_code,
                d.name as department_name, 
-               jp.title as position_name,
+               COALESCE(jp.title, 'N/A') as position_name,
                lt.name as leave_type_name,
                hr_user.full_name as hr_action_by_name,
                lr.escalation_reason as escalation_reason,
@@ -263,10 +263,10 @@ try {
     $today = date('Y-m-d');
     $current_leaves_stmt = $db->prepare("
         SELECT lr.*, 
-               CONCAT(e.first_name, ' ', e.last_name) as employee_name,
-               e.employee_id as employee_code,
+               COALESCE(e.full_name, CONCAT(e.first_name, ' ', e.last_name)) as employee_name,
+               COALESCE(e.employee_id, e.username) as employee_code,
                d.name as department_name, 
-               jp.title as position_name,
+               COALESCE(jp.title, 'N/A') as position_name,
                lt.name as leave_type_name,
                DATEDIFF(lr.end_date, ?) + 1 as days_remaining,
                CASE 
@@ -302,7 +302,7 @@ try {
         SELECT 
             u.id,
             u.employee_id,
-            CONCAT(u.first_name, ' ', u.last_name) as employee_name,
+            COALESCE(u.full_name, CONCAT(u.first_name, ' ', u.last_name)) as employee_name,
             d.name as department_name,
             jp.title as position_name,
             lt.name as leave_type_name,
@@ -382,10 +382,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == '1') {
             $leave_id = (int)$_GET['id'];
             $stmt = $db->prepare("
                 SELECT lr.*, 
-                       CONCAT(e.first_name, ' ', e.last_name) as employee_name,
-                       e.employee_id as employee_code,
+                       COALESCE(e.full_name, CONCAT(e.first_name, ' ', e.last_name)) as employee_name,
+                       COALESCE(e.employee_id, e.username) as employee_code,
                        d.name as department_name, 
-                       jp.title as position_name,
+                       COALESCE(jp.title, 'N/A') as position_name,
                        lt.name as leave_type_name,
                        lt.days_per_year as leave_type_days,
                        hr_user.full_name as hr_action_by_name,
@@ -544,8 +544,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == '1') {
                                 <div class="list-group-item list-group-item-action">
                                     <div class="d-flex w-100 justify-content-between align-items-start">
                                         <div class="me-3">
-                                            <h6 class="mb-1"><?php echo htmlspecialchars($leave['employee_name']); ?></h6>
-                                            <small class="text-muted"><?php echo htmlspecialchars($leave['leave_type_name']); ?></small>
+                                            <h6 class="mb-1"><?php echo htmlspecialchars($leave['employee_name'] ?? 'Unknown'); ?></h6>
+                                            <small class="text-muted"><?php echo htmlspecialchars($leave['leave_type_name'] ?? ''); ?></small>
                                             <br>
                                             <small>
                                                 <?php echo format_date_ceo($leave['start_date']); ?> 
@@ -556,7 +556,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == '1') {
                                         </div>
                                         <div class="text-end">
                                             <button class="btn btn-sm btn-primary mb-1" 
-                                                    onclick="showCeoDecisionModal(<?php echo $leave['id']; ?>, '<?php echo htmlspecialchars(addslashes($leave['employee_name'])); ?>', <?php echo $leave['total_days']; ?>)">
+                                                    onclick="showCeoDecisionModal(<?php echo $leave['id']; ?>, '<?php echo htmlspecialchars(addslashes($leave['employee_name'] ?? 'Unknown')); ?>', <?php echo $leave['total_days']; ?>)">
                                                 <i class="bi bi-clipboard-check"></i> Decide
                                             </button>
                                             <br>
@@ -569,7 +569,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == '1') {
                                     <?php if ($leave['hr_action_by_name']): ?>
                                         <small class="text-muted">
                                             <i class="bi bi-person me-1"></i>
-                                            Escalated by: <?php echo htmlspecialchars($leave['hr_action_by_name']); ?>
+                                            Escalated by: <?php echo htmlspecialchars($leave['hr_action_by_name'] ?? 'HR'); ?>
                                             on <?php echo format_date_ceo($leave['finalized_by_hr_at']); ?>
                                         </small>
                                     <?php endif; ?>
@@ -603,8 +603,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == '1') {
                                 <div class="list-group-item list-group-item-action">
                                     <div class="d-flex w-100 justify-content-between align-items-start">
                                         <div>
-                                            <h6 class="mb-1"><?php echo htmlspecialchars($leave['employee_name']); ?></h6>
-                                            <small class="text-muted"><?php echo htmlspecialchars($leave['department_name']); ?></small>
+                                            <h6 class="mb-1"><?php echo htmlspecialchars($leave['employee_name'] ?? 'Unknown'); ?></h6>
+                                            <small class="text-muted"><?php echo htmlspecialchars($leave['department_name'] ?? 'N/A'); ?></small>
                                             <br>
                                             <span class="badge bg-<?php echo $leave['leave_status'] == 'On Leave' ? 'danger' : ($leave['leave_status'] == 'Upcoming' ? 'warning' : 'success'); ?>">
                                                 <?php echo $leave['leave_status']; ?>
@@ -632,7 +632,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == '1') {
                                     </div>
                                     <small class="text-muted">
                                         <i class="bi bi-calendar me-1"></i>
-                                        <?php echo htmlspecialchars($leave['leave_type_name']); ?>
+                                        <?php echo htmlspecialchars($leave['leave_type_name'] ?? 'Unknown'); ?>
                                     </small>
                                 </div>
                             <?php endforeach; ?>
@@ -678,15 +678,15 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == '1') {
                                     ?>
                                     <tr class="table-light">
                                         <td colspan="4" class="fw-bold">
-                                            <?php echo htmlspecialchars($balance['employee_name']); ?>
-                                            <small class="text-muted">(<?php echo htmlspecialchars($balance['department_name']); ?>)</small>
+                                            <?php echo htmlspecialchars($balance['employee_name'] ?? 'Unknown'); ?>
+                                            <small class="text-muted">(<?php echo htmlspecialchars($balance['department_name'] ?? 'N/A'); ?>)</small>
                                         </td>
                                     </tr>
                                     <?php endif; ?>
                                     <tr>
                                         <td></td>
                                         <td>
-                                            <small><?php echo htmlspecialchars($balance['leave_type_name']); ?></small>
+                                            <small><?php echo htmlspecialchars($balance['leave_type_name'] ?? 'Unknown'); ?></small>
                                         </td>
                                         <td>
                                             <span class="badge bg-secondary">
@@ -764,8 +764,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == '1') {
                                         <tr>
                                             <td>
                                                 <div>
-                                                    <strong><?php echo htmlspecialchars($leave['employee_name']); ?></strong>
-                                                    <br><small class="text-muted"><?php echo htmlspecialchars($leave['employee_code']); ?></small>
+                                                    <strong><?php echo htmlspecialchars($leave['employee_name'] ?? 'Unknown'); ?></strong>
+                                                    <br><small class="text-muted"><?php echo htmlspecialchars($leave['employee_code'] ?? 'N/A'); ?></small>
                                                 </div>
                                             </td>
                                             <td><?php echo htmlspecialchars($leave['department_name'] ?? 'N/A'); ?></td>
@@ -797,7 +797,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == '1') {
                                                     <?php if ($leave['hr_action_by_name']): ?>
                                                         <div class="mb-1">
                                                             <i class="bi bi-person-check text-success"></i>
-                                                            HR: <?php echo htmlspecialchars($leave['hr_action_by_name']); ?>
+                                                            HR: <?php echo htmlspecialchars($leave['hr_action_by_name'] ?? 'HR'); ?>
                                                             <br><small class="text-muted"><?php echo $leave['finalized_by_hr_at'] ? format_date_ceo($leave['finalized_by_hr_at']) : ''; ?></small>
                                                         </div>
                                                     <?php endif; ?>
@@ -805,7 +805,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == '1') {
                                                     <?php if ($leave['ceo_approved_by_name']): ?>
                                                         <div>
                                                             <i class="bi bi-person-check text-primary"></i>
-                                                            CEO: <?php echo htmlspecialchars($leave['ceo_approved_by_name']); ?>
+                                                            CEO: <?php echo htmlspecialchars($leave['ceo_approved_by_name'] ?? 'CEO'); ?>
                                                             <br><small class="text-muted"><?php echo $leave['ceo_approved_at'] ? format_date_ceo($leave['ceo_approved_at']) : ''; ?></small>
                                                         </div>
                                                     <?php elseif ($leave['requires_ceo_approval'] && $leave['ceo_decision_status'] == 'pending_ceo'): ?>
@@ -820,7 +820,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == '1') {
                                                 <?php if ($leave['requires_ceo_approval'] && $leave['ceo_decision_status'] == 'pending_ceo'): ?>
                                                     <div class="btn-group-vertical btn-group-sm">
                                                         <button class="btn btn-outline-primary btn-sm" 
-                                                                onclick="showCeoDecisionModal(<?php echo $leave['id']; ?>, '<?php echo htmlspecialchars(addslashes($leave['employee_name'])); ?>', <?php echo $leave['total_days']; ?>)"
+                                                                onclick="showCeoDecisionModal(<?php echo $leave['id']; ?>, '<?php echo htmlspecialchars(addslashes($leave['employee_name'] ?? 'Unknown')); ?>', <?php echo $leave['total_days']; ?>)"
                                                                 title="Make Decision">
                                                             <i class="bi bi-clipboard-check"></i> Decide
                                                         </button>

@@ -6,6 +6,7 @@ require_once '../config/approval_constants.php';
 
 require_ceo();
 $db = getDBConnection();
+generate_csrf_token();
 
 $page_title = 'CEO Approval Dashboard';
 $success_message = '';
@@ -121,6 +122,23 @@ try {
     error_log("Error fetching pending targets: " . $e->getMessage());
 }
 
+// Get pending payment requests
+try {
+    $stmt = $db->query("
+        SELECT pp.*, u.full_name as requested_by_name,
+               lt.description as pay_to_desc
+        FROM pending_pay pp
+        LEFT JOIN users u ON pp.requested_by = u.id
+        LEFT JOIN ledger_types lt ON pp.pay_to_type = lt.code
+        WHERE pp.status = 'pending' AND pp.ceo_approved_at IS NULL
+        ORDER BY pp.requested_at ASC
+    ");
+    $pending_payment_requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $pending_payment_requests = [];
+    error_log("Error fetching pending payment requests: " . $e->getMessage());
+}
+
 // Get approved leave approvals
 try {
     $stmt = $db->query("
@@ -211,6 +229,8 @@ try {
 
 <?php include '../includes/header.php'; ?>
 
+<input type="hidden" name="csrf_token" id="csrfToken" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
+
 <div class="container-fluid px-4">
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
@@ -241,7 +261,7 @@ try {
 
     <!-- Approval Summary Cards -->
     <div class="row mb-4">
-        <div class="col-md-3">
+        <div class="col">
             <div class="card border-left-warning shadow h-100 py-2">
                 <div class="card-body">
                     <div class="row no-gutters align-items-center">
@@ -261,7 +281,7 @@ try {
                 </div>
             </div>
         </div>
-        <div class="col-md-3">
+        <div class="col">
             <div class="card border-left-success shadow h-100 py-2">
                 <div class="card-body">
                     <div class="row no-gutters align-items-center">
@@ -281,7 +301,7 @@ try {
                 </div>
             </div>
         </div>
-        <div class="col-md-3">
+        <div class="col">
             <div class="card border-left-info shadow h-100 py-2">
                 <div class="card-body">
                     <div class="row no-gutters align-items-center">
@@ -301,7 +321,7 @@ try {
                 </div>
             </div>
         </div>
-        <div class="col-md-3">
+        <div class="col">
             <div class="card border-left-primary shadow h-100 py-2">
                 <div class="card-body">
                     <div class="row no-gutters align-items-center">
@@ -321,6 +341,23 @@ try {
                 </div>
             </div>
         </div>
+        <div class="col">
+            <div class="card border-left-danger shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-danger text-uppercase mb-1">Payment Requests</div>
+                            <div class="mb-1">
+                                <small class="text-muted">Pending: <strong><?php echo count($pending_payment_requests); ?></strong></small>
+                            </div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="bi bi-credit-card fs-2 text-danger"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Tabs for Pending and Approved -->
@@ -328,7 +365,7 @@ try {
         <li class="nav-item" role="presentation">
             <button class="nav-link active" id="pending-tab" data-bs-toggle="tab" data-bs-target="#pending" type="button" role="tab" aria-controls="pending" aria-selected="true">
                 <i class="bi bi-exclamation-triangle me-2"></i>Pending Approvals 
-                <span class="badge bg-danger"><?php echo $approvals_summary['total']; ?></span>
+                <span class="badge bg-danger"><?php echo $approvals_summary['total'] + count($pending_payment_requests); ?></span>
             </button>
         </li>
         <li class="nav-item" role="presentation">
@@ -342,7 +379,7 @@ try {
     <div class="tab-content" id="approvalTabsContent">
         <!-- Pending Tab -->
         <div class="tab-pane fade show active" id="pending" role="tabpanel" aria-labelledby="pending-tab">
-            <?php if ($approvals_summary['total'] == 0): ?>
+            <?php if ($approvals_summary['total'] == 0 && empty($pending_payment_requests)): ?>
                 <div class="card">
                     <div class="card-body text-center py-5">
                         <i class="bi bi-check-circle display-1 text-success mb-3"></i>
@@ -515,6 +552,93 @@ try {
                                                             onclick="rejectPayroll(<?php echo $payroll['id']; ?>, '<?php echo htmlspecialchars($payroll['employee_name']); ?>')"
                                                             title="Reject Payroll">
                                                         <i class="bi bi-x-lg"></i> Reject
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+
+                <!-- Pending Payment Requests -->
+                <div class="card mb-4">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">
+                            <i class="bi bi-credit-card me-2 text-danger"></i>
+                            Pending Payment Requests (<?php echo count($pending_payment_requests); ?>)
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <?php if (empty($pending_payment_requests)): ?>
+                            <div class="text-center py-4">
+                                <i class="bi bi-credit-card display-1 text-muted mb-3"></i>
+                                <p class="text-muted">No pending payment requests at this time.</p>
+                                <small class="text-muted">Payment requests from HR will appear here for your review and approval.</small>
+                            </div>
+                        <?php else: ?>
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Request #</th>
+                                        <th>Subject</th>
+                                        <th>Payee</th>
+                                        <th>Amount</th>
+                                        <th>Requested By</th>
+                                        <th>Date</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($pending_payment_requests as $pr): ?>
+                                        <tr>
+                                            <td>
+                                                <strong><?php echo htmlspecialchars($pr['request_no']); ?></strong>
+                                            </td>
+                                            <td>
+                                                <div class="text-truncate" style="max-width: 180px;">
+                                                    <?php echo htmlspecialchars($pr['subject']); ?>
+                                                </div>
+                                                <small class="text-muted"><?php echo htmlspecialchars($pr['pay_to_desc'] ?? $pr['pay_to_type']); ?></small>
+                                            </td>
+                                            <td>
+                                                <?php echo htmlspecialchars($pr['payee_name']); ?>
+                                                <br><small class="text-muted"><?php echo htmlspecialchars($pr['payee_account_no'] ?? ''); ?></small>
+                                            </td>
+                                            <td>
+                                                <strong class="text-success">
+                                                    <?php echo number_format($pr['amount_paid'], 2); ?>
+                                                    <?php echo htmlspecialchars($pr['currency']); ?>
+                                                </strong>
+                                            </td>
+                                            <td>
+                                                <small><?php echo htmlspecialchars($pr['requested_by_name'] ?? 'Unknown'); ?></small>
+                                            </td>
+                                            <td>
+                                                <small class="text-muted">
+                                                    <?php echo date('M d, Y', strtotime($pr['requested_at'])); ?>
+                                                </small>
+                                            </td>
+                                            <td>
+                                                <div class="btn-group btn-group-sm">
+                                                    <button class="btn btn-outline-success"
+                                                            onclick="approvePaymentRequest(<?php echo (int)$pr['id']; ?>, '<?php echo htmlspecialchars(addslashes($pr['request_no'])); ?>', '<?php echo htmlspecialchars(addslashes($pr['payee_name'])); ?>', <?php echo (float)$pr['amount_paid']; ?>, '<?php echo htmlspecialchars(addslashes($pr['currency'])); ?>')"
+                                                            title="Approve Payment Request">
+                                                        <i class="bi bi-check-lg"></i> Approve
+                                                    </button>
+                                                    <button class="btn btn-outline-danger"
+                                                            onclick="rejectPaymentRequest(<?php echo (int)$pr['id']; ?>, '<?php echo htmlspecialchars(addslashes($pr['request_no'])); ?>', '<?php echo htmlspecialchars(addslashes($pr['payee_name'])); ?>')"
+                                                            title="Reject Payment Request">
+                                                        <i class="bi bi-x-lg"></i> Reject
+                                                    </button>
+                                                    <button class="btn btn-outline-info"
+                                                            onclick="viewPaymentRequest(<?php echo (int)$pr['id']; ?>)"
+                                                            title="View Details">
+                                                        <i class="bi bi-eye"></i>
                                                     </button>
                                                 </div>
                                             </td>
@@ -870,6 +994,58 @@ try {
     </div>
 </div>
 
+<!-- CEO Payment Request Approval Modal -->
+<div class="modal fade" id="ceoPaymentRequestModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="paymentRequestApprovalTitle">
+                    <i class="bi bi-credit-card me-2"></i>CEO Payment Decision
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="ceoPaymentRequestForm">
+                <div class="modal-body">
+                    <input type="hidden" name="action" id="prAction">
+                    <input type="hidden" name="request_id" id="prRequestId">
+                    
+                    <div id="paymentRequestApprovalContent">
+                        <!-- Content will be populated by JavaScript -->
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="prReason" class="form-label">Reason <span class="text-muted">(Optional for approval, required for rejection)</span></label>
+                        <textarea class="form-control" name="notes" id="prReason" rows="3"
+                                  placeholder="Provide reason for your decision..."></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn" id="prActionBtn">Confirm Decision</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- CEO Payment Request View Modal -->
+<div class="modal fade" id="ceoPaymentRequestViewModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-eye me-2"></i>Payment Request Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="prViewContent">
+                <!-- Content loaded via AJAX -->
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
 // CEO Leave Approval Functions
 function approveLeave(leaveId, employeeName, totalDays) {
@@ -959,6 +1135,157 @@ function rejectPayroll(payrollId, employeeName) {
 function viewLeaveDetail(leave) {
     alert(`Leave Details:\n\nEmployee: ${leave.employee_name}\nLeave Type: ${leave.leave_type_name}\nDuration: ${leave.total_days} days\nReason: ${leave.reason}\n\nFull details view would be implemented with a dedicated modal.`);
 }
+
+// CEO Payment Request Approval Functions
+function approvePaymentRequest(requestId, requestNo, payeeName, amount, currency) {
+    document.getElementById('prAction').value = 'approve';
+    document.getElementById('prRequestId').value = requestId;
+    document.getElementById('paymentRequestApprovalTitle').innerHTML = '<i class="bi bi-check-circle me-2 text-success"></i>Approve Payment Request';
+    
+    document.getElementById('paymentRequestApprovalContent').innerHTML = `
+        <div class="alert alert-success">
+            <i class="bi bi-check-circle me-2"></i>
+            <strong>Approve Payment Request</strong>
+            <p class="mb-0 mt-2">You are about to approve payment request <strong>${requestNo}</strong></p>
+        </div>
+        <table class="table table-sm table-borderless">
+            <tr><td class="fw-bold" style="width:40%">Request No:</td><td>${requestNo}</td></tr>
+            <tr><td class="fw-bold">Payee:</td><td>${payeeName}</td></tr>
+            <tr><td class="fw-bold">Amount:</td><td class="fw-bold text-success">${parseFloat(amount).toLocaleString()} ${currency}</td></tr>
+        </table>
+    `;
+    
+    document.getElementById('prActionBtn').className = 'btn btn-success';
+    document.getElementById('prActionBtn').innerHTML = '<i class="bi bi-check-lg me-1"></i>Approve Payment';
+    document.getElementById('prReason').required = false;
+    document.getElementById('prReason').value = '';
+    
+    new bootstrap.Modal(document.getElementById('ceoPaymentRequestModal')).show();
+}
+
+function rejectPaymentRequest(requestId, requestNo, payeeName) {
+    document.getElementById('prAction').value = 'reject';
+    document.getElementById('prRequestId').value = requestId;
+    document.getElementById('paymentRequestApprovalTitle').innerHTML = '<i class="bi bi-x-circle me-2 text-danger"></i>Reject Payment Request';
+    
+    document.getElementById('paymentRequestApprovalContent').innerHTML = `
+        <div class="alert alert-danger">
+            <i class="bi bi-exclamation-triangle me-2"></i>
+            <strong>Reject Payment Request</strong>
+            <p class="mb-0 mt-2">You are about to reject payment request <strong>${requestNo}</strong> for <strong>${payeeName}</strong>.</p>
+        </div>
+    `;
+    
+    document.getElementById('prActionBtn').className = 'btn btn-danger';
+    document.getElementById('prActionBtn').innerHTML = '<i class="bi bi-x-lg me-1"></i>Reject Payment';
+    document.getElementById('prReason').required = true;
+    document.getElementById('prReason').value = '';
+    document.getElementById('prReason').placeholder = 'Rejection reason is required...';
+    
+    new bootstrap.Modal(document.getElementById('ceoPaymentRequestModal')).show();
+}
+
+function viewPaymentRequest(requestId) {
+    const formData = new FormData();
+    formData.append('request_id', requestId);
+    formData.append('action', 'get_request_details');
+    formData.append('csrf_token', document.getElementById('csrfToken').value);
+
+    fetch('<?php echo BASE_URL; ?>ceo/dashboard.php', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            const r = data.data;
+            document.getElementById('prViewContent').innerHTML = `
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6 class="text-primary">Request Information</h6>
+                        <table class="table table-sm table-borderless">
+                            <tr><td class="fw-bold" style="width:40%">Request No:</td><td><strong>${r.request_no}</strong></td></tr>
+                            <tr><td class="fw-bold">Subject:</td><td>${r.subject || '-'}</td></tr>
+                            <tr><td class="fw-bold">Date:</td><td>${r.requested_at ? new Date(r.requested_at).toLocaleDateString() : '-'}</td></tr>
+                            <tr><td class="fw-bold">Requested By:</td><td>${r.requested_by_fullname || r.requested_by_username || 'N/A'}</td></tr>
+                        </table>
+                    </div>
+                    <div class="col-md-6">
+                        <h6 class="text-primary">Payment Details</h6>
+                        <table class="table table-sm table-borderless">
+                            <tr><td class="fw-bold" style="width:40%">Pay To:</td><td>${r.pay_to_desc || r.pay_to_type || '-'}</td></tr>
+                            <tr><td class="fw-bold">Payee:</td><td>${r.payee_name || '-'}</td></tr>
+                            <tr><td class="fw-bold">Amount:</td><td class="fw-bold text-success">${parseFloat(r.amount_paid || 0).toLocaleString()} ${r.currency || ''}</td></tr>
+                            <tr><td class="fw-bold">Cheque No:</td><td>${r.cheque_no || '-'}</td></tr>
+                            <tr><td class="fw-bold">Description:</td><td>${r.payment_description || '-'}</td></tr>
+                        </table>
+                    </div>
+                </div>
+                <hr>
+                <h6 class="text-primary">Bank Details</h6>
+                <div class="row">
+                    <div class="col-md-6">
+                        <table class="table table-sm table-borderless">
+                            <tr><td class="fw-bold" style="width:40%">Bank:</td><td>${r.payee_bank_name || '-'}</td></tr>
+                            <tr><td class="fw-bold">Branch:</td><td>${r.payee_branch || '-'}</td></tr>
+                        </table>
+                    </div>
+                    <div class="col-md-6">
+                        <table class="table table-sm table-borderless">
+                            <tr><td class="fw-bold" style="width:40%">Account Name:</td><td>${r.payee_account_name || '-'}</td></tr>
+                            <tr><td class="fw-bold">Account No:</td><td>${r.payee_account_no || '-'}</td></tr>
+                        </table>
+                    </div>
+                </div>
+                ${r.attachment_name ? '<hr><h6 class="text-primary"><i class="bi bi-paperclip me-1"></i>Attachment</h6><p><a href="<?php echo BASE_URL; ?>ceo/dashboard.php?action=download_attachment&id=' + r.id + '&csrf_token=' + encodeURIComponent(document.getElementById('csrfToken').value) + '" target="_blank" class="btn btn-sm btn-outline-primary"><i class="bi bi-download me-1"></i>' + r.attachment_name + '</a></p>' : ''}
+            `;
+            new bootstrap.Modal(document.getElementById('ceoPaymentRequestViewModal')).show();
+        } else {
+            alert('Error: ' + (data.message || 'Failed to load request details'));
+        }
+    })
+    .catch(error => {
+        alert('Error loading request details: ' + error.message);
+    });
+}
+
+// Handle payment request form submission via AJAX
+document.getElementById('ceoPaymentRequestForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const form = this;
+    const action = document.getElementById('prAction').value;
+    const notes = document.getElementById('prReason').value;
+    const requestId = document.getElementById('prRequestId').value;
+
+    if (action === 'reject' && !notes.trim()) {
+        alert('Rejection reason is required');
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('action', action);
+    formData.append('request_id', requestId);
+    formData.append('notes', notes);
+    formData.append('csrf_token', document.getElementById('csrfToken').value);
+
+    fetch('<?php echo BASE_URL; ?>ceo/dashboard.php', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            bootstrap.Modal.getInstance(document.getElementById('ceoPaymentRequestModal')).hide();
+            alert(data.message);
+            window.location.reload();
+        } else {
+            alert('Error: ' + (data.message || 'Unknown error'));
+        }
+    })
+    .catch(error => {
+        alert('Error: ' + error.message);
+    });
+});
 
 // Auto-refresh page every 5 minutes to show new pending approvals
 setInterval(function() {
