@@ -127,7 +127,7 @@ try {
 
 // Get user's leave history
 try {
-    $emp_id_stmt = $db->prepare("SELECT id FROM users WHERE id = ? AND employee_id IS NOT NULL");
+    $emp_id_stmt = $db->prepare("SELECT id FROM users WHERE id = ?");
     $emp_id_stmt->execute([$_SESSION['user_id']]);
     $emp = $emp_id_stmt->fetch();
     
