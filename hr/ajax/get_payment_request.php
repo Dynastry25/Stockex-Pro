@@ -16,6 +16,8 @@ if (isset($_GET['request_id'])) {
         $stmt->execute([$request_id]);
         $request = $stmt->fetch();
         
+        unset($request['attachment_data']);
+        
         if (!$request) {
             echo json_encode(['error' => 'Request not found']);
             exit;

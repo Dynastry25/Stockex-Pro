@@ -7,7 +7,7 @@ header("X-Frame-Options: DENY");
 header("X-Content-Type-Options: nosniff");
 header("X-XSS-Protection: 1; mode=block");
 header("Referrer-Policy: strict-origin-when-cross-origin");
-header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; font-src 'self' https://cdn.jsdelivr.net");
+header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' https://cdn.jsdelivr.net https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://cdn.jsdelivr.net");
 
 // Only HR staff can access
 require_hr();
@@ -333,6 +333,9 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'get_payment_request') {
         $stmt->execute([$request_id]);
         $request = $stmt->fetch();
         
+        // Remove binary data before JSON encoding
+        unset($request['attachment_data']);
+        
         if (!$request) {
             echo json_encode(['error' => 'Request not found']);
             exit;
@@ -407,6 +410,9 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'track_payment_request') {
         $stmt = $db->prepare("SELECT * FROM pending_pay WHERE id = ?");
         $stmt->execute([$request_id]);
         $request = $stmt->fetch();
+        
+        // Remove binary data before JSON encoding
+        unset($request['attachment_data']);
         
         if (!$request) {
             echo json_encode(['error' => 'Request not found']);
@@ -516,6 +522,31 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 'track_payment_request') {
     }
 }
 
+// Handle attachment download from database
+if (isset($_GET['ajax']) && $_GET['ajax'] == 'download_attachment' && isset($_GET['id'])) {
+    try {
+        $request_id = (int)$_GET['id'];
+        $stmt = $db->prepare("SELECT attachment_name, attachment_mime, attachment_data FROM pending_pay WHERE id = ?");
+        $stmt->execute([$request_id]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($row && $row['attachment_data'] !== null) {
+            header('Content-Type: ' . ($row['attachment_mime'] ?: 'application/octet-stream'));
+            header('Content-Disposition: inline; filename="' . addslashes($row['attachment_name'] ?: 'attachment') . '"');
+            header('Content-Length: ' . strlen($row['attachment_data']));
+            header('Cache-Control: private, max-age=0, must-revalidate');
+            echo $row['attachment_data'];
+        } else {
+            http_response_code(404);
+            echo 'Attachment not found';
+        }
+    } catch (PDOException $e) {
+        http_response_code(500);
+        echo 'Error fetching attachment';
+    }
+    exit();
+}
+
 // Handle payment request creation
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     // CSRF validation
@@ -536,6 +567,37 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $amount_paid = $_POST['amount_paid'] ?? '';
         $cheque_no = $_POST['cheque_no'] ?? '';
         $payment_description = $_POST['payment_description'] ?? '';
+        
+        // Handle file attachment
+        $attachment_path = null;
+        $attachment_name = null;
+        $attachment_mime = null;
+        $attachment_data = null;
+        if (isset($_FILES['attachment']) && $_FILES['attachment']['error'] === UPLOAD_ERR_OK) {
+            $allowed_types = [
+                'application/pdf',
+                'image/jpeg', 'image/png',
+                'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            ];
+            $max_size = 10 * 1024 * 1024; // 10MB
+            $file = $_FILES['attachment'];
+            
+            if ($file['size'] > $max_size) {
+                $validation_errors[] = 'Attachment must be less than 10MB';
+            } elseif (!in_array($file['type'], $allowed_types)) {
+                $validation_errors[] = 'Attachment type not allowed. Use PDF, JPG, PNG, DOC, or XLS';
+            } else {
+                $attachment_name = $file['name'];
+                $attachment_mime = $file['type'];
+                $attachment_data = file_get_contents($file['tmp_name']);
+                if ($attachment_data === false) {
+                    $validation_errors[] = 'Failed to read attachment file';
+                }
+            }
+        } elseif (isset($_FILES['attachment']) && $_FILES['attachment']['error'] !== UPLOAD_ERR_NO_FILE) {
+            $validation_errors[] = 'Error uploading attachment';
+        }
         
         // Validation
         $validation_errors = [];
@@ -595,8 +657,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                         request_no, subject, pay_to_type, payee_id, payee_name, 
                         payee_bank_name, payee_branch, payee_account_name,
                         payee_account_no, currency, amount_paid, cheque_no,
-                        payment_description, requested_by, status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+                        payment_description, attachment_name, attachment_mime, attachment_data, attachment_path,
+                        requested_by, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
                 ");
                 
                 $stmt->execute([
@@ -613,6 +676,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     $amount_paid,
                     sanitizeInput($cheque_no),
                     sanitizeInput($payment_description),
+                    $attachment_name,
+                    $attachment_mime,
+                    $attachment_data,
+                    $attachment_path,
                     $user_id
                 ]);
                 
@@ -778,7 +845,7 @@ include '../includes/header.php';
                     </button>
                 </div>
                 <div class="card-body" id="paymentFormContainer">
-                    <form method="POST" id="paymentRequestForm">
+                    <form method="POST" id="paymentRequestForm" enctype="multipart/form-data">
                         <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
                         <input type="hidden" name="payee_id" id="payee_id" value="">
                         
@@ -890,6 +957,15 @@ include '../includes/header.php';
                                 <label class="form-label">Payment Description</label>
                                 <textarea class="form-control" name="payment_description" id="payment_description" 
                                           rows="3" placeholder="Detailed description of the payment"><?php echo htmlspecialchars($_POST['payment_description'] ?? ''); ?></textarea>
+                            </div>
+
+                            <!-- Attachment -->
+                            <div class="col-md-12">
+                                <label class="form-label">Attachment / Receipt</label>
+                                <input type="file" class="form-control" name="attachment" id="attachmentInput" 
+                                       accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx">
+                                <small class="text-muted">Attach supporting documents, receipts, or invoices (PDF, JPG, PNG, DOC, XLS — Max 10MB)</small>
+                                <div id="attachmentPreview" class="mt-2"></div>
                             </div>
 
                             <!-- Submit Button -->
@@ -1215,8 +1291,44 @@ document.addEventListener('DOMContentLoaded', function() {
         payeeModalBtn.disabled = true;
         payeeIndicator.textContent = '';
         currentLedgerType = '';
+        const preview = document.getElementById('attachmentPreview');
+        if (preview) preview.innerHTML = '';
         showToast('Form reset successfully', 'info');
     });
+
+    // Attachment preview
+    const attachmentInput = document.getElementById('attachmentInput');
+    const attachmentPreview = document.getElementById('attachmentPreview');
+    if (attachmentInput && attachmentPreview) {
+        attachmentInput.addEventListener('change', function() {
+            attachmentPreview.innerHTML = '';
+            if (this.files && this.files[0]) {
+                const file = this.files[0];
+                const maxSize = 10 * 1024 * 1024;
+                if (file.size > maxSize) {
+                    showToast('File must be less than 10MB', 'danger');
+                    this.value = '';
+                    return;
+                }
+                const allowed = ['pdf','jpg','jpeg','png','doc','docx','xls','xlsx'];
+                const ext = file.name.split('.').pop().toLowerCase();
+                if (!allowed.includes(ext)) {
+                    showToast('File type not allowed', 'danger');
+                    this.value = '';
+                    return;
+                }
+                const icon = ext === 'pdf' ? 'bi-file-earmark-pdf' : 
+                             ['jpg','jpeg','png'].includes(ext) ? 'bi-file-earmark-image' : 'bi-file-earmark';
+                attachmentPreview.innerHTML = 
+                    '<div class="d-flex align-items-center gap-2 p-2 bg-light rounded">' +
+                    '<i class="bi ' + icon + ' fs-4 text-primary"></i>' +
+                    '<span class="text-truncate" style="max-width:300px">' + file.name + '</span>' +
+                    '<small class="text-muted">(' + (file.size / 1024).toFixed(1) + ' KB)</small>' +
+                    '<button type="button" class="btn btn-sm btn-outline-danger ms-auto" onclick="document.getElementById(\'attachmentInput\').value=\'\';document.getElementById(\'attachmentPreview\').innerHTML=\'\'">' +
+                    '<i class="bi bi-x"></i></button></div>';
+            }
+        });
+    }
 
     // Event listener for account type change
     payToTypeSelect.addEventListener('change', function() {
@@ -1632,6 +1744,12 @@ document.addEventListener('DOMContentLoaded', function() {
                                             <tr>
                                                 <td class="fw-bold">Description:</td>
                                                 <td>${request.payment_description || '-'}</td>
+                                            </tr>
+                                            <tr>
+                                                <td class="fw-bold">Attachment:</td>
+                                                <td>${request.attachment_name ? 
+                                                    '<a href="hr_payment_request.php?ajax=download_attachment&id=' + request.id + '" class="btn btn-sm btn-outline-primary" target="_blank"><i class="bi bi-paperclip me-1"></i>' + request.attachment_name + '</a>' : 
+                                                    '<span class="text-muted">No attachment</span>'}</td>
                                             </tr>
                                         </table>
                                     </div>

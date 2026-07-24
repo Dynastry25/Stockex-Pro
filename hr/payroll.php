@@ -1750,10 +1750,7 @@ document.addEventListener('DOMContentLoaded', function() {
 // Helper functions
 function formatCurrency(amount) {
     amount = parseFloat(amount) || 0;
-    return 'TZS ' + amount.toLocaleString('en-TZ', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-    });
+    return 'TZS ' + amount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
 // Incentive modal functions

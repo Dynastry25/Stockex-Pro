@@ -422,6 +422,12 @@
                         </a>
                     </li>
                     <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>ceo/dashboard">
+                            <i class="bi bi-speedometer2"></i>
+                            <span>CEO Dashboard</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link" href="<?php echo BASE_URL; ?>finance/reports_dashboard">
                             <i class="bi bi-graph-up"></i>
                             <span>Finance Reports</span>

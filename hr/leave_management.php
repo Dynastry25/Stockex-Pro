@@ -57,7 +57,7 @@ function hr_finalize_leave($leave_id, $decision, $hr_user_id, $reason = '') {
         
         // Get current leave details
         $stmt = $db->prepare("
-            SELECT lr.*, e.employee_id, CONCAT(e.first_name, ' ', e.last_name) as employee_name
+            SELECT lr.*, e.employee_id, COALESCE(e.full_name, CONCAT(e.first_name, ' ', e.last_name)) as employee_name
             FROM leave_requests lr
             JOIN users e ON lr.employee_id = e.id
             WHERE lr.id = ? AND lr.status = 'pending'
@@ -162,7 +162,7 @@ function hr_escalate_leave_to_ceo($leave_id, $hr_user_id, $escalation_reason) {
         
         // Get current leave details
         $stmt = $db->prepare("
-            SELECT lr.*, e.employee_id, CONCAT(e.first_name, ' ', e.last_name) as employee_name
+            SELECT lr.*, e.employee_id, COALESCE(e.full_name, CONCAT(e.first_name, ' ', e.last_name)) as employee_name
             FROM leave_requests lr
             JOIN users e ON lr.employee_id = e.id
             WHERE lr.id = ? AND lr.status = 'pending'
@@ -381,8 +381,8 @@ if (isset($_SESSION['success_message'])) {
 try {
     $stmt = $db->query("
         SELECT lr.*, 
-               CONCAT(e.first_name, ' ', e.last_name) as employee_name,
-               e.employee_id as employee_code,
+               COALESCE(e.full_name, CONCAT(e.first_name, ' ', e.last_name)) as employee_name,
+               COALESCE(e.employee_id, e.username) as employee_code,
                d.name as department_name, 
                jp.title as position_name,
                lt.name as leave_type_name,
@@ -415,11 +415,11 @@ try {
 // Get employees for dropdown
 try {
     $emp_stmt = $db->query("
-        SELECT e.id, e.employee_id, CONCAT(e.first_name, ' ', e.last_name) as full_name, d.name as department_name
+        SELECT e.id, COALESCE(e.employee_id, e.username) as employee_id, COALESCE(e.full_name, CONCAT(e.first_name, ' ', e.last_name)) as full_name, d.name as department_name
         FROM users e
         LEFT JOIN departments d ON e.department_id = d.id
         WHERE e.status = 'active' AND e.role IN ('trader', 'finance_officer', 'ceo', 'hr_manager', 'hr_officer')
-        ORDER BY e.first_name, e.last_name
+        ORDER BY COALESCE(e.full_name, e.username)
     ");
     $employees = $emp_stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
@@ -450,8 +450,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == '1' && isset($_GET['action']) && $_
         $leave_id = (int)$_GET['id'];
         $stmt = $db->prepare("
             SELECT lr.*, 
-                   CONCAT(e.first_name, ' ', e.last_name) as employee_name,
-                   e.employee_id as employee_code,
+                   COALESCE(e.full_name, CONCAT(e.first_name, ' ', e.last_name)) as employee_name,
+                   COALESCE(e.employee_id, e.username) as employee_code,
                    d.name as department_name, 
                    jp.title as position_name,
                    lt.name as leave_type_name,

@@ -1168,12 +1168,6 @@ include '../includes/header.php';
                                            step="0.01" min="0" max="100" value="<?php echo $rates['wcf_rate']; ?>" required>
                                     <small class="text-muted">Workers Compensation Fund (0.5%)</small>
                                 </div>
-                                <div class="col-md-4">
-                                    <label class="form-label">OSHA Rate (%)</label>
-                                    <input type="number" class="form-control" name="osha_rate" 
-                                           step="0.01" min="0" max="100" value="<?php echo $rates['osha_rate']; ?>" required>
-                                    <small class="text-muted">Occupational Safety & Health (0.5%)</small>
-                                </div>
                             </div>
                             
                             <div class="row mb-3">

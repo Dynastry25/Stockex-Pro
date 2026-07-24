@@ -42,19 +42,19 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 try {
     $stmt = $db->query("
         SELECT lr.*, 
-               CONCAT(u.first_name, ' ', u.last_name) as employee_name,
+               COALESCE(u.full_name, CONCAT(u.first_name, ' ', u.last_name)) as employee_name,
                u.full_name,
-               u.employee_id as employee_code,
+               COALESCE(u.employee_id, u.username) as employee_code,
                d.name as department_name, 
-               jp.title as position_name,
+               COALESCE(jp.title, 'N/A') as position_name,
                lt.name as leave_type_name,
                hr_user.full_name as hr_escalated_by_name,
                aw.hr_action_reason as escalation_reason
         FROM leave_requests lr
         JOIN users u ON lr.employee_id = u.id
-        JOIN departments d ON u.department_id = d.id
-        JOIN job_positions jp ON u.position_id = jp.id
-        JOIN leave_types lt ON lr.leave_type_id = lt.id
+        LEFT JOIN departments d ON u.department_id = d.id
+        LEFT JOIN job_positions jp ON u.position_id = jp.id
+        LEFT JOIN leave_types lt ON lr.leave_type_id = lt.id
         LEFT JOIN approval_workflows aw ON aw.entity_type = 'leave_request' AND aw.entity_id = lr.id
         LEFT JOIN users hr_user ON aw.hr_action_by = hr_user.id
         WHERE lr.requires_ceo_approval = 1 AND lr.ceo_decision_status = 'pending_ceo'
@@ -165,19 +165,19 @@ try {
                                         <tr>
                                             <td>
                                                 <div>
-                                                    <strong><?php echo htmlspecialchars($leave['employee_name']); ?></strong>
+                                                    <strong><?php echo htmlspecialchars($leave['employee_name'] ?? 'Unknown'); ?></strong>
                                                     <br>
-                                                    <small class="text-muted">ID: <?php echo htmlspecialchars($leave['employee_code']); ?></small>
+                                                    <small class="text-muted">ID: <?php echo htmlspecialchars($leave['employee_code'] ?? 'N/A'); ?></small>
                                                 </div>
                                             </td>
-                                            <td><?php echo htmlspecialchars($leave['department_name']); ?></td>
-                                            <td><?php echo htmlspecialchars($leave['position_name']); ?></td>
-                                            <td><?php echo htmlspecialchars($leave['leave_type_name']); ?></td>
+                                            <td><?php echo htmlspecialchars($leave['department_name'] ?? 'N/A'); ?></td>
+                                            <td><?php echo htmlspecialchars($leave['position_name'] ?? 'N/A'); ?></td>
+                                            <td><?php echo htmlspecialchars($leave['leave_type_name'] ?? 'Unknown'); ?></td>
                                             <td>
                                                 <?php echo format_date($leave['start_date']); ?> -
                                                 <?php echo format_date($leave['end_date']); ?>
                                             </td>
-                                            <td><?php echo htmlspecialchars($leave['total_days']); ?> days</td>
+                                            <td><?php echo $leave['total_days']; ?> days</td>
                                             <td><?php echo htmlspecialchars($leave['hr_escalated_by_name'] ?? 'HR'); ?></td>
                                             <td>
                                                 <small><?php echo htmlspecialchars($leave['escalation_reason'] ?? 'No reason provided'); ?></small>
@@ -185,12 +185,12 @@ try {
                                             <td>
                                                 <div class="btn-group-vertical btn-group-sm">
                                                     <button class="btn btn-success mb-1"
-                                                            onclick="ceoApproveLeave(<?php echo $leave['id']; ?>, '<?php echo htmlspecialchars($leave['employee_name']); ?>')"
+                                                            onclick="ceoApproveLeave(<?php echo $leave['id']; ?>, '<?php echo htmlspecialchars(addslashes($leave['employee_name'] ?? 'Unknown')); ?>')"
                                                             title="Approve Leave">
                                                         <i class="bi bi-check-lg me-1"></i>Approve
                                                     </button>
                                                     <button class="btn btn-danger"
-                                                            onclick="ceoRejectLeave(<?php echo $leave['id']; ?>, '<?php echo htmlspecialchars($leave['employee_name']); ?>')"
+                                                            onclick="ceoRejectLeave(<?php echo $leave['id']; ?>, '<?php echo htmlspecialchars(addslashes($leave['employee_name'] ?? 'Unknown')); ?>')"
                                                             title="Reject Leave">
                                                         <i class="bi bi-x-lg me-1"></i>Reject
                                                     </button>

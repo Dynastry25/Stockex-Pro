@@ -641,9 +641,9 @@ if (isset($_POST['single_payment']) && isset($_POST['trade_id'])) {
                                 payment_no, payment_date, payment_mode, paid_to,
                                 name, record_in_financial, ac_credit,
                                 currency, amount, narration,
-                                trade_reference, created_by_username, created_at, status,
+                                trade_reference, payment_type, created_by_username, created_at, status,
                                 bank_name, bank_account_number, source_type, source_id
-                            ) VALUES (?, NOW(), ?, ?, ?, 'yes', ?, ?, ?, ?, ?, ?, NOW(), 'active', ?, ?, 'trade_settlement', ?)
+                            ) VALUES (?, NOW(), ?, ?, ?, 'yes', ?, ?, ?, ?, ?, ?, ?, NOW(), 'active', ?, ?, 'trade_settlement', ?)
                         ");
                         
                         $payment_stmt->execute([
@@ -656,6 +656,7 @@ if (isset($_POST['single_payment']) && isset($_POST['trade_id'])) {
                             $amount,
                             $description,
                             $trade['trade_reference'] ?? null,
+                            'settlement',
                             $username,
                             $bank_account ? $bank_account['bank_name'] : '',
                             $bank_account ? $bank_account['account_number'] : '',

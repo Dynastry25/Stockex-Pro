@@ -160,17 +160,21 @@ try {
 }
 
 // Handle AJAX requests for payment approval
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+$is_ajax_post = $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']);
+$is_get_download = $_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['action'] === 'download_attachment';
+if ($is_ajax_post || $is_get_download) {
     header('Content-Type: application/json');
     
-    // Verify CSRF token
-    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
-        echo json_encode(['success' => false, 'message' => 'Invalid CSRF token']);
-        exit;
+    $action = $_POST['action'] ?? $_GET['action'] ?? '';
+    $request_id = (int)($_POST['request_id'] ?? $_GET['id'] ?? 0);
+
+    if ($is_ajax_post) {
+        // Verify CSRF token for POST actions
+        if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+            echo json_encode(['success' => false, 'message' => 'Invalid CSRF token']);
+            exit;
+        }
     }
-    
-    $action = $_POST['action'];
-    $request_id = (int)($_POST['request_id'] ?? 0);
     
     if (!$request_id) {
         echo json_encode(['success' => false, 'message' => 'Invalid request ID']);
@@ -511,9 +515,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $request_details = $stmt->fetch();
             
             if ($request_details) {
+                unset($request_details['attachment_data']);
                 echo json_encode(['success' => true, 'data' => $request_details]);
             } else {
                 echo json_encode(['success' => false, 'message' => 'Request not found']);
+            }
+        } elseif ($action === 'download_attachment') {
+            $stmt = $db->prepare("SELECT attachment_data, attachment_name, attachment_mime FROM pending_pay WHERE id = ?");
+            $stmt->execute([$request_id]);
+            $att = $stmt->fetch();
+            if ($att && !empty($att['attachment_data'])) {
+                header_remove('Content-Type');
+                header('Content-Type: ' . ($att['attachment_mime'] ?: 'application/octet-stream'));
+                header('Content-Disposition: inline; filename="' . ($att['attachment_name'] ?: 'attachment') . '"');
+                header('Content-Length: ' . strlen($att['attachment_data']));
+                echo $att['attachment_data'];
+            } else {
+                http_response_code(404);
+                echo 'Attachment not found';
             }
         } else {
             echo json_encode(['success' => false, 'message' => 'Invalid action']);
@@ -759,8 +778,10 @@ include '../includes/header.php';
                                                             data-currency="<?php echo htmlspecialchars($request['currency']); ?>"
                                                             data-account-no="<?php echo htmlspecialchars($request['payee_account_no']); ?>"
                                                             data-cheque-no="<?php echo htmlspecialchars($request['cheque_no'] ?? 'N/A'); ?>"
-                                                            data-attachments="<?php echo htmlspecialchars($request['attachments'] ?? 'No attachments'); ?>"
-                                                            data-notes="<?php echo htmlspecialchars($request['notes'] ?? 'No additional notes'); ?>">
+                                                            data-attachments="<?php echo htmlspecialchars($request['attachment_name'] ?? ''); ?>"
+                                                            data-notes="<?php echo htmlspecialchars($request['payment_description'] ?? ''); ?>"
+                                                            data-attachment-id="<?php echo $request['id']; ?>"
+                                                            data-ceo-notes="<?php echo htmlspecialchars($request['ceo_approval_notes'] ?? ''); ?>">
                                                         <i class="bi bi-eye"></i> View
                                                     </button>
                                                     <button type="button" class="btn btn-outline-success process-request-btn" 
@@ -1539,8 +1560,22 @@ document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('view-amount').textContent = (button.getAttribute('data-amount') || '0') + ' ' + (button.getAttribute('data-currency') || '');
             document.getElementById('view-account-no').textContent = button.getAttribute('data-account-no') || '-';
             document.getElementById('view-cheque-no').textContent = button.getAttribute('data-cheque-no') || '-';
-            document.getElementById('view-attachments').textContent = button.getAttribute('data-attachments') || '-';
-            document.getElementById('view-notes').textContent = button.getAttribute('data-notes') || '-';
+            
+            var attName = button.getAttribute('data-attachments') || '';
+            var attId = button.getAttribute('data-attachment-id') || '';
+            if (attName) {
+                document.getElementById('view-attachments').innerHTML = '<a href="<?php echo BASE_URL; ?>finance/dashboard.php?action=download_attachment&id=' + attId + '" target="_blank" class="btn btn-sm btn-outline-primary"><i class="bi bi-download me-1"></i>' + attName + '</a>';
+            } else {
+                document.getElementById('view-attachments').textContent = 'No attachments';
+            }
+            
+            var notes = button.getAttribute('data-notes') || '';
+            var ceoNotes = button.getAttribute('data-ceo-notes') || '';
+            var notesHtml = '';
+            if (notes) notesHtml += '<p class="mb-1"><strong>Request Notes:</strong> ' + notes + '</p>';
+            if (ceoNotes) notesHtml += '<p class="mb-0"><strong>CEO Notes:</strong> ' + ceoNotes + '</p>';
+            if (!notesHtml) notesHtml = 'No additional notes';
+            document.getElementById('view-notes').innerHTML = notesHtml;
         });
     }
     
