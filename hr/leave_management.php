@@ -501,7 +501,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == '1' && isset($_GET['action']) && $_
     <?php if (!empty($error_message)): ?>
         <div class="alert alert-danger alert-dismissible fade show">
             <i class="bi bi-exclamation-triangle me-2"></i>
-            <?php echo htmlspecialchars($error_message); ?>
+            <?php echo htmlspecialchars($error_message ?? ''); ?>
             <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
         </div>
     <?php endif; ?>
@@ -509,7 +509,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == '1' && isset($_GET['action']) && $_
     <?php if (!empty($success_message)): ?>
         <div class="alert alert-success alert-dismissible fade show">
             <i class="bi bi-check-circle me-2"></i>
-            <?php echo htmlspecialchars($success_message); ?>
+            <?php echo htmlspecialchars($success_message ?? ''); ?>
             <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
         </div>
     <?php endif; ?>
@@ -621,8 +621,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == '1' && isset($_GET['action']) && $_
                                 <tr>
                                     <td>
                                         <div>
-                                            <strong><?php echo htmlspecialchars($request['employee_name']); ?></strong>
-                                            <br><small class="text-muted"><?php echo htmlspecialchars($request['employee_code']); ?></small>
+                                            <strong><?php echo htmlspecialchars($request['employee_name'] ?? ''); ?></strong>
+                                            <br><small class="text-muted"><?php echo htmlspecialchars($request['employee_code'] ?? ''); ?></small>
                                         </div>
                                     </td>
                                     <td><?php echo htmlspecialchars($request['department_name'] ?? 'N/A'); ?></td>
@@ -732,8 +732,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == '1' && isset($_GET['action']) && $_
                                 <option value="">Select Employee</option>
                                 <?php foreach ($employees as $emp): ?>
                                     <option value="<?php echo $emp['id']; ?>">
-                                        <?php echo htmlspecialchars($emp['full_name']); ?> 
-                                        (<?php echo htmlspecialchars($emp['employee_id']); ?>) - 
+                                        <?php echo htmlspecialchars($emp['full_name'] ?? ''); ?> 
+                                        (<?php echo htmlspecialchars($emp['employee_id'] ?? ''); ?>) - 
                                         <?php echo htmlspecialchars($emp['department_name'] ?? 'N/A'); ?>
                                     </option>
                                 <?php endforeach; ?>
