@@ -322,6 +322,12 @@
                             <span>Bank Accounts</span>
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>finance/assets_register">
+                            <i class="bi bi-box-seam"></i>
+                            <span>Assets Register</span>
+                        </a>
+                    </li>
                        <li class="nav-item">
                         <a class="nav-link" href="<?php echo BASE_URL; ?>finance/debtors">
                             <i class="bi bi-cash-stack"></i>
