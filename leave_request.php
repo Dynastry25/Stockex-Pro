@@ -509,8 +509,9 @@ function calculateDays() {
     const startDate = document.getElementById('startDate')?.value;
     const endDate = document.getElementById('endDate')?.value;
     const leaveTypeSelect = document.getElementById('leaveTypeSelect');
+    if (!leaveTypeSelect || leaveTypeSelect.selectedIndex < 0) return;
     const selectedOption = leaveTypeSelect.options[leaveTypeSelect.selectedIndex];
-    const maxDays = selectedOption.getAttribute('data-max-days');
+    const maxDays = selectedOption?.getAttribute('data-max-days');
     
     if (startDate && endDate) {
         const start = new Date(startDate);
@@ -519,19 +520,24 @@ function calculateDays() {
         const daysDiff = Math.ceil(timeDiff / (1000 * 3600 * 24)) + 1;
         
         if (daysDiff > 0) {
-            document.getElementById('calculatedDays').textContent = daysDiff;
+            const calcDaysEl = document.getElementById('calculatedDays');
             const daysCalcDiv = document.getElementById('daysCalculation');
-            daysCalcDiv.classList.remove('d-none');
+            const maxWarnEl = document.getElementById('maxDaysWarning');
+            if (calcDaysEl) calcDaysEl.textContent = daysDiff;
+            if (daysCalcDiv) daysCalcDiv.classList.remove('d-none');
             
             // Check max consecutive days
-            if (maxDays && parseInt(maxDays) > 0 && daysDiff > parseInt(maxDays)) {
-                document.getElementById('maxDaysWarning').textContent = 
-                    `Warning: Maximum consecutive days for this leave type is ${maxDays}`;
-            } else {
-                document.getElementById('maxDaysWarning').textContent = '';
+            if (maxWarnEl) {
+                if (maxDays && parseInt(maxDays) > 0 && daysDiff > parseInt(maxDays)) {
+                    maxWarnEl.textContent = 
+                        `Warning: Maximum consecutive days for this leave type is ${maxDays}`;
+                } else {
+                    maxWarnEl.textContent = '';
+                }
             }
         } else {
-            document.getElementById('daysCalculation').classList.add('d-none');
+            const daysCalcDiv = document.getElementById('daysCalculation');
+            if (daysCalcDiv) daysCalcDiv.classList.add('d-none');
         }
     }
 }
@@ -539,13 +545,17 @@ function calculateDays() {
 // Update leave type description
 function updateLeaveTypeDescription() {
     const leaveTypeSelect = document.getElementById('leaveTypeSelect');
+    if (!leaveTypeSelect || leaveTypeSelect.selectedIndex < 0) return;
     const selectedOption = leaveTypeSelect.options[leaveTypeSelect.selectedIndex];
-    const description = selectedOption.getAttribute('data-description');
+    const description = selectedOption?.getAttribute('data-description');
     
-    if (description) {
-        document.getElementById('leaveTypeDescription').textContent = description;
-    } else {
-        document.getElementById('leaveTypeDescription').textContent = '';
+    const descEl = document.getElementById('leaveTypeDescription');
+    if (descEl) {
+        if (description) {
+            descEl.textContent = description;
+        } else {
+            descEl.textContent = '';
+        }
     }
     
     calculateDays(); // Recalculate days when leave type changes
@@ -561,7 +571,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // Set minimum date to today
         const today = new Date().toISOString().split('T')[0];
         startDateInput.min = today;
-        endDateInput.min = today;
+        if (endDateInput) endDateInput.min = today;
         
         startDateInput.addEventListener('change', function() {
             // Update end date minimum
