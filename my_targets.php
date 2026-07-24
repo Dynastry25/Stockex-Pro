@@ -76,8 +76,8 @@ include 'includes/header.php';
                 <i class="bi bi-bullseye me-2"></i>My Performance Targets
             </h1>
             <p class="text-muted mt-2">
-                <i class="bi bi-person me-1"></i><?php echo htmlspecialchars($employee['first_name'] . ' ' . $employee['last_name']); ?> 
-                <i class="bi bi-building ms-2 me-1"></i><?php echo htmlspecialchars($employee['department_name']); ?>
+                <i class="bi bi-person me-1"></i><?php echo htmlspecialchars(($employee['first_name'] ?? '') . ' ' . ($employee['last_name'] ?? '')); ?> 
+                <i class="bi bi-building ms-2 me-1"></i><?php echo htmlspecialchars($employee['department_name'] ?? ''); ?>
             </p>
         </div>
         <div class="d-flex gap-2">
