@@ -1,5 +1,5 @@
 <?php
-// /finance/budget.php - Budget Management System
+// /finance/budget.php - Budget Management System with Chart of Accounts Integration
 require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
 
@@ -30,7 +30,7 @@ $user_id = $_SESSION['user_id'] ?? null;
 $username = $_SESSION['username'] ?? 'system';
 
 // =====================================================
-// DATABASE TABLE CREATION (Run once)
+// DATABASE TABLE CREATION
 // =====================================================
 function createBudgetTables($db) {
     try {
@@ -65,7 +65,7 @@ function createBudgetTables($db) {
             )
         ");
 
-        // Budget Categories Table
+        // Budget Categories Table - Updated with chart_account_ids
         $db->exec("
             CREATE TABLE IF NOT EXISTS budget_categories (
                 id INT PRIMARY KEY AUTO_INCREMENT,
@@ -88,6 +88,21 @@ function createBudgetTables($db) {
                 FOREIGN KEY (budget_id) REFERENCES budgets(id) ON DELETE CASCADE,
                 INDEX idx_category (category_code),
                 INDEX idx_type (category_type)
+            )
+        ");
+
+        // Budget Category Account Mapping - NEW TABLE
+        $db->exec("
+            CREATE TABLE IF NOT EXISTS budget_category_accounts (
+                id INT PRIMARY KEY AUTO_INCREMENT,
+                category_id INT NOT NULL,
+                account_code VARCHAR(50) NOT NULL,
+                account_name VARCHAR(255) NOT NULL,
+                account_type VARCHAR(50),
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (category_id) REFERENCES budget_categories(id) ON DELETE CASCADE,
+                INDEX idx_account (account_code),
+                UNIQUE KEY unique_category_account (category_id, account_code)
             )
         ");
 
@@ -135,7 +150,7 @@ function createBudgetTables($db) {
                 budget_amount DECIMAL(15,2) DEFAULT 0,
                 variance DECIMAL(15,2) DEFAULT 0,
                 variance_percentage DECIMAL(10,2) DEFAULT 0,
-                source_type ENUM('receipt', 'payment', 'manual') DEFAULT 'manual',
+                source_type ENUM('receipt', 'payment', 'manual', 'gl') DEFAULT 'manual',
                 source_reference VARCHAR(100),
                 notes TEXT,
                 recorded_by INT,
@@ -288,50 +303,6 @@ function logBudgetHistory($db, $budget_id, $action, $field_name = null, $old_val
     ]);
 }
 
-function getActualAmountsForBudget($db, $budget_id, $category_id = null) {
-    $params = [$budget_id];
-    $category_condition = '';
-    
-    if ($category_id) {
-        $category_condition = " AND category_id = ?";
-        $params[] = $category_id;
-    }
-    
-    $stmt = $db->prepare("
-        SELECT 
-            COALESCE(SUM(actual_amount), 0) as total_actual,
-            COUNT(*) as records_count
-        FROM budget_monitoring 
-        WHERE budget_id = ?
-        $category_condition
-    ");
-    $stmt->execute($params);
-    return $stmt->fetch();
-}
-
-function calculateBudgetVariance($budget_amount, $actual_amount) {
-    $variance = $actual_amount - $budget_amount;
-    $variance_percentage = 0;
-    
-    if ($budget_amount > 0) {
-        $variance_percentage = ($variance / $budget_amount) * 100;
-    }
-    
-    return [
-        'variance' => $variance,
-        'variance_percentage' => $variance_percentage
-    ];
-}
-
-function getCategoryTypeColor($type) {
-    $colors = [
-        'income' => 'text-success',
-        'expense' => 'text-danger',
-        'goal' => 'text-primary'
-    ];
-    return $colors[$type] ?? 'text-secondary';
-}
-
 function getFiscalPeriods() {
     return [
         'Q1' => 'January - March',
@@ -349,83 +320,6 @@ function getFiscalYears($year = null) {
     }
     sort($years);
     return $years;
-}
-
-function updateBudgetTotals($db, $budget_id) {
-    try {
-        // Update category totals
-        $stmt = $db->prepare("
-            UPDATE budget_categories c
-            SET actual_amount = (
-                SELECT COALESCE(SUM(actual_amount), 0)
-                FROM budget_monitoring
-                WHERE category_id = c.id
-            ),
-            variance = budget_amount - (
-                SELECT COALESCE(SUM(actual_amount), 0)
-                FROM budget_monitoring
-                WHERE category_id = c.id
-            ),
-            variance_percentage = CASE 
-                WHEN budget_amount > 0 THEN 
-                    ((budget_amount - (SELECT COALESCE(SUM(actual_amount), 0) FROM budget_monitoring WHERE category_id = c.id)) / budget_amount) * 100
-                ELSE 0
-            END,
-            progress_percentage = CASE 
-                WHEN budget_amount > 0 THEN 
-                    ((SELECT COALESCE(SUM(actual_amount), 0) FROM budget_monitoring WHERE category_id = c.id) / budget_amount) * 100
-                ELSE 0
-            END
-            WHERE budget_id = ?
-        ");
-        $stmt->execute([$budget_id]);
-        
-        // Update budget totals
-        $stmt = $db->prepare("
-            UPDATE budgets b
-            SET 
-                total_budget = (
-                    SELECT COALESCE(SUM(budget_amount), 0)
-                    FROM budget_categories
-                    WHERE budget_id = b.id AND category_type != 'goal'
-                ),
-                total_actual = (
-                    SELECT COALESCE(SUM(actual_amount), 0)
-                    FROM budget_categories
-                    WHERE budget_id = b.id AND category_type != 'goal'
-                ),
-                total_variance = (
-                    SELECT COALESCE(SUM(budget_amount - actual_amount), 0)
-                    FROM budget_categories
-                    WHERE budget_id = b.id AND category_type != 'goal'
-                ),
-                variance_percentage = CASE 
-                    WHEN (
-                        SELECT COALESCE(SUM(budget_amount), 0)
-                        FROM budget_categories
-                        WHERE budget_id = b.id AND category_type != 'goal'
-                    ) > 0 THEN 
-                        ((
-                            SELECT COALESCE(SUM(budget_amount - actual_amount), 0)
-                            FROM budget_categories
-                            WHERE budget_id = b.id AND category_type != 'goal'
-                        ) / (
-                            SELECT COALESCE(SUM(budget_amount), 0)
-                            FROM budget_categories
-                            WHERE budget_id = b.id AND category_type != 'goal'
-                        )) * 100
-                    ELSE 0
-                END,
-                updated_at = NOW()
-            WHERE id = ?
-        ");
-        $stmt->execute([$budget_id]);
-        
-        return true;
-    } catch (PDOException $e) {
-        error_log("Error updating budget totals: " . $e->getMessage());
-        return false;
-    }
 }
 
 // =====================================================
@@ -485,6 +379,203 @@ function mapAccountTypeToBudgetType($account_type) {
     return $mapping[$account_type] ?? 'expense';
 }
 
+// =====================================================
+// LEDGER FETCHING FUNCTIONS - CORE NEW FUNCTIONALITY
+// =====================================================
+
+/**
+ * Get actual amounts from general_ledger for specific accounts
+ */
+function getLedgerActualAmounts($db, $account_codes, $start_date = null, $end_date = null) {
+    if (empty($account_codes)) {
+        return 0;
+    }
+    
+    $params = [];
+    $placeholders = implode(',', array_fill(0, count($account_codes), '?'));
+    $params = $account_codes;
+    
+    $conditions = [];
+    
+    // Date filter
+    if ($start_date && $end_date) {
+        $conditions[] = "transaction_date BETWEEN ? AND ?";
+        $params[] = $start_date;
+        $params[] = $end_date;
+    }
+    
+    $where = "account_code IN ($placeholders)";
+    if (!empty($conditions)) {
+        $where .= " AND " . implode(" AND ", $conditions);
+    }
+    
+    $stmt = $db->prepare("
+        SELECT 
+            COALESCE(SUM(debit_amount), 0) as total_debit,
+            COALESCE(SUM(credit_amount), 0) as total_credit,
+            COUNT(*) as transaction_count
+        FROM general_ledger 
+        WHERE $where
+        AND status = 'active'
+    ");
+    $stmt->execute($params);
+    $result = $stmt->fetch();
+    
+    // For income accounts: credit increases balance
+    // For expense accounts: debit increases balance
+    return [
+        'debit_total' => $result['total_debit'],
+        'credit_total' => $result['total_credit'],
+        'net_amount' => $result['total_credit'] - $result['total_debit'],
+        'transaction_count' => $result['transaction_count']
+    ];
+}
+
+/**
+ * Get actual amounts from receipts for specific accounts
+ */
+function getReceiptActualAmounts($db, $account_codes, $start_date = null, $end_date = null) {
+    if (empty($account_codes)) {
+        return 0;
+    }
+    
+    $params = [];
+    $placeholders = implode(',', array_fill(0, count($account_codes), '?'));
+    $params = $account_codes;
+    
+    $conditions = ["record_in_financial = 'yes'"];
+    
+    if ($start_date && $end_date) {
+        $conditions[] = "receipt_date BETWEEN ? AND ?";
+        $params[] = $start_date;
+        $params[] = $end_date;
+    }
+    
+    $where = "account_of IN ($placeholders)";
+    if (!empty($conditions)) {
+        $where .= " AND " . implode(" AND ", $conditions);
+    }
+    
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(amount), 0) as total_amount, COUNT(*) as count
+        FROM receipts 
+        WHERE $where
+    ");
+    $stmt->execute($params);
+    return $stmt->fetch();
+}
+
+/**
+ * Get actual amounts from payments for specific accounts
+ */
+function getPaymentActualAmounts($db, $account_codes, $start_date = null, $end_date = null) {
+    if (empty($account_codes)) {
+        return 0;
+    }
+    
+    $params = [];
+    $placeholders = implode(',', array_fill(0, count($account_codes), '?'));
+    $params = $account_codes;
+    
+    $conditions = ["record_in_financial = 'yes'"];
+    
+    if ($start_date && $end_date) {
+        $conditions[] = "payment_date BETWEEN ? AND ?";
+        $params[] = $start_date;
+        $params[] = $end_date;
+    }
+    
+    $where = "paid_to IN ($placeholders)";
+    if (!empty($conditions)) {
+        $where .= " AND " . implode(" AND ", $conditions);
+    }
+    
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(amount), 0) as total_amount, COUNT(*) as count
+        FROM payments 
+        WHERE $where
+    ");
+    $stmt->execute($params);
+    return $stmt->fetch();
+}
+
+/**
+ * Get total actual for a category based on its linked accounts
+ */
+function getCategoryActualFromLedger($db, $category_id, $start_date = null, $end_date = null) {
+    // Get linked accounts for this category
+    $stmt = $db->prepare("
+        SELECT account_code, account_name 
+        FROM budget_category_accounts 
+        WHERE category_id = ?
+    ");
+    $stmt->execute([$category_id]);
+    $accounts = $stmt->fetchAll();
+    
+    if (empty($accounts)) {
+        return [
+            'total' => 0,
+            'accounts' => [],
+            'breakdown' => []
+        ];
+    }
+    
+    $account_codes = array_column($accounts, 'account_code');
+    
+    // Get from general ledger
+    $gl_data = getLedgerActualAmounts($db, $account_codes, $start_date, $end_date);
+    
+    // Also get from receipts/payments if applicable
+    $receipt_data = getReceiptActualAmounts($db, $account_codes, $start_date, $end_date);
+    $payment_data = getPaymentActualAmounts($db, $account_codes, $start_date, $end_date);
+    
+    // Combine: For income categories, use credit total from GL + receipts
+    // For expense categories, use debit total from GL + payments
+    $stmt = $db->prepare("SELECT category_type FROM budget_categories WHERE id = ?");
+    $stmt->execute([$category_id]);
+    $category = $stmt->fetch();
+    
+    $total = 0;
+    if ($category && $category['category_type'] == 'income') {
+        $total = $gl_data['credit_total'] + $receipt_data['total_amount'];
+    } else {
+        $total = $gl_data['debit_total'] + $payment_data['total_amount'];
+    }
+    
+    return [
+        'total' => $total,
+        'gl_debit' => $gl_data['debit_total'],
+        'gl_credit' => $gl_data['credit_total'],
+        'receipts' => $receipt_data['total_amount'],
+        'payments' => $payment_data['total_amount'],
+        'accounts' => $accounts,
+        'transaction_count' => $gl_data['transaction_count'] + $receipt_data['count'] + $payment_data['count']
+    ];
+}
+
+/**
+ * Get category accounts with their balances
+ */
+function getCategoryAccountsWithBalances($db, $category_id, $start_date = null, $end_date = null) {
+    $stmt = $db->prepare("
+        SELECT bca.*, 
+               COALESCE(SUM(gl.debit_amount), 0) as total_debit,
+               COALESCE(SUM(gl.credit_amount), 0) as total_credit
+        FROM budget_category_accounts bca
+        LEFT JOIN general_ledger gl ON bca.account_code = gl.account_code 
+            AND gl.status = 'active'
+            AND (gl.transaction_date BETWEEN ? AND ? OR (? IS NULL OR ? IS NULL))
+        WHERE bca.category_id = ?
+        GROUP BY bca.id
+    ");
+    $stmt->execute([$start_date, $end_date, $start_date, $end_date, $category_id]);
+    return $stmt->fetchAll();
+}
+
+// =====================================================
+// BUDGET CREATION WITH CHART OF ACCOUNTS
+// =====================================================
+
 function createBudgetWithChartAccounts($db, $data) {
     try {
         $db->beginTransaction();
@@ -507,7 +598,7 @@ function createBudgetWithChartAccounts($db, $data) {
         
         $budget_id = $db->lastInsertId();
         
-        // Fetch categories from chart of accounts
+        // Create default categories from chart of accounts
         $income_accounts = getIncomeAccounts($db);
         $expense_accounts = getExpenseAccounts($db);
         $added = 0;
@@ -526,6 +617,20 @@ function createBudgetWithChartAccounts($db, $data) {
                 $account['account_name'],
                 "Auto-created from chart: Income - " . $account['account_type']
             ]);
+            $category_id = $db->lastInsertId();
+            
+            // Link the account to this category
+            $stmt = $db->prepare("
+                INSERT INTO budget_category_accounts (
+                    category_id, account_code, account_name, account_type, created_at
+                ) VALUES (?, ?, ?, ?, NOW())
+            ");
+            $stmt->execute([
+                $category_id,
+                $account['account_code'],
+                $account['account_name'],
+                $account['account_type']
+            ]);
             $added++;
         }
         
@@ -543,8 +648,26 @@ function createBudgetWithChartAccounts($db, $data) {
                 $account['account_name'],
                 "Auto-created from chart: Expense - " . $account['account_type']
             ]);
+            $category_id = $db->lastInsertId();
+            
+            // Link the account to this category
+            $stmt = $db->prepare("
+                INSERT INTO budget_category_accounts (
+                    category_id, account_code, account_name, account_type, created_at
+                ) VALUES (?, ?, ?, ?, NOW())
+            ");
+            $stmt->execute([
+                $category_id,
+                $account['account_code'],
+                $account['account_name'],
+                $account['account_type']
+            ]);
             $added++;
         }
+        
+        // Fetch actuals for all categories
+        updateCategoryActuals($db, $budget_id);
+        updateBudgetTotals($db, $budget_id);
         
         logBudgetHistory($db, $budget_id, 'create', null, null, null, "Budget created from chart of accounts: $budget_code");
         
@@ -564,25 +687,147 @@ function createBudgetWithChartAccounts($db, $data) {
     }
 }
 
+// =====================================================
+// UPDATE CATEGORY ACTUALS FROM LEDGER
+// =====================================================
+
+function updateCategoryActuals($db, $budget_id, $category_id = null) {
+    try {
+        $params = [$budget_id];
+        $category_condition = '';
+        
+        if ($category_id) {
+            $category_condition = " AND id = ?";
+            $params[] = $category_id;
+        }
+        
+        // Get all categories for this budget
+        $stmt = $db->prepare("
+            SELECT id, category_type, budget_amount 
+            FROM budget_categories 
+            WHERE budget_id = ? AND status = 'active'
+            $category_condition
+        ");
+        $stmt->execute($params);
+        $categories = $stmt->fetchAll();
+        
+        foreach ($categories as $category) {
+            // Get actual from ledger for this category
+            $actual_data = getCategoryActualFromLedger($db, $category['id']);
+            
+            $actual_amount = $actual_data['total'];
+            $variance = $category['budget_amount'] - $actual_amount;
+            $variance_percentage = 0;
+            $progress_percentage = 0;
+            
+            if ($category['budget_amount'] > 0) {
+                $variance_percentage = ($variance / $category['budget_amount']) * 100;
+                $progress_percentage = ($actual_amount / $category['budget_amount']) * 100;
+            }
+            
+            // Update category
+            $stmt = $db->prepare("
+                UPDATE budget_categories SET
+                    actual_amount = ?,
+                    variance = ?,
+                    variance_percentage = ?,
+                    progress_percentage = ?,
+                    updated_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([
+                $actual_amount,
+                $variance,
+                $variance_percentage,
+                $progress_percentage,
+                $category['id']
+            ]);
+        }
+        
+        return true;
+    } catch (PDOException $e) {
+        error_log("Error updating category actuals: " . $e->getMessage());
+        return false;
+    }
+}
+
+function updateBudgetTotals($db, $budget_id) {
+    try {
+        // Update budget totals
+        $stmt = $db->prepare("
+            UPDATE budgets b
+            SET 
+                total_budget = (
+                    SELECT COALESCE(SUM(budget_amount), 0)
+                    FROM budget_categories
+                    WHERE budget_id = b.id AND category_type != 'goal' AND status = 'active'
+                ),
+                total_actual = (
+                    SELECT COALESCE(SUM(actual_amount), 0)
+                    FROM budget_categories
+                    WHERE budget_id = b.id AND category_type != 'goal' AND status = 'active'
+                ),
+                total_variance = (
+                    SELECT COALESCE(SUM(budget_amount - actual_amount), 0)
+                    FROM budget_categories
+                    WHERE budget_id = b.id AND category_type != 'goal' AND status = 'active'
+                ),
+                variance_percentage = CASE 
+                    WHEN (
+                        SELECT COALESCE(SUM(budget_amount), 0)
+                        FROM budget_categories
+                        WHERE budget_id = b.id AND category_type != 'goal' AND status = 'active'
+                    ) > 0 THEN 
+                        ((
+                            SELECT COALESCE(SUM(budget_amount - actual_amount), 0)
+                            FROM budget_categories
+                            WHERE budget_id = b.id AND category_type != 'goal' AND status = 'active'
+                        ) / (
+                            SELECT COALESCE(SUM(budget_amount), 0)
+                            FROM budget_categories
+                            WHERE budget_id = b.id AND category_type != 'goal' AND status = 'active'
+                        )) * 100
+                    ELSE 0
+                END,
+                updated_at = NOW()
+            WHERE id = ?
+        ");
+        $stmt->execute([$budget_id]);
+        
+        return true;
+    } catch (PDOException $e) {
+        error_log("Error updating budget totals: " . $e->getMessage());
+        return false;
+    }
+}
+
+// =====================================================
+// SYNC CATEGORIES FROM CHART OF ACCOUNTS
+// =====================================================
+
 function syncBudgetCategoriesFromChart($db, $budget_id) {
     try {
         $db->beginTransaction();
+        
+        // Get existing categories for this budget
+        $stmt = $db->prepare("
+            SELECT category_code, id FROM budget_categories 
+            WHERE budget_id = ? AND status = 'active'
+        ");
+        $stmt->execute([$budget_id]);
+        $existing = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
         
         $income_accounts = getIncomeAccounts($db);
         $expense_accounts = getExpenseAccounts($db);
         $all_accounts = array_merge($income_accounts, $expense_accounts);
         $added = 0;
+        $linked = 0;
         
         foreach ($all_accounts as $account) {
-            // Check if category already exists
-            $stmt = $db->prepare("
-                SELECT id FROM budget_categories 
-                WHERE budget_id = ? AND category_code = ?
-            ");
-            $stmt->execute([$budget_id, $account['account_code']]);
-            $existing = $stmt->fetch();
+            $category_code = $account['account_code'];
             
-            if (!$existing) {
+            if (!isset($existing[$category_code])) {
+                // Create new category
                 $type = in_array($account, $income_accounts) ? 'income' : 'expense';
                 $stmt = $db->prepare("
                     INSERT INTO budget_categories (
@@ -592,17 +837,64 @@ function syncBudgetCategoriesFromChart($db, $budget_id) {
                 ");
                 $stmt->execute([
                     $budget_id,
-                    $account['account_code'],
+                    $category_code,
                     $account['account_name'],
                     $type,
                     "Synced from chart of accounts"
                 ]);
+                $category_id = $db->lastInsertId();
                 $added++;
+                
+                // Link the account
+                $stmt = $db->prepare("
+                    INSERT INTO budget_category_accounts (
+                        category_id, account_code, account_name, account_type, created_at
+                    ) VALUES (?, ?, ?, ?, NOW())
+                ");
+                $stmt->execute([
+                    $category_id,
+                    $account['account_code'],
+                    $account['account_name'],
+                    $account['account_type']
+                ]);
+                $linked++;
+            } else {
+                // Check if account is linked to this category
+                $category_id = $existing[$category_code];
+                $stmt = $db->prepare("
+                    SELECT id FROM budget_category_accounts 
+                    WHERE category_id = ? AND account_code = ?
+                ");
+                $stmt->execute([$category_id, $account['account_code']]);
+                if (!$stmt->fetch()) {
+                    // Link the account
+                    $stmt = $db->prepare("
+                        INSERT INTO budget_category_accounts (
+                            category_id, account_code, account_name, account_type, created_at
+                        ) VALUES (?, ?, ?, ?, NOW())
+                    ");
+                    $stmt->execute([
+                        $category_id,
+                        $account['account_code'],
+                        $account['account_name'],
+                        $account['account_type']
+                    ]);
+                    $linked++;
+                }
             }
         }
         
+        // Update actuals for all categories
+        updateCategoryActuals($db, $budget_id);
+        updateBudgetTotals($db, $budget_id);
+        
         $db->commit();
-        return $added;
+        
+        return [
+            'added' => $added,
+            'linked' => $linked,
+            'total' => $added + $linked
+        ];
     } catch (Exception $e) {
         $db->rollBack();
         throw $e;
@@ -636,11 +928,16 @@ if (isset($_GET['ajax'])) {
             $budget = $stmt->fetch();
             
             if ($budget) {
-                // Get categories
+                // Get categories with their linked accounts
                 $cat_stmt = $db->prepare("
-                    SELECT * FROM budget_categories 
-                    WHERE budget_id = ? AND status = 'active'
-                    ORDER BY category_type, category_code
+                    SELECT c.*,
+                           GROUP_CONCAT(bca.account_code SEPARATOR ', ') as linked_accounts,
+                           COUNT(bca.id) as account_count
+                    FROM budget_categories c
+                    LEFT JOIN budget_category_accounts bca ON c.id = bca.category_id
+                    WHERE c.budget_id = ? AND c.status = 'active'
+                    GROUP BY c.id
+                    ORDER BY c.category_type, c.category_code
                 ");
                 $cat_stmt->execute([$budget_id]);
                 $budget['categories'] = $cat_stmt->fetchAll();
@@ -664,111 +961,75 @@ if (isset($_GET['ajax'])) {
         exit;
     }
     
-    // ============ GET CATEGORY DETAILS ============
-    if ($_GET['ajax'] == 'get_category') {
+    // ============ GET CATEGORY ACCOUNTS ============
+    if ($_GET['ajax'] == 'get_category_accounts') {
         $category_id = $_GET['category_id'] ?? 0;
+        $start_date = $_GET['start_date'] ?? null;
+        $end_date = $_GET['end_date'] ?? null;
         
         try {
-            $stmt = $db->prepare("
-                SELECT * FROM budget_categories WHERE id = ?
-            ");
-            $stmt->execute([$category_id]);
-            $category = $stmt->fetch();
+            $accounts = getCategoryAccountsWithBalances($db, $category_id, $start_date, $end_date);
+            $actual_data = getCategoryActualFromLedger($db, $category_id, $start_date, $end_date);
             
-            if ($category) {
-                $actual_data = getActualAmountsForBudget($db, $category['budget_id'], $category['id']);
-                $category['actual_amount'] = $actual_data['total_actual'];
-                $category['records_count'] = $actual_data['records_count'];
-                
-                echo json_encode($category);
-            } else {
-                echo json_encode(['error' => 'Category not found']);
-            }
+            echo json_encode([
+                'accounts' => $accounts,
+                'actual' => $actual_data
+            ]);
         } catch (PDOException $e) {
             echo json_encode(['error' => $e->getMessage()]);
         }
         exit;
     }
     
-    // ============ GET MONITORING DATA ============
-    if ($_GET['ajax'] == 'get_monitoring') {
+    // ============ GET CHART ACCOUNTS FOR SELECTION ============
+    if ($_GET['ajax'] == 'get_chart_accounts') {
+        $account_type = $_GET['account_type'] ?? null;
+        $search = $_GET['search'] ?? '';
+        
+        try {
+            $params = [];
+            $conditions = ["is_active = 1", "(is_group_account = 0 OR level >= 3)"];
+            
+            if ($account_type) {
+                $conditions[] = "account_type = ?";
+                $params[] = $account_type;
+            }
+            
+            if ($search) {
+                $conditions[] = "(account_code LIKE ? OR account_name LIKE ?)";
+                $params[] = '%' . $search . '%';
+                $params[] = '%' . $search . '%';
+            }
+            
+            $where = implode(" AND ", $conditions);
+            
+            $stmt = $db->prepare("
+                SELECT account_code, account_name, account_type, level, normal_balance
+                FROM chart_of_accounts 
+                WHERE $where
+                ORDER BY account_type, account_code
+                LIMIT 50
+            ");
+            $stmt->execute($params);
+            $accounts = $stmt->fetchAll();
+            
+            echo json_encode($accounts);
+        } catch (PDOException $e) {
+            echo json_encode(['error' => $e->getMessage()]);
+        }
+        exit;
+    }
+    
+    // ============ REFRESH CATEGORY ACTUALS ============
+    if ($_GET['ajax'] == 'refresh_actuals') {
         $budget_id = $_GET['budget_id'] ?? 0;
         $category_id = $_GET['category_id'] ?? null;
         
         try {
-            $params = [$budget_id];
-            $category_condition = '';
+            updateCategoryActuals($db, $budget_id, $category_id);
+            updateBudgetTotals($db, $budget_id);
             
-            if ($category_id) {
-                $category_condition = " AND category_id = ?";
-                $params[] = $category_id;
-            }
-            
-            $stmt = $db->prepare("
-                SELECT m.*, 
-                       c.category_code, c.category_name, c.category_type,
-                       u.username as recorded_by_name
-                FROM budget_monitoring m
-                LEFT JOIN budget_categories c ON m.category_id = c.id
-                LEFT JOIN users u ON m.recorded_by = u.id
-                WHERE m.budget_id = ?
-                $category_condition
-                ORDER BY m.monitoring_date DESC, m.created_at DESC
-                LIMIT 100
-            ");
-            $stmt->execute($params);
-            $data = $stmt->fetchAll();
-            
-            echo json_encode($data);
-        } catch (PDOException $e) {
-            echo json_encode(['error' => $e->getMessage()]);
-        }
-        exit;
-    }
-    
-    // ============ GET BUDGET SUMMARY ============
-    if ($_GET['ajax'] == 'get_summary') {
-        $budget_id = $_GET['budget_id'] ?? 0;
-        
-        try {
-            $stmt = $db->prepare("
-                SELECT 
-                    COALESCE(SUM(budget_amount), 0) as total_budget,
-                    COALESCE(SUM(actual_amount), 0) as total_actual
-                FROM budget_categories 
-                WHERE budget_id = ? AND status = 'active' AND category_type != 'goal'
-            ");
-            $stmt->execute([$budget_id]);
-            $totals = $stmt->fetch();
-            
-            $stmt = $db->prepare("
-                SELECT 
-                    category_type,
-                    COALESCE(SUM(budget_amount), 0) as total_budget,
-                    COALESCE(SUM(actual_amount), 0) as total_actual
-                FROM budget_categories 
-                WHERE budget_id = ? AND status = 'active' AND category_type != 'goal'
-                GROUP BY category_type
-            ");
-            $stmt->execute([$budget_id]);
-            $breakdown = $stmt->fetchAll();
-            
-            $stmt = $db->prepare("
-                SELECT 
-                    COUNT(*) as total_goals,
-                    SUM(CASE WHEN status = 'achieved' THEN 1 ELSE 0 END) as achieved_goals,
-                    COALESCE(AVG(achievement_percentage), 0) as avg_progress
-                FROM budget_goals 
-                WHERE budget_id = ? AND status != 'archived'
-            ");
-            $stmt->execute([$budget_id]);
-            $goal_summary = $stmt->fetch();
-            
-            echo json_encode([
-                'totals' => $totals,
-                'breakdown' => $breakdown,
-                'goals' => $goal_summary
-            ]);
+            echo json_encode(['success' => true]);
         } catch (PDOException $e) {
             echo json_encode(['error' => $e->getMessage()]);
         }
@@ -812,6 +1073,7 @@ function exportBudgetToExcel($db, $budget_id) {
     echo '<th>Category Code</th>';
     echo '<th>Category Name</th>';
     echo '<th>Type</th>';
+    echo '<th>Linked Accounts</th>';
     echo '<th>Budget Amount</th>';
     echo '<th>Actual Amount</th>';
     echo '<th>Variance</th>';
@@ -820,9 +1082,13 @@ function exportBudgetToExcel($db, $budget_id) {
     echo '</tr>';
     
     $cat_stmt = $db->prepare("
-        SELECT * FROM budget_categories 
-        WHERE budget_id = ? AND status = 'active'
-        ORDER BY category_type, category_code
+        SELECT c.*,
+               GROUP_CONCAT(bca.account_code SEPARATOR ', ') as linked_accounts
+        FROM budget_categories c
+        LEFT JOIN budget_category_accounts bca ON c.id = bca.category_id
+        WHERE c.budget_id = ? AND c.status = 'active'
+        GROUP BY c.id
+        ORDER BY c.category_type, c.category_code
     ");
     $cat_stmt->execute([$budget_id]);
     
@@ -831,6 +1097,7 @@ function exportBudgetToExcel($db, $budget_id) {
         echo '<td>' . htmlspecialchars($cat['category_code']) . '</td>';
         echo '<td>' . htmlspecialchars($cat['category_name']) . '</td>';
         echo '<td>' . htmlspecialchars($cat['category_type']) . '</td>';
+        echo '<td>' . htmlspecialchars($cat['linked_accounts'] ?? '') . '</td>';
         echo '<td>' . number_format($cat['budget_amount'], 2) . '</td>';
         echo '<td>' . number_format($cat['actual_amount'], 2) . '</td>';
         echo '<td>' . number_format($cat['variance'], 2) . '</td>';
@@ -921,10 +1188,10 @@ function exportBudgetToPDF($db, $budget_id) {
     
     $pdf->SetFont('helvetica', 'B', 8);
     $pdf->Cell(30, 6, 'Code', 1, 0, 'C');
-    $pdf->Cell(50, 6, 'Category Name', 1, 0, 'C');
-    $pdf->Cell(25, 6, 'Type', 1, 0, 'C');
-    $pdf->Cell(30, 6, 'Budget', 1, 0, 'R');
-    $pdf->Cell(30, 6, 'Actual', 1, 0, 'R');
+    $pdf->Cell(40, 6, 'Category Name', 1, 0, 'C');
+    $pdf->Cell(20, 6, 'Type', 1, 0, 'C');
+    $pdf->Cell(25, 6, 'Budget', 1, 0, 'R');
+    $pdf->Cell(25, 6, 'Actual', 1, 0, 'R');
     $pdf->Cell(25, 6, 'Variance', 1, 0, 'R');
     $pdf->Cell(25, 6, 'Progress', 1, 1, 'R');
     
@@ -938,23 +1205,23 @@ function exportBudgetToPDF($db, $budget_id) {
     $pdf->SetFont('helvetica', '', 8);
     while ($cat = $cat_stmt->fetch()) {
         $pdf->Cell(30, 5, $cat['category_code'], 1, 0);
-        $pdf->Cell(50, 5, substr($cat['category_name'], 0, 25), 1, 0);
-        $pdf->Cell(25, 5, $cat['category_type'], 1, 0);
-        $pdf->Cell(30, 5, number_format($cat['budget_amount'], 0), 1, 0, 'R');
-        $pdf->Cell(30, 5, number_format($cat['actual_amount'], 0), 1, 0, 'R');
+        $pdf->Cell(40, 5, substr($cat['category_name'], 0, 20), 1, 0);
+        $pdf->Cell(20, 5, $cat['category_type'], 1, 0);
+        $pdf->Cell(25, 5, number_format($cat['budget_amount'], 0), 1, 0, 'R');
+        $pdf->Cell(25, 5, number_format($cat['actual_amount'], 0), 1, 0, 'R');
         $pdf->Cell(25, 5, number_format($cat['variance'], 0), 1, 0, 'R');
         $pdf->Cell(25, 5, number_format($cat['progress_percentage'], 0) . '%', 1, 1, 'R');
     }
     $pdf->Ln(5);
     
-    // Goals Table
+    // Goals
     $pdf->SetFont('helvetica', 'B', 11);
     $pdf->Cell(0, 8, 'Budget Goals', 0, 1, 'L');
     
     $pdf->SetFont('helvetica', 'B', 8);
     $pdf->Cell(30, 6, 'Goal Code', 1, 0, 'C');
-    $pdf->Cell(50, 6, 'Goal Name', 1, 0, 'C');
-    $pdf->Cell(25, 6, 'Type', 1, 0, 'C');
+    $pdf->Cell(40, 6, 'Goal Name', 1, 0, 'C');
+    $pdf->Cell(20, 6, 'Type', 1, 0, 'C');
     $pdf->Cell(25, 6, 'Target', 1, 0, 'R');
     $pdf->Cell(25, 6, 'Achieved', 1, 0, 'R');
     $pdf->Cell(25, 6, 'Progress', 1, 0, 'R');
@@ -970,8 +1237,8 @@ function exportBudgetToPDF($db, $budget_id) {
     $pdf->SetFont('helvetica', '', 8);
     while ($goal = $goal_stmt->fetch()) {
         $pdf->Cell(30, 5, $goal['goal_code'], 1, 0);
-        $pdf->Cell(50, 5, substr($goal['goal_name'], 0, 20), 1, 0);
-        $pdf->Cell(25, 5, $goal['goal_type'], 1, 0);
+        $pdf->Cell(40, 5, substr($goal['goal_name'], 0, 20), 1, 0);
+        $pdf->Cell(20, 5, $goal['goal_type'], 1, 0);
         $pdf->Cell(25, 5, number_format($goal['target_value'], 0), 1, 0, 'R');
         $pdf->Cell(25, 5, number_format($goal['actual_value'], 0), 1, 0, 'R');
         $pdf->Cell(25, 5, number_format($goal['achievement_percentage'], 0) . '%', 1, 0, 'R');
@@ -1034,7 +1301,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     
                     if ($result['success']) {
                         $success_message = "Budget created successfully! Budget Code: {$result['budget_code']}<br>";
-                        $success_message .= "Categories added: {$result['categories_added']} from chart of accounts.";
+                        $success_message .= "Categories added: {$result['categories_added']} from chart of accounts.<br>";
+                        $success_message .= "Actual amounts are automatically fetched from the ledger.";
                         $budget_id = $result['budget_id'];
                     }
                 }
@@ -1047,7 +1315,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             }
         }
         
-        // ============ SAVE CATEGORY ============
+        // ============ ADD/UPDATE CATEGORY WITH ACCOUNTS ============
         if (isset($_POST['save_category'])) {
             $category_id = (int)($_POST['category_id'] ?? 0);
             $budget_id = (int)($_POST['budget_id'] ?? 0);
@@ -1056,6 +1324,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $category_type = sanitizeInput($_POST['category_type'] ?? 'expense');
             $budget_amount = (float)($_POST['budget_amount'] ?? 0);
             $description = sanitizeInput($_POST['category_description'] ?? '');
+            $linked_accounts = $_POST['linked_accounts'] ?? [];
             $parent_category_id = !empty($_POST['parent_category_id']) ? (int)$_POST['parent_category_id'] : null;
             $is_group = isset($_POST['is_group']) ? 1 : 0;
             
@@ -1064,6 +1333,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             } else {
                 try {
                     if ($category_id > 0) {
+                        // Update category
                         $stmt = $db->prepare("
                             UPDATE budget_categories SET
                                 category_code = ?,
@@ -1081,8 +1351,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             $budget_amount, $description, $parent_category_id,
                             $is_group, $category_id, $budget_id
                         ]);
-                        $success_message = "Category updated successfully!";
+                        
+                        // Update linked accounts - clear existing
+                        $stmt = $db->prepare("DELETE FROM budget_category_accounts WHERE category_id = ?");
+                        $stmt->execute([$category_id]);
                     } else {
+                        // Insert new category
                         $stmt = $db->prepare("
                             INSERT INTO budget_categories (
                                 budget_id, category_code, category_name, category_type,
@@ -1094,10 +1368,38 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             $budget_id, $category_code, $category_name, $category_type,
                             $budget_amount, $description, $parent_category_id, $is_group
                         ]);
-                        $success_message = "Category created successfully!";
+                        $category_id = $db->lastInsertId();
                     }
                     
+                    // Add linked accounts
+                    if (!empty($linked_accounts)) {
+                        foreach ($linked_accounts as $account_code) {
+                            // Get account details
+                            $stmt = $db->prepare("SELECT account_name, account_type FROM chart_of_accounts WHERE account_code = ?");
+                            $stmt->execute([$account_code]);
+                            $account = $stmt->fetch();
+                            
+                            if ($account) {
+                                $stmt = $db->prepare("
+                                    INSERT INTO budget_category_accounts (
+                                        category_id, account_code, account_name, account_type, created_at
+                                    ) VALUES (?, ?, ?, ?, NOW())
+                                ");
+                                $stmt->execute([
+                                    $category_id,
+                                    $account_code,
+                                    $account['account_name'],
+                                    $account['account_type']
+                                ]);
+                            }
+                        }
+                    }
+                    
+                    // Update actuals from ledger
+                    updateCategoryActuals($db, $budget_id, $category_id);
                     updateBudgetTotals($db, $budget_id);
+                    
+                    $success_message = "Category saved successfully! Actual amounts fetched from ledger.";
                     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
                 } catch (PDOException $e) {
                     $error_message = "Database error: " . $e->getMessage();
@@ -1110,15 +1412,29 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $budget_id = (int)($_POST['sync_budget_id'] ?? 0);
             
             try {
-                $added = syncBudgetCategoriesFromChart($db, $budget_id);
-                if ($added > 0) {
-                    $success_message = "Synced $added new categories from chart of accounts.";
+                $result = syncBudgetCategoriesFromChart($db, $budget_id);
+                if ($result['added'] > 0 || $result['linked'] > 0) {
+                    $success_message = "Synced {$result['added']} new categories and linked {$result['linked']} accounts from chart of accounts.";
                 } else {
-                    $success_message = "No new categories to sync. All chart accounts already exist.";
+                    $success_message = "All chart accounts already synced.";
                 }
                 $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
             } catch (Exception $e) {
                 $error_message = "Error syncing categories: " . $e->getMessage();
+            }
+        }
+        
+        // ============ REFRESH ACTUALS ============
+        if (isset($_POST['refresh_actuals'])) {
+            $budget_id = (int)($_POST['refresh_budget_id'] ?? 0);
+            
+            try {
+                updateCategoryActuals($db, $budget_id);
+                updateBudgetTotals($db, $budget_id);
+                $success_message = "All actual amounts refreshed from the ledger.";
+                $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+            } catch (Exception $e) {
+                $error_message = "Error refreshing actuals: " . $e->getMessage();
             }
         }
         
@@ -1258,15 +1574,18 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 $error_message = "Please select a category and enter a valid amount.";
             } else {
                 try {
-                    $cat_stmt = $db->prepare("SELECT actual_amount, budget_amount FROM budget_categories WHERE id = ?");
+                    $cat_stmt = $db->prepare("SELECT budget_amount FROM budget_categories WHERE id = ?");
                     $cat_stmt->execute([$category_id]);
                     $category = $cat_stmt->fetch();
                     
                     if (!$category) {
                         $error_message = "Category not found.";
                     } else {
-                        $new_actual = $category['actual_amount'] + $actual_amount;
+                        // Get current actual from ledger
+                        $actual_data = getCategoryActualFromLedger($db, $category_id);
+                        $new_actual = $actual_data['total'] + $actual_amount;
                         
+                        // Insert monitoring record
                         $stmt = $db->prepare("
                             INSERT INTO budget_monitoring (
                                 budget_id, category_id, monitoring_date,
@@ -1287,27 +1606,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             $user_id, $username
                         ]);
                         
-                        $update_stmt = $db->prepare("
-                            UPDATE budget_categories SET
-                                actual_amount = ?,
-                                variance = ?,
-                                variance_percentage = ?,
-                                progress_percentage = CASE 
-                                    WHEN budget_amount > 0 THEN (actual_amount / budget_amount) * 100 
-                                    ELSE 0 
-                                END,
-                                updated_at = NOW()
-                            WHERE id = ?
-                        ");
-                        $update_stmt->execute([
-                            $new_actual,
-                            $variance_data['variance'],
-                            $variance_data['variance_percentage'],
-                            $category_id
-                        ]);
-                        
+                        // Update category actuals from ledger
+                        updateCategoryActuals($db, $budget_id, $category_id);
                         updateBudgetTotals($db, $budget_id);
-                        $success_message = "Monitoring record added successfully!";
+                        
+                        $success_message = "Monitoring record added successfully! Actuals refreshed from ledger.";
                     }
                     
                     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
@@ -1392,8 +1695,8 @@ try {
         LEFT JOIN users u1 ON b.created_by = u1.id
         LEFT JOIN users u2 ON b.reviewed_by = u2.id
         LEFT JOIN users u3 ON b.approved_by = u3.id
-        LEFT JOIN budget_categories bc ON b.id = bc.budget_id
-        LEFT JOIN budget_goals bg ON b.id = bg.budget_id
+        LEFT JOIN budget_categories bc ON b.id = bc.budget_id AND bc.status = 'active'
+        LEFT JOIN budget_goals bg ON b.id = bg.budget_id AND bg.status != 'archived'
         GROUP BY b.id
         ORDER BY b.fiscal_year DESC, b.created_at DESC
     ");
@@ -1428,11 +1731,16 @@ if ($selected_budget_id > 0) {
         $selected_budget = $stmt->fetch();
         
         if ($selected_budget) {
-            // Get categories
+            // Get categories with linked accounts
             $cat_stmt = $db->prepare("
-                SELECT * FROM budget_categories 
-                WHERE budget_id = ? AND status = 'active'
-                ORDER BY category_type, category_code
+                SELECT c.*,
+                       GROUP_CONCAT(DISTINCT bca.account_code SEPARATOR ', ') as linked_accounts,
+                       COUNT(DISTINCT bca.id) as account_count
+                FROM budget_categories c
+                LEFT JOIN budget_category_accounts bca ON c.id = bca.category_id
+                WHERE c.budget_id = ? AND c.status = 'active'
+                GROUP BY c.id
+                ORDER BY c.category_type, c.category_code
             ");
             $cat_stmt->execute([$selected_budget_id]);
             $selected_categories = $cat_stmt->fetchAll();
@@ -1482,23 +1790,6 @@ include '../includes/header.php';
     .clickable-row:hover { background-color: #f8f9fa; }
     .badge { padding: 0.35em 0.65em; font-size: 0.75em; }
     
-    .status-draft { background-color: #6c757d; color: white; }
-    .status-pending { background-color: #ffc107; color: #212529; }
-    .status-under_review { background-color: #0dcaf0; color: #212529; }
-    .status-approved { background-color: #198754; color: white; }
-    .status-rejected { background-color: #dc3545; color: white; }
-    .status-active { background-color: #0d6efd; color: white; }
-    .status-closed { background-color: #212529; color: white; }
-    
-    .budget-card {
-        border-radius: 10px;
-        transition: transform 0.3s ease, box-shadow 0.3s ease;
-    }
-    .budget-card:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 8px 25px rgba(0,0,0,0.15);
-    }
-    
     .progress-budget {
         height: 8px;
         border-radius: 4px;
@@ -1541,6 +1832,25 @@ include '../includes/header.php';
         font-size: 0.85rem;
         color: #6c757d;
         margin-top: 5px;
+    }
+    
+    .linked-accounts-badge {
+        font-size: 11px;
+        background: #e9ecef;
+        padding: 2px 8px;
+        border-radius: 10px;
+        margin: 2px;
+        display: inline-block;
+    }
+    
+    .refresh-btn {
+        animation: pulse 2s infinite;
+    }
+    
+    @keyframes pulse {
+        0% { opacity: 1; }
+        50% { opacity: 0.6; }
+        100% { opacity: 1; }
     }
 </style>
 
@@ -1790,6 +2100,13 @@ include '../includes/header.php';
                                     </button>
                                 </form>
                             <?php endif; ?>
+                            <form method="POST" class="d-inline">
+                                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
+                                <input type="hidden" name="refresh_budget_id" value="<?php echo $selected_budget['id']; ?>">
+                                <button type="submit" name="refresh_actuals" class="btn btn-sm btn-warning refresh-btn">
+                                    <i class="bi bi-arrow-clockwise me-1"></i>Refresh Actuals
+                                </button>
+                            </form>
                         </div>
                     </div>
                     <div class="card-body">
@@ -1806,7 +2123,7 @@ include '../includes/header.php';
                                     <div class="number <?php echo ($selected_budget['total_actual'] ?? 0) > ($selected_budget['total_budget'] ?? 0) ? 'text-danger' : 'text-success'; ?>">
                                         <?php echo number_format($selected_budget['total_actual'] ?? 0, 2); ?>
                                     </div>
-                                    <div class="label">Total Actual</div>
+                                    <div class="label">Total Actual (from Ledger)</div>
                                 </div>
                             </div>
                             <div class="col-md-3">
@@ -1848,7 +2165,10 @@ include '../includes/header.php';
                                         <?php endif; ?>
                                     </div>
                                 </div>
-                                <small class="text-muted"><?php echo number_format($selected_budget['total_actual'] ?? 0, 2); ?> of <?php echo number_format($selected_budget['total_budget'] ?? 0, 2); ?></small>
+                                <small class="text-muted">
+                                    <?php echo number_format($selected_budget['total_actual'] ?? 0, 2); ?> of <?php echo number_format($selected_budget['total_budget'] ?? 0, 2); ?>
+                                    (Actual amounts fetched from General Ledger)
+                                </small>
                             </div>
                         </div>
 
@@ -1884,7 +2204,7 @@ include '../includes/header.php';
                                         <button class="btn btn-sm btn-primary" data-bs-toggle="collapse" data-bs-target="#addCategoryForm">
                                             <i class="bi bi-plus-circle me-1"></i>Add Category
                                         </button>
-                                        <small class="text-muted ms-2">Categories are automatically synced from Chart of Accounts</small>
+                                        <small class="text-muted ms-2">Categories can be linked to multiple chart of accounts</small>
                                     </div>
                                     <div class="collapse mb-3" id="addCategoryForm">
                                         <div class="card card-body p-2">
@@ -1896,11 +2216,11 @@ include '../includes/header.php';
                                                 <div class="row g-2">
                                                     <div class="col-md-2">
                                                         <label class="form-label">Category Code</label>
-                                                        <input type="text" class="form-control form-control-sm" name="category_code" required placeholder="e.g., 411">
+                                                        <input type="text" class="form-control form-control-sm" name="category_code" required placeholder="e.g., INC-001">
                                                     </div>
                                                     <div class="col-md-3">
                                                         <label class="form-label">Category Name</label>
-                                                        <input type="text" class="form-control form-control-sm" name="category_name" required placeholder="e.g., Brokerage Income">
+                                                        <input type="text" class="form-control form-control-sm" name="category_name" required placeholder="e.g., Revenue from Operations">
                                                     </div>
                                                     <div class="col-md-2">
                                                         <label class="form-label">Type</label>
@@ -1913,6 +2233,19 @@ include '../includes/header.php';
                                                     <div class="col-md-2">
                                                         <label class="form-label">Budget Amount</label>
                                                         <input type="number" class="form-control form-control-sm" name="budget_amount" step="0.01" min="0" placeholder="0.00">
+                                                    </div>
+                                                    <div class="col-md-3">
+                                                        <label class="form-label">Linked Accounts</label>
+                                                        <select class="form-select form-select-sm select2-accounts" name="linked_accounts[]" multiple style="height: 38px;">
+                                                            <?php
+                                                            $accounts = getChartAccountsForBudget($db, null, 3);
+                                                            foreach ($accounts as $account):
+                                                            ?>
+                                                                <option value="<?php echo htmlspecialchars($account['account_code']); ?>">
+                                                                    <?php echo htmlspecialchars($account['account_code'] . ' - ' . $account['account_name'] . ' (' . $account['account_type'] . ')'); ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </select>
                                                     </div>
                                                     <div class="col-md-3">
                                                         <label class="form-label">Description</label>
@@ -1941,6 +2274,7 @@ include '../includes/header.php';
                                                 <th>Code</th>
                                                 <th>Category Name</th>
                                                 <th>Type</th>
+                                                <th>Linked Accounts</th>
                                                 <th>Budget</th>
                                                 <th>Actual</th>
                                                 <th>Variance</th>
@@ -1950,7 +2284,7 @@ include '../includes/header.php';
                                         </thead>
                                         <tbody>
                                             <?php if (empty($selected_categories)): ?>
-                                                <tr><td colspan="8" class="text-center text-muted">No categories defined.</td></tr>
+                                                <tr><td colspan="9" class="text-center text-muted">No categories defined.</td></tr>
                                             <?php else: foreach ($selected_categories as $cat): ?>
                                                 <tr>
                                                     <td><code><?php echo htmlspecialchars($cat['category_code']); ?></code></td>
@@ -1959,6 +2293,18 @@ include '../includes/header.php';
                                                         <span class="badge <?php echo $cat['category_type'] == 'income' ? 'bg-success' : ($cat['category_type'] == 'goal' ? 'bg-primary' : 'bg-danger'); ?>">
                                                             <?php echo ucfirst($cat['category_type']); ?>
                                                         </span>
+                                                    </td>
+                                                    <td>
+                                                        <?php if (!empty($cat['linked_accounts'])): ?>
+                                                            <?php foreach (explode(', ', $cat['linked_accounts']) as $account): ?>
+                                                                <span class="linked-accounts-badge"><?php echo htmlspecialchars($account); ?></span>
+                                                            <?php endforeach; ?>
+                                                        <?php else: ?>
+                                                            <span class="text-muted">No accounts linked</span>
+                                                        <?php endif; ?>
+                                                        <?php if (($cat['account_count'] ?? 0) > 0): ?>
+                                                            <br><small class="text-muted"><?php echo (int)$cat['account_count']; ?> account(s)</small>
+                                                        <?php endif; ?>
                                                     </td>
                                                     <td class="text-primary fw-bold"><?php echo number_format($cat['budget_amount'] ?? 0, 2); ?></td>
                                                     <td class="<?php echo ($cat['actual_amount'] ?? 0) > ($cat['budget_amount'] ?? 0) ? 'text-danger' : 'text-success'; ?>">
@@ -1990,6 +2336,9 @@ include '../includes/header.php';
                                                                 <button class="btn btn-outline-success add-monitoring" data-category-id="<?php echo (int)$cat['id']; ?>">
                                                                     <i class="bi bi-plus-circle"></i>
                                                                 </button>
+                                                                <button class="btn btn-outline-info view-accounts" data-category-id="<?php echo (int)$cat['id']; ?>" data-name="<?php echo htmlspecialchars($cat['category_name']); ?>">
+                                                                    <i class="bi bi-eye"></i>
+                                                                </button>
                                                             </div>
                                                         <?php endif; ?>
                                                     </td>
@@ -1998,7 +2347,7 @@ include '../includes/header.php';
                                         </tbody>
                                         <tfoot>
                                             <tr class="table-light fw-bold">
-                                                <td colspan="3" class="text-end">TOTALS:</td>
+                                                <td colspan="4" class="text-end">TOTALS:</td>
                                                 <td class="text-primary"><?php echo number_format(array_sum(array_column($selected_categories, 'budget_amount')), 2); ?></td>
                                                 <td><?php echo number_format(array_sum(array_column($selected_categories, 'actual_amount')), 2); ?></td>
                                                 <td><?php echo number_format(array_sum(array_column($selected_categories, 'variance')), 2); ?></td>
@@ -2178,7 +2527,7 @@ include '../includes/header.php';
                                     <div class="col-md-4">
                                         <div class="card">
                                             <div class="card-header">
-                                                <h6 class="mb-0">Add Monitoring Record</h6>
+                                                <h6 class="mb-0">Add Manual Monitoring Record</h6>
                                             </div>
                                             <div class="card-body p-2">
                                                 <form method="POST">
@@ -2223,6 +2572,9 @@ include '../includes/header.php';
                                                     </div>
                                                     <button type="submit" class="btn btn-sm btn-success w-100">Add Record</button>
                                                 </form>
+                                                <small class="text-muted d-block mt-2">
+                                                    <i class="bi bi-info-circle"></i> Actual amounts are automatically fetched from the ledger. Manual entries add additional amounts.
+                                                </small>
                                             </div>
                                         </div>
                                     </div>
@@ -2398,7 +2750,12 @@ include '../includes/header.php';
                                 <div class="col-12">
                                     <div class="alert alert-info">
                                         <i class="bi bi-info-circle me-2"></i>
-                                        <strong>Note:</strong> When creating a new budget, categories will be automatically created from the Chart of Accounts (Income and Expense accounts with level ≥ 3).
+                                        <strong>Note:</strong> When creating a new budget:
+                                        <ul class="mb-0 mt-1">
+                                            <li>Categories will be automatically created from the Chart of Accounts (Income and Expense accounts with level ≥ 3)</li>
+                                            <li>Each category will be linked to its corresponding chart account</li>
+                                            <li>Actual amounts will be automatically fetched from the General Ledger</li>
+                                        </ul>
                                     </div>
                                 </div>
                                 <div class="col-12">
@@ -2498,6 +2855,24 @@ include '../includes/header.php';
                 <button type="button" class="btn btn-warning btn-sm" id="confirmStatusUpdate">
                     <i class="bi bi-check-circle me-1"></i>Confirm
                 </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- View Category Accounts Modal -->
+<div class="modal fade" id="viewAccountsModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-info text-white">
+                <h5 class="modal-title"><i class="bi bi-journal-text me-2"></i>Category Linked Accounts</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="viewAccountsContent">
+                <!-- Content loaded dynamically -->
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
             </div>
         </div>
     </div>
@@ -2620,6 +2995,85 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
+    // =============== VIEW CATEGORY ACCOUNTS ===============
+    document.querySelectorAll('.view-accounts').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const categoryId = this.dataset.categoryId;
+            const categoryName = this.dataset.name;
+            
+            const content = document.getElementById('viewAccountsContent');
+            content.innerHTML = '<div class="text-center py-3"><i class="bi bi-hourglass-split"></i> Loading...</div>';
+            
+            // Get the accounts for this category
+            fetch(`?ajax=get_category_accounts&category_id=${categoryId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        content.innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
+                        return;
+                    }
+                    
+                    let html = `
+                        <h6 class="mb-3">Category: <strong>${categoryName}</strong></h6>
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <div class="alert alert-info">
+                                    <strong>Total Actual:</strong> ${formatCurrency(data.actual.total)}
+                                    <br>
+                                    <small>From ${data.actual.transaction_count || 0} transactions</small>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="alert alert-light">
+                                    <strong>Breakdown:</strong><br>
+                                    GL Debit: ${formatCurrency(data.actual.gl_debit)}<br>
+                                    GL Credit: ${formatCurrency(data.actual.gl_credit)}<br>
+                                    Receipts: ${formatCurrency(data.actual.receipts)}<br>
+                                    Payments: ${formatCurrency(data.actual.payments)}
+                                </div>
+                            </div>
+                        </div>
+                        <table class="table table-sm table-striped">
+                            <thead>
+                                <tr>
+                                    <th>Account Code</th>
+                                    <th>Account Name</th>
+                                    <th>Total Debit</th>
+                                    <th>Total Credit</th>
+                                    <th>Net Balance</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                    `;
+                    
+                    if (data.accounts && data.accounts.length > 0) {
+                        data.accounts.forEach(acc => {
+                            const net = acc.total_credit - acc.total_debit;
+                            html += `
+                                <tr>
+                                    <td><code>${acc.account_code}</code></td>
+                                    <td>${acc.account_name}</td>
+                                    <td class="text-danger">${formatCurrency(acc.total_debit)}</td>
+                                    <td class="text-success">${formatCurrency(acc.total_credit)}</td>
+                                    <td class="${net > 0 ? 'text-success' : 'text-danger'}">${formatCurrency(net)}</td>
+                                </tr>
+                            `;
+                        });
+                    } else {
+                        html += `<tr><td colspan="5" class="text-center text-muted">No accounts linked to this category</td></tr>`;
+                    }
+                    
+                    html += `</tbody></table>`;
+                    content.innerHTML = html;
+                })
+                .catch(error => {
+                    content.innerHTML = `<div class="alert alert-danger">Error loading accounts: ${error.message}</div>`;
+                });
+            
+            new bootstrap.Modal(document.getElementById('viewAccountsModal')).show();
+        });
+    });
+
     // =============== KEYBOARD SHORTCUTS ===============
     document.addEventListener('keydown', function(e) {
         if (e.ctrlKey && e.key === 'n') {
@@ -2628,6 +3082,10 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         if (e.ctrlKey && e.key === 'f') {
             document.getElementById('budgetSearch').focus();
+            e.preventDefault();
+        }
+        if (e.ctrlKey && e.key === 'r') {
+            document.querySelector('button[name="refresh_actuals"]')?.click();
             e.preventDefault();
         }
     });
@@ -2642,6 +3100,14 @@ document.addEventListener('DOMContentLoaded', function() {
             }, 5000);
         });
     }, 1000);
+
+    // =============== FORMAT CURRENCY HELPER ===============
+    function formatCurrency(amount) {
+        return 'TZS ' + (parseFloat(amount) || 0).toLocaleString('en-US', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+    }
 });
 </script>
 
