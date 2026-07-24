@@ -23,7 +23,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     try {
         if (isset($_POST['request_leave'])) {
             // Get employee record for logged-in user (should always exist)
-            $emp_stmt = $db->prepare("SELECT id FROM users WHERE id = ? AND employee_id IS NOT NULL");
+            $emp_stmt = $db->prepare("SELECT id FROM users WHERE id = ?");
             $emp_stmt->execute([$_SESSION['user_id']]);
             $employee = $emp_stmt->fetch();
             
