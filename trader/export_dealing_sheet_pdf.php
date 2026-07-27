@@ -3,7 +3,7 @@
  * Export Order Sheet as PDF
  * Separate file to avoid conflicts with main page
  * 
- * Usage: export_order_sheet_pdf.php?id=123
+ * Usage: export_order_sheet_pdf.php?id=123BANK
  */
 
 // Error reporting for debugging (disable in production)
@@ -190,7 +190,7 @@ function getBrokerBankDetails($db) {
     // Try to get active broker bank accounts
     $stmt = $db->prepare("SELECT bank_name, account_name, account_number, branch_name, swift_code 
                           FROM banks_accounts 
-                          WHERE status = 'active' AND is_active = '1'
+                          WHERE status = 'active' AND is_active = '1' AND ID ='5'
                           ORDER BY id ASC LIMIT 1");
     $stmt->execute();
     $result = $stmt->fetch(PDO::FETCH_ASSOC);
