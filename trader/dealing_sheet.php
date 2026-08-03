@@ -382,42 +382,125 @@ function isImageReceipt($ref) {
 }
 
 // ============================================
-// Function to detect counterparty type
+// Function to detect counterparty type using brokers table
 // ============================================
-function getCounterpartyType($trade) {
+function getCounterpartyType($db, $trade) {
     $counterparty_cds = $trade['counterparty_cds_account'] ?? '';
     $counterparty_name = $trade['counterparty_name'] ?? '';
     $broker_name = $trade['broker_name'] ?? '';
     $sca_code = $trade['sca_code'] ?? '';
     $company_code = $trade['company_code'] ?? '';
+    $client_name = $trade['client_name'] ?? '';
     
     $type = 'none';
     $display = '';
+    $matched_broker = null;
     
-    // Check if it's a custodian trade (SCA code is not company code)
+    // First, check if SCA code indicates custodian (not company code)
     if (!empty($sca_code) && !empty($company_code) && $sca_code !== $company_code) {
         $type = 'custodian';
         $display = 'Custodian';
-    }
-    // Check if counterparty CDS exists and is not empty
-    elseif (!empty($counterparty_cds)) {
-        $type = 'broker';
-        $display = 'Broker';
-    }
-    // Check if broker_name exists
-    elseif (!empty($broker_name)) {
-        $type = 'broker';
-        $display = 'Broker';
-    }
-    // Check if counterparty_name exists and is not empty
-    elseif (!empty($counterparty_name) && strtolower($counterparty_name) !== 'unknown') {
-        $type = 'broker';
-        $display = 'Broker';
+        return [
+            'type' => $type,
+            'display' => $display,
+            'matched_broker' => $matched_broker,
+            'counterparty_name' => $counterparty_name,
+            'counterparty_cds' => $counterparty_cds,
+            'broker_name' => $broker_name,
+            'sca_code' => $sca_code
+        ];
     }
     
+    // Check if counterparty is a broker from the brokers table
+    if (!empty($counterparty_cds)) {
+        // Try to find by broker_code (matches counterparty_cds)
+        $stmt = $db->prepare("SELECT id, broker_code, broker_name FROM brokers WHERE broker_code = ? AND is_active = 1");
+        $stmt->execute([$counterparty_cds]);
+        $broker = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($broker) {
+            $type = 'broker';
+            $display = 'Broker';
+            $matched_broker = $broker;
+            return [
+                'type' => $type,
+                'display' => $display,
+                'matched_broker' => $matched_broker,
+                'counterparty_name' => $counterparty_name,
+                'counterparty_cds' => $counterparty_cds,
+                'broker_name' => $broker_name,
+                'sca_code' => $sca_code
+            ];
+        }
+    }
+    
+    // Try to find by broker_name
+    if (!empty($broker_name)) {
+        $stmt = $db->prepare("SELECT id, broker_code, broker_name FROM brokers WHERE broker_name LIKE ? OR broker_code = ? AND is_active = 1 LIMIT 1");
+        $stmt->execute(['%' . $broker_name . '%', $broker_name]);
+        $broker = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($broker) {
+            $type = 'broker';
+            $display = 'Broker';
+            $matched_broker = $broker;
+            return [
+                'type' => $type,
+                'display' => $display,
+                'matched_broker' => $matched_broker,
+                'counterparty_name' => $counterparty_name,
+                'counterparty_cds' => $counterparty_cds,
+                'broker_name' => $broker_name,
+                'sca_code' => $sca_code
+            ];
+        }
+    }
+    
+    // Try to find by counterparty_name
+    if (!empty($counterparty_name) && strtolower($counterparty_name) !== 'unknown' && strtolower($counterparty_name) !== '') {
+        $stmt = $db->prepare("SELECT id, broker_code, broker_name FROM brokers WHERE broker_name LIKE ? AND is_active = 1 LIMIT 1");
+        $stmt->execute(['%' . $counterparty_name . '%']);
+        $broker = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($broker) {
+            $type = 'broker';
+            $display = 'Broker';
+            $matched_broker = $broker;
+            return [
+                'type' => $type,
+                'display' => $display,
+                'matched_broker' => $matched_broker,
+                'counterparty_name' => $counterparty_name,
+                'counterparty_cds' => $counterparty_cds,
+                'broker_name' => $broker_name,
+                'sca_code' => $sca_code
+            ];
+        }
+    }
+    
+    // Check if client_name matches a broker (for self-trades)
+    if (!empty($client_name)) {
+        $stmt = $db->prepare("SELECT id, broker_code, broker_name FROM brokers WHERE broker_name LIKE ? AND is_active = 1 LIMIT 1");
+        $stmt->execute(['%' . $client_name . '%']);
+        $broker = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($broker) {
+            $type = 'broker';
+            $display = 'Broker';
+            $matched_broker = $broker;
+            return [
+                'type' => $type,
+                'display' => $display,
+                'matched_broker' => $matched_broker,
+                'counterparty_name' => $counterparty_name,
+                'counterparty_cds' => $counterparty_cds,
+                'broker_name' => $broker_name,
+                'sca_code' => $sca_code
+            ];
+        }
+    }
+    
+    // No match found
     return [
         'type' => $type,
         'display' => $display,
+        'matched_broker' => $matched_broker,
         'counterparty_name' => $counterparty_name,
         'counterparty_cds' => $counterparty_cds,
         'broker_name' => $broker_name,
@@ -813,8 +896,8 @@ foreach ($grouped_trades as $group) {
     // Calculate full fees
     $group['fees'] = calculateFullFees($group, $effective_rate, $liberty_mode, $is_liberty);
     
-    // Get counterparty type
-    $group['counterparty'] = getCounterpartyType($group);
+    // Get counterparty type from brokers table
+    $group['counterparty'] = getCounterpartyType($db, $group);
     
     $final_trades[] = $group;
 }
@@ -1139,9 +1222,10 @@ include '../includes/header.php';
     border-top: 1px solid #dee2e6;
 }
 .badge-counterparty {
-    font-size: 9px;
-    padding: 2px 6px;
+    font-size: 10px;
+    padding: 2px 8px;
     border-radius: 3px;
+    font-weight: 600;
 }
 .badge-counterparty.custodian {
     background: #cce5ff;
@@ -1150,6 +1234,10 @@ include '../includes/header.php';
 .badge-counterparty.broker {
     background: #d4edda;
     color: #155724;
+}
+.badge-counterparty .broker-code {
+    font-weight: normal;
+    opacity: 0.7;
 }
 </style>
 
@@ -1287,20 +1375,29 @@ include '../includes/header.php';
                                 $isSell = strtolower($trade['trade_side'] ?? '') === 'sell';
                                 
                                 // Get counterparty info
-                                $cp = $trade['counterparty'] ?? ['display' => 'none', 'type' => 'none'];
+                                $cp = $trade['counterparty'] ?? ['type' => 'none', 'display' => '', 'matched_broker' => null];
                                 $cpType = $cp['type'] ?? 'none';
                                 $cpDisplay = $cp['display'] ?? '';
+                                $matchedBroker = $cp['matched_broker'] ?? null;
                                 
                                 // Build counterparty display
                                 $cpHtml = '';
                                 if ($cpType !== 'none') {
                                     $badgeClass = $cpType === 'custodian' ? 'custodian' : 'broker';
                                     $label = $cpType === 'custodian' ? 'Custodian' : 'Broker';
-                                    $cpHtml = '<span class="badge-counterparty ' . $badgeClass . '">' . $label . '</span>';
+                                    $cpHtml = '<span class="badge-counterparty ' . $badgeClass . '">' . $label;
+                                    
+                                    if ($matchedBroker && !empty($matchedBroker['broker_code'])) {
+                                        $cpHtml .= ' <span class="broker-code">(' . htmlspecialchars($matchedBroker['broker_code']) . ')</span>';
+                                    }
+                                    $cpHtml .= '</span>';
+                                    
                                     if ($cpType === 'custodian' && !empty($trade['sca_code'])) {
                                         $cpHtml .= ' <small>' . htmlspecialchars($trade['sca_code']) . '</small>';
                                     } elseif ($cpType === 'broker' && !empty($trade['counterparty_name'])) {
                                         $cpHtml .= ' <small>' . htmlspecialchars($trade['counterparty_name']) . '</small>';
+                                    } elseif ($matchedBroker && !empty($matchedBroker['broker_name'])) {
+                                        $cpHtml .= ' <small>' . htmlspecialchars($matchedBroker['broker_name']) . '</small>';
                                     }
                                 } else {
                                     $cpHtml = '<span class="text-muted" style="font-size:10px;">-</span>';
@@ -1476,7 +1573,7 @@ include '../includes/header.php';
                                                 data-receipts="<?php echo htmlspecialchars(json_encode($receipt_data)); ?>"
                                                 data-comment="<?php echo htmlspecialchars($trade['receipt_comment'] ?? ''); ?>"
                                                 data-trader="<?php echo htmlspecialchars($trade['trader'] ?? ''); ?>"
-                                                data-counterparty="<?php echo htmlspecialchars($cpDisplay); ?>"
+                                                data-counterparty="<?php echo htmlspecialchars($cpDisplay . ($matchedBroker ? ' (' . $matchedBroker['broker_code'] . ')' : '')); ?>"
                                                 title="View Trade Details">
                                                 <i class="bi bi-eye"></i>
                                             </button>
