@@ -544,16 +544,6 @@ $pdf->Cell(0, 10, '', 0, 1, 'L');
 
 $pdf->Ln(2);
 
-// ========== FOOTER TEXT - ADMIN SECTION ==========
-$pdf->SetFont('helvetica', 'I', 7);
-$pdf->SetTextColor(80, 80, 80);
-
-// Admin line
-$pdf->Cell(70, 4, 'Prepared By: admin', 0, 0, 'L');
-$pdf->Cell(70, 4, 'Checked By: admin', 0, 0, 'L');
-$pdf->Cell(0, 4, 'Approved By: admin', 0, 1, 'L');
-
-$pdf->Ln(1);
 
 // Disclaimer line (kept from original)
 $pdf->SetFont('helvetica', 'I', 5.5);
