@@ -529,7 +529,7 @@ if (!$is_sell && $broker_bank_details) { // Only for BUY orders
 // ============================================
 
 // Draw a decorative separator line
-$pdf->Ln(40);
+$pdf->Ln(50);
 
 // ============================================
 // ========== FOOTER SECTION ==================
