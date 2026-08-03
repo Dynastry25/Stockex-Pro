@@ -528,7 +528,7 @@ if (!$is_sell && $broker_bank_details) { // Only for BUY orders
 
 // Calculate the Y position for the footer (static position from bottom)
 // A4 page height is 297mm, bottom margin is 25mm, so footer starts at 272mm from top
-$footer_y_position = 250; // Fixed position from top of page
+$footer_y_position = 240; // Fixed position from top of page
 
 // Move to the fixed footer position
 $pdf->SetY($footer_y_position);
