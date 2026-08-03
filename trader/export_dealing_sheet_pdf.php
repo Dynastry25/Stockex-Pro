@@ -474,6 +474,7 @@ $pdf->SetTextColor(0, 0, 0);
 $pdf->Ln(3);
 
 // ========== SECTION 4: BROKER BANK DETAILS (BUY ONLY) - SINGLE COLUMN ==========
+// ========== SECTION 4: BROKER BANK DETAILS (BUY ONLY) - SINGLE COLUMN ==========
 if (!$is_sell && $broker_bank_details) { // Only for BUY orders
     $pdf->SetFont('helvetica', 'B', 9);
     $pdf->SetFillColor(230, 230, 230);
@@ -519,13 +520,24 @@ if (!$is_sell && $broker_bank_details) { // Only for BUY orders
     $pdf->SetTextColor(100, 100, 100);
     $pdf->Cell(0, 4, 'Reference: Use Sheet Reference as payment reference', 0, 1, 'L');
     $pdf->SetTextColor(0, 0, 0);
-    
-    $pdf->Ln(39);
 }
 
-// ... (previous code remains the same until the signatures section)
+// ============================================
+// ========== MAIN SECTION END ================
+// ============================================
 
-// ========== SIGNATURES - SQUEEZED ==========
+// Calculate the Y position for the footer (static position from bottom)
+// A4 page height is 297mm, bottom margin is 25mm, so footer starts at 272mm from top
+$footer_y_position = 240; // Fixed position from top of page
+
+// Move to the fixed footer position
+$pdf->SetY($footer_y_position);
+
+// ============================================
+// ========== FOOTER SECTION (STATIC) =========
+// ============================================
+
+// ========== SIGNATURES ==========
 $pdf->SetFont('helvetica', 'B', 9);
 $pdf->Cell(70, 5, 'Prepared By:', 0, 0);
 $pdf->Cell(70, 5, 'Checked By:', 0, 0);
@@ -544,27 +556,28 @@ $pdf->Cell(0, 10, '', 0, 1, 'L');
 
 $pdf->Ln(2);
 
-// ========== FOOTER TEXT - ADMIN SECTION ==========
+// ========== ADMIN FOOTER ==========
 $pdf->SetFont('helvetica', 'I', 7);
 $pdf->SetTextColor(80, 80, 80);
 
-// Admin line
-$pdf->Cell(70, 4, 'Prepared By: admin', 0, 0, 'L');
-$pdf->Cell(70, 4, 'Checked By: admin', 0, 0, 'L');
-$pdf->Cell(0, 4, 'Approved By: admin', 0, 1, 'L');
+$pdf->Ln(3);
 
-$pdf->Ln(1);
-
-// Disclaimer line (kept from original)
+// ========== DISCLAIMER ==========
 $pdf->SetFont('helvetica', 'I', 5.5);
 $pdf->SetTextColor(120, 120, 120);
-$disclaimer = "This Order Sheet is for internal use only. It does not constitute a contract note or official trade confirmation. " .
+$disclaimer = "This document serves as an internal Order Sheet and is not a contract note or official trade confirmation. " .
               "All trades are subject to the Rules, Regulations and Customs of the Dar es Salaam Stock Exchange.";
 $pdf->MultiCell(0, 3, $disclaimer, 0, 'C');
 $pdf->SetTextColor(0, 0, 0);
+
+// ============================================
+// ========== END FOOTER SECTION ==============
+// ============================================
 
 // Output PDF
 $filename = 'order_sheet_' . preg_replace('/[^a-zA-Z0-9_-]/', '_', $sheet['sheet_reference'] ?? 'export') . '.pdf';
 $pdf->Output($filename, 'I');
 exit;
 ?>
+
+
