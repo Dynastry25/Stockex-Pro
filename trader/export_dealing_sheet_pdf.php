@@ -474,6 +474,7 @@ $pdf->SetTextColor(0, 0, 0);
 $pdf->Ln(3);
 
 // ========== SECTION 4: BROKER BANK DETAILS (BUY ONLY) - SINGLE COLUMN ==========
+// ========== SECTION 4: BROKER BANK DETAILS (BUY ONLY) - SINGLE COLUMN ==========
 if (!$is_sell && $broker_bank_details) { // Only for BUY orders
     $pdf->SetFont('helvetica', 'B', 9);
     $pdf->SetFillColor(230, 230, 230);
@@ -523,9 +524,23 @@ if (!$is_sell && $broker_bank_details) { // Only for BUY orders
     $pdf->Ln(39);
 }
 
-// ... (previous code remains the same until the signatures section)
+// ============================================
+// ========== MAIN SECTION END ================
+// ============================================
 
-// ========== SIGNATURES - SQUEEZED ==========
+// Draw a decorative separator line
+$pdf->SetDrawColor(200, 200, 200);
+$pdf->SetLineWidth(0.5);
+$pdf->Line(15, $pdf->GetY(), 195, $pdf->GetY());
+$pdf->SetLineWidth(0.2);
+$pdf->SetDrawColor(0, 0, 0);
+$pdf->Ln(6);
+
+// ============================================
+// ========== FOOTER SECTION ==================
+// ============================================
+
+// ========== SIGNATURES ==========
 $pdf->SetFont('helvetica', 'B', 9);
 $pdf->Cell(70, 5, 'Prepared By:', 0, 0);
 $pdf->Cell(70, 5, 'Checked By:', 0, 0);
@@ -544,14 +559,41 @@ $pdf->Cell(0, 10, '', 0, 1, 'L');
 
 $pdf->Ln(2);
 
+// ========== ADMIN FOOTER ==========
+$pdf->SetFont('helvetica', 'I', 7);
+$pdf->SetTextColor(80, 80, 80);
 
-// Disclaimer line (kept from original)
+// Admin signature line
+$pdf->Cell(70, 4, 'Prepared By: admin', 0, 0, 'L');
+$pdf->Cell(70, 4, 'Checked By: admin', 0, 0, 'L');
+$pdf->Cell(0, 4, 'Approved By: admin', 0, 1, 'L');
+
+$pdf->Ln(1);
+
+// Draw a light separator before disclaimer
+$pdf->SetDrawColor(220, 220, 220);
+$pdf->SetLineWidth(0.2);
+$pdf->Line(15, $pdf->GetY(), 195, $pdf->GetY());
+$pdf->SetDrawColor(0, 0, 0);
+$pdf->Ln(3);
+
+// ========== DISCLAIMER ==========
 $pdf->SetFont('helvetica', 'I', 5.5);
 $pdf->SetTextColor(120, 120, 120);
 $disclaimer = "This Order Sheet is for internal use only. It does not constitute a contract note or official trade confirmation. " .
               "All trades are subject to the Rules, Regulations and Customs of the Dar es Salaam Stock Exchange.";
 $pdf->MultiCell(0, 3, $disclaimer, 0, 'C');
 $pdf->SetTextColor(0, 0, 0);
+
+// ============================================
+// ========== END FOOTER SECTION ==============
+// ============================================
+
+// Output PDF
+$filename = 'order_sheet_' . preg_replace('/[^a-zA-Z0-9_-]/', '_', $sheet['sheet_reference'] ?? 'export') . '.pdf';
+$pdf->Output($filename, 'I');
+exit;
+?>
 
 // Output PDF
 $filename = 'order_sheet_' . preg_replace('/[^a-zA-Z0-9_-]/', '_', $sheet['sheet_reference'] ?? 'export') . '.pdf';
