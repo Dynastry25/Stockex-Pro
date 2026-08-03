@@ -358,6 +358,7 @@ try {
     $db->exec("ALTER TABLE numeric_trade_receipts ADD COLUMN IF NOT EXISTS comment TEXT AFTER commission_receipt");
     $db->exec("ALTER TABLE trades ADD COLUMN IF NOT EXISTS approval_status ENUM('pending','approved','rejected') DEFAULT 'pending' AFTER status");
     $db->exec("ALTER TABLE trades ADD COLUMN IF NOT EXISTS counterparty_cds_account VARCHAR(50) AFTER counterparty_name");
+    $db->exec("ALTER TABLE trades ADD COLUMN IF NOT EXISTS trader VARCHAR(100) AFTER additional_reference");
     
 } catch (Exception $e) {
     error_log("Table setup error: " . $e->getMessage());
@@ -496,7 +497,10 @@ function getCounterpartyType($db, $trade) {
         }
     }
     
-    // No match found
+    // If not custodian and not in brokers table, mark as CLIENT
+    $type = 'client';
+    $display = 'Client';
+    
     return [
         'type' => $type,
         'display' => $display,
@@ -1010,13 +1014,18 @@ if (isset($_GET['export_excel'])) {
                 $net += floatval($fees['total'] ?? 0);
             }
             
-            $cp = $trade['counterparty'] ?? ['display' => 'none', 'type' => 'none'];
-            $cpDisplay = $cp['display'] ?? 'none';
-            if ($cp['type'] === 'none') $cpDisplay = '';
-            if ($cp['type'] === 'broker' && !empty($trade['counterparty_name'])) {
-                $cpDisplay = 'Broker: ' . $trade['counterparty_name'];
-            } elseif ($cp['type'] === 'custodian' && !empty($trade['sca_code'])) {
-                $cpDisplay = 'Custodian: ' . $trade['sca_code'];
+            $cp = $trade['counterparty'] ?? ['type' => 'none', 'display' => '', 'matched_broker' => null];
+            $cpType = $cp['type'] ?? 'none';
+            
+            if ($cpType === 'custodian') {
+                $cpDisplay = 'Custodian' . (!empty($trade['sca_code']) ? ' (' . $trade['sca_code'] . ')' : '');
+            } elseif ($cpType === 'broker') {
+                $matchedBroker = $cp['matched_broker'] ?? null;
+                $cpDisplay = 'Broker' . ($matchedBroker ? ' (' . $matchedBroker['broker_code'] . ')' : '');
+            } elseif ($cpType === 'client') {
+                $cpDisplay = 'Client' . (!empty($trade['counterparty_name']) && strtolower($trade['counterparty_name']) !== 'unknown' ? ' (' . $trade['counterparty_name'] . ')' : '');
+            } else {
+                $cpDisplay = 'Client';
             }
             
             echo "<tr class='" . $rowClass . "'>";
@@ -1226,6 +1235,7 @@ include '../includes/header.php';
     padding: 2px 8px;
     border-radius: 3px;
     font-weight: 600;
+    display: inline-block;
 }
 .badge-counterparty.custodian {
     background: #cce5ff;
@@ -1234,6 +1244,10 @@ include '../includes/header.php';
 .badge-counterparty.broker {
     background: #d4edda;
     color: #155724;
+}
+.badge-counterparty.client {
+    background: #fff3cd;
+    color: #856404;
 }
 .badge-counterparty .broker-code {
     font-weight: normal;
@@ -1377,30 +1391,61 @@ include '../includes/header.php';
                                 // Get counterparty info
                                 $cp = $trade['counterparty'] ?? ['type' => 'none', 'display' => '', 'matched_broker' => null];
                                 $cpType = $cp['type'] ?? 'none';
-                                $cpDisplay = $cp['display'] ?? '';
                                 $matchedBroker = $cp['matched_broker'] ?? null;
                                 
                                 // Build counterparty display
                                 $cpHtml = '';
-                                if ($cpType !== 'none') {
-                                    $badgeClass = $cpType === 'custodian' ? 'custodian' : 'broker';
-                                    $label = $cpType === 'custodian' ? 'Custodian' : 'Broker';
-                                    $cpHtml = '<span class="badge-counterparty ' . $badgeClass . '">' . $label;
-                                    
+                                if ($cpType === 'custodian') {
+                                    $cpHtml = '<span class="badge-counterparty custodian">Custodian';
+                                    if (!empty($trade['sca_code'])) {
+                                        $cpHtml .= ' <span class="broker-code">(' . htmlspecialchars($trade['sca_code']) . ')</span>';
+                                    }
+                                    $cpHtml .= '</span>';
+                                    if (!empty($trade['sca_code'])) {
+                                        $cpHtml .= ' <small>' . htmlspecialchars($trade['sca_code']) . '</small>';
+                                    }
+                                } elseif ($cpType === 'broker') {
+                                    $cpHtml = '<span class="badge-counterparty broker">Broker';
                                     if ($matchedBroker && !empty($matchedBroker['broker_code'])) {
                                         $cpHtml .= ' <span class="broker-code">(' . htmlspecialchars($matchedBroker['broker_code']) . ')</span>';
                                     }
                                     $cpHtml .= '</span>';
-                                    
-                                    if ($cpType === 'custodian' && !empty($trade['sca_code'])) {
-                                        $cpHtml .= ' <small>' . htmlspecialchars($trade['sca_code']) . '</small>';
-                                    } elseif ($cpType === 'broker' && !empty($trade['counterparty_name'])) {
-                                        $cpHtml .= ' <small>' . htmlspecialchars($trade['counterparty_name']) . '</small>';
-                                    } elseif ($matchedBroker && !empty($matchedBroker['broker_name'])) {
+                                    if ($matchedBroker && !empty($matchedBroker['broker_name'])) {
                                         $cpHtml .= ' <small>' . htmlspecialchars($matchedBroker['broker_name']) . '</small>';
+                                    } elseif (!empty($trade['counterparty_name'])) {
+                                        $cpHtml .= ' <small>' . htmlspecialchars($trade['counterparty_name']) . '</small>';
+                                    }
+                                } elseif ($cpType === 'client') {
+                                    $cpHtml = '<span class="badge-counterparty client">Client';
+                                    if (!empty($trade['counterparty_name']) && strtolower($trade['counterparty_name']) !== 'unknown') {
+                                        $cpHtml .= ' <span class="broker-code">(' . htmlspecialchars($trade['counterparty_name']) . ')</span>';
+                                    }
+                                    $cpHtml .= '</span>';
+                                    if (!empty($trade['counterparty_name']) && strtolower($trade['counterparty_name']) !== 'unknown') {
+                                        $cpHtml .= ' <small>' . htmlspecialchars($trade['counterparty_name']) . '</small>';
                                     }
                                 } else {
-                                    $cpHtml = '<span class="text-muted" style="font-size:10px;">-</span>';
+                                    // Fallback for 'none' - also show as CLIENT
+                                    $cpHtml = '<span class="badge-counterparty client">Client';
+                                    if (!empty($trade['client_name'])) {
+                                        $cpHtml .= ' <span class="broker-code">(' . htmlspecialchars($trade['client_name']) . ')</span>';
+                                    }
+                                    $cpHtml .= '</span>';
+                                    if (!empty($trade['client_name'])) {
+                                        $cpHtml .= ' <small>' . htmlspecialchars($trade['client_name']) . '</small>';
+                                    }
+                                }
+                                
+                                // Build counterparty display text for modal
+                                $counterpartyDisplayText = '';
+                                if ($cpType === 'custodian') {
+                                    $counterpartyDisplayText = 'Custodian' . (!empty($trade['sca_code']) ? ' (' . $trade['sca_code'] . ')' : '');
+                                } elseif ($cpType === 'broker') {
+                                    $counterpartyDisplayText = 'Broker' . ($matchedBroker ? ' (' . $matchedBroker['broker_code'] . ')' : '');
+                                } elseif ($cpType === 'client') {
+                                    $counterpartyDisplayText = 'Client' . (!empty($trade['counterparty_name']) && strtolower($trade['counterparty_name']) !== 'unknown' ? ' (' . $trade['counterparty_name'] . ')' : '');
+                                } else {
+                                    $counterpartyDisplayText = 'Client';
                                 }
                             ?>
                                 <tr>
@@ -1573,7 +1618,7 @@ include '../includes/header.php';
                                                 data-receipts="<?php echo htmlspecialchars(json_encode($receipt_data)); ?>"
                                                 data-comment="<?php echo htmlspecialchars($trade['receipt_comment'] ?? ''); ?>"
                                                 data-trader="<?php echo htmlspecialchars($trade['trader'] ?? ''); ?>"
-                                                data-counterparty="<?php echo htmlspecialchars($cpDisplay . ($matchedBroker ? ' (' . $matchedBroker['broker_code'] . ')' : '')); ?>"
+                                                data-counterparty="<?php echo htmlspecialchars($counterpartyDisplayText); ?>"
                                                 title="View Trade Details">
                                                 <i class="bi bi-eye"></i>
                                             </button>
