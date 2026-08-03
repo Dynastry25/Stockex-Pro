@@ -388,11 +388,18 @@ include '../includes/header.php';
                                 <small class="text-muted">Configure transaction fees</small>
                             </div>
                         </a>
-                        <a href="../trader/trades.php" class="btn btn-outline-success btn-lg d-flex align-items-center">
+<a href="../trader/trades.php" class="btn btn-outline-success btn-lg d-flex align-items-center">
                             <i class="bi bi-graph-up me-3"></i>
                             <div class="text-start">
                                 <div class="fw-semibold">View All Trades</div>
                                 <small class="text-muted">Trading activity</small>
+                            </div>
+                        </a>
+                        <a href="reset_data.php" class="btn btn-outline-danger btn-lg d-flex align-items-center" onclick="return confirm('WARNING: This will permanently delete ALL data except users. Are you absolutely sure? This action CANNOT be undone.');">
+                            <i class="bi bi-trash2 me-3"></i>
+                            <div class="text-start">
+                                <div class="fw-semibold">Reset All Data</div>
+                                <small class="text-muted">Delete everything except users</small>
                             </div>
                         </a>
                     </div>
@@ -400,6 +407,5 @@ include '../includes/header.php';
             </div>
         </div>
     </div>
-</div>
 
 <?php include '../includes/footer.php'; ?>
