@@ -1334,8 +1334,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         $success_message .= "</div>";
                                     }
                                     
-                                    $success_message .= "<br><small><strong>Additional Reference:</strong> Supports numbers, empty values, or 'MTP' for Mobile Trading Platform payments.</small>";
-                                    $success_message .= "<br><small><strong>Commission:</strong> Company trades EXEMPT brokerage commission only. All other fees (VAT, CMSA, DSE, CSDR) are recorded.</small>";
+
                                     $preview_data = [];
                                 }
                                 
