@@ -1485,13 +1485,7 @@ include '../includes/header.php';
                                                             </div>
                                                         <?php endforeach; ?>
                                                     <?php endif; ?>
-                                                    <div>VAT: TZS <?php echo number_format($fees['vat'] ?? 0, 2); ?></div>
-                                                    <div>CMSA: TZS <?php echo number_format($fees['cmsa'] ?? 0, 2); ?></div>
-                                                    <div>DSE: TZS <?php echo number_format($fees['dse'] ?? 0, 2); ?></div>
-                                                    <?php if (isset($fees['fidelity']) && $fees['fidelity'] > 0): ?>
-                                                        <div>Fidelity: TZS <?php echo number_format($fees['fidelity'], 2); ?></div>
-                                                    <?php endif; ?>
-                                                    <div>CDS: TZS <?php echo number_format($fees['csd'] ?? 0, 2); ?></div>
+                                                   
                                                     <div class="commission-total">
                                                         Net: TZS <?php echo number_format($fees['net_amount'] ?? 0, 2); ?>
                                                         <br>
