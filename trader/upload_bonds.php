@@ -663,17 +663,7 @@ function recordGeneralLedgerEntry($db, $transaction_date, $account_id, $debit, $
 }
 
 // Check for duplicate GL entries
-function isGLDuplicateEntry($db, $reference_no, $account_code, $description) {
-    try {
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM general_ledger WHERE reference_no = ? AND account_code = ? AND description = ?");
-        $stmt->execute([$reference_no, $account_code, $description]);
-        $count = $stmt->fetchColumn();
-        return $count > 0;
-    } catch (Exception $e) {
-        error_log("Error checking GL duplicate: " . $e->getMessage());
-        return false;
-    }
-}
+
 
 // Calculate bond fees
 function calculateBondFees($quantity, $price, $consideration) {
