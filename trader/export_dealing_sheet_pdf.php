@@ -529,12 +529,7 @@ if (!$is_sell && $broker_bank_details) { // Only for BUY orders
 // ============================================
 
 // Draw a decorative separator line
-$pdf->SetDrawColor(200, 200, 200);
-$pdf->SetLineWidth(0.5);
-$pdf->Line(15, $pdf->GetY(), 195, $pdf->GetY());
-$pdf->SetLineWidth(0.2);
-$pdf->SetDrawColor(0, 0, 0);
-$pdf->Ln(6);
+$pdf->Ln(20);
 
 // ============================================
 // ========== FOOTER SECTION ==================
@@ -564,11 +559,7 @@ $pdf->SetFont('helvetica', 'I', 7);
 $pdf->SetTextColor(80, 80, 80);
 
 // Admin signature line
-$pdf->Cell(70, 4, 'Prepared By: admin', 0, 0, 'L');
-$pdf->Cell(70, 4, 'Checked By: admin', 0, 0, 'L');
-$pdf->Cell(0, 4, 'Approved By: admin', 0, 1, 'L');
 
-$pdf->Ln(1);
 
 // Draw a light separator before disclaimer
 $pdf->SetDrawColor(220, 220, 220);
@@ -595,8 +586,4 @@ $pdf->Output($filename, 'I');
 exit;
 ?>
 
-// Output PDF
-$filename = 'order_sheet_' . preg_replace('/[^a-zA-Z0-9_-]/', '_', $sheet['sheet_reference'] ?? 'export') . '.pdf';
-$pdf->Output($filename, 'I');
-exit;
-?>
+
