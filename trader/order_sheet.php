@@ -339,7 +339,7 @@ class DealingSheetPDF extends TCPDF {
             $this->Cell(0, 6, 'Remarks:', 0, 1);
             $this->SetFont('helvetica', '', 9);
             $this->MultiCell(0, 5, $sheet['remarks'], 0, 'L');
-            $this->Ln(4);
+            $this->Ln(10);
         }
 
         // ============================================
