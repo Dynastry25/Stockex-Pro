@@ -520,8 +520,10 @@ if (!$is_sell && $broker_bank_details) { // Only for BUY orders
     $pdf->Cell(0, 4, 'Reference: Use Sheet Reference as payment reference', 0, 1, 'L');
     $pdf->SetTextColor(0, 0, 0);
     
-    $pdf->Ln(28);
+    $pdf->Ln(39);
 }
+
+// ... (previous code remains the same until the signatures section)
 
 // ========== SIGNATURES - SQUEEZED ==========
 $pdf->SetFont('helvetica', 'B', 9);
@@ -542,8 +544,19 @@ $pdf->Cell(0, 10, '', 0, 1, 'L');
 
 $pdf->Ln(2);
 
-// Disclaimer
-$pdf->SetFont('helvetica', 'I', 6);
+// ========== FOOTER TEXT - ADMIN SECTION ==========
+$pdf->SetFont('helvetica', 'I', 7);
+$pdf->SetTextColor(80, 80, 80);
+
+// Admin line
+$pdf->Cell(70, 4, 'Prepared By: admin', 0, 0, 'L');
+$pdf->Cell(70, 4, 'Checked By: admin', 0, 0, 'L');
+$pdf->Cell(0, 4, 'Approved By: admin', 0, 1, 'L');
+
+$pdf->Ln(1);
+
+// Disclaimer line (kept from original)
+$pdf->SetFont('helvetica', 'I', 5.5);
 $pdf->SetTextColor(120, 120, 120);
 $disclaimer = "This Order Sheet is for internal use only. It does not constitute a contract note or official trade confirmation. " .
               "All trades are subject to the Rules, Regulations and Customs of the Dar es Salaam Stock Exchange.";
