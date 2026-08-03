@@ -565,7 +565,7 @@ $pdf->Ln(3);
 // ========== DISCLAIMER ==========
 $pdf->SetFont('helvetica', 'I', 5.5);
 $pdf->SetTextColor(120, 120, 120);
-$disclaimer = "This Order Sheet is for internal use only. It does not constitute a contract note or official trade confirmation. " .
+$disclaimer = "This document serves as an internal Order Sheet and is not a contract note or official trade confirmation. " .
               "All trades are subject to the Rules, Regulations and Customs of the Dar es Salaam Stock Exchange.";
 $pdf->MultiCell(0, 3, $disclaimer, 0, 'C');
 $pdf->SetTextColor(0, 0, 0);
