@@ -53,7 +53,8 @@ $regulatory_assignments_created = 0;
 $csd_references_used = 0;
 $duplicates_skipped = 0;
 $duplicate_references = [];
-$client_trades_skipped = 0; // Track skipped client trades
+$client_trades_skipped = 0;
+$company_trades_brokerage_exempted = 0; // Track company trades with brokerage exempted
 
 // Get company details
 function getCompanyDetails($db) {
@@ -227,7 +228,6 @@ function mapCSVRowToDatabase($row) {
     if (!empty($trimmed_row['Trade Date'])) {
         $date_str = trim($trimmed_row['Trade Date']);
         
-        // Check if date is in YYYY/MM/DD format (your CSV format)
         if (preg_match('/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/', $date_str, $matches)) {
             $year = $matches[1];
             $month = str_pad($matches[2], 2, '0', STR_PAD_LEFT);
@@ -235,7 +235,6 @@ function mapCSVRowToDatabase($row) {
             $trade_date = $year . '-' . $month . '-' . $day;
             error_log("Converted Trade Date (YYYY/MM/DD): {$date_str} -> {$trade_date}");
         }
-        // Check if date is in MM/DD/YYYY format
         elseif (preg_match('/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/', $date_str, $matches)) {
             $month = str_pad($matches[1], 2, '0', STR_PAD_LEFT);
             $day = str_pad($matches[2], 2, '0', STR_PAD_LEFT);
@@ -243,12 +242,10 @@ function mapCSVRowToDatabase($row) {
             $trade_date = $year . '-' . $month . '-' . $day;
             error_log("Converted Trade Date (MM/DD/YYYY): {$date_str} -> {$trade_date}");
         } 
-        // Check if date is in YYYY-MM-DD format
         elseif (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date_str)) {
             $trade_date = $date_str;
             error_log("Trade Date already in YYYY-MM-DD: {$trade_date}");
         } 
-        // Check if date is in YYYYMMDD format
         elseif (preg_match('/^\d{8}$/', $date_str)) {
             $trade_date = substr($date_str, 0, 4) . '-' . substr($date_str, 4, 2) . '-' . substr($date_str, 6, 2);
             error_log("Converted Trade Date (YYYYMMDD): {$date_str} -> {$trade_date}");
@@ -264,7 +261,6 @@ function mapCSVRowToDatabase($row) {
     if (!empty($trimmed_row['Settlement Date'])) {
         $date_str = trim($trimmed_row['Settlement Date']);
         
-        // Check if date is in YYYY/MM/DD format (your CSV format)
         if (preg_match('/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/', $date_str, $matches)) {
             $year = $matches[1];
             $month = str_pad($matches[2], 2, '0', STR_PAD_LEFT);
@@ -272,7 +268,6 @@ function mapCSVRowToDatabase($row) {
             $settlement_date = $year . '-' . $month . '-' . $day;
             error_log("Converted Settlement Date (YYYY/MM/DD): {$date_str} -> {$settlement_date}");
         }
-        // Check if date is in MM/DD/YYYY format
         elseif (preg_match('/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/', $date_str, $matches)) {
             $month = str_pad($matches[1], 2, '0', STR_PAD_LEFT);
             $day = str_pad($matches[2], 2, '0', STR_PAD_LEFT);
@@ -280,12 +275,10 @@ function mapCSVRowToDatabase($row) {
             $settlement_date = $year . '-' . $month . '-' . $day;
             error_log("Converted Settlement Date (MM/DD/YYYY): {$date_str} -> {$settlement_date}");
         } 
-        // Check if date is in YYYY-MM-DD format
         elseif (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date_str)) {
             $settlement_date = $date_str;
             error_log("Settlement Date already in YYYY-MM-DD: {$settlement_date}");
         } 
-        // Check if date is in YYYYMMDD format
         elseif (preg_match('/^\d{8}$/', $date_str)) {
             $settlement_date = substr($date_str, 0, 4) . '-' . substr($date_str, 4, 2) . '-' . substr($date_str, 6, 2);
             error_log("Converted Settlement Date (YYYYMMDD): {$date_str} -> {$settlement_date}");
@@ -345,13 +338,13 @@ function mapCSVRowToDatabase($row) {
     // Get Exchange Reference
     $exchange_reference = $trimmed_row['Exchange Reference'] ?? '';
     
-    // =====================================================
-    // NEW: Get Additional Reference
-    // This column can contain: a number, empty, or "MTP"
-    // =====================================================
+    // Get Additional Reference
     $additional_reference = $trimmed_row['Additional Reference'] ?? '';
     
-    error_log("Mapped data - Security: {$security_id}, Client: {$client_name}, CDS: {$client_cds}, Trade Date: {$trade_date}, Exchange Ref: {$exchange_reference}, Additional Ref: {$additional_reference}");
+    // Get Trader column
+    $trader = $trimmed_row['Trader'] ?? '';
+    
+    error_log("Mapped data - Security: {$security_id}, Client: {$client_name}, CDS: {$client_cds}, Trade Date: {$trade_date}, Exchange Ref: {$exchange_reference}, Additional Ref: {$additional_reference}, Trader: {$trader}");
     
     return [
         'security_id' => $security_id,
@@ -371,7 +364,8 @@ function mapCSVRowToDatabase($row) {
         'broker_name' => $trimmed_row['Broker'] ?? '',
         'counterparty_broker' => $trimmed_row['Counterparty'] ?? '',
         'exchange_reference' => $exchange_reference,
-        'additional_reference' => $additional_reference, // NEW: Additional Reference
+        'additional_reference' => $additional_reference,
+        'trader' => $trader,
         'origin' => $trimmed_row['Origin'] ?? '',
         'time_executed' => $trimmed_row['Time'] ?? '',
         'asset_class' => strtolower(trim($trimmed_row['Asset Class'] ?? '')),
@@ -701,11 +695,11 @@ function calculateEquityFees($db, $consideration) {
 }
 
 // =====================================================
-// UPDATED: Create accounting entries - NO CASH AT BANK
+// Updated: Create accounting entries - EXEMPT ONLY brokerage for company trades
 // Uses: 411 (Brokerage Income), 213 (VAT), 2111 (CMSA), 
 // 2112 (DSE), 2113 (CSDR), 2114 (VRF)
 // =====================================================
-function createEquityAccountingEntries($db, $trade_reference, $consideration, $fees, $trade_side, $client_name, $company_name, $trade_date, $is_custodian_trade = false) {
+function createEquityAccountingEntries($db, $trade_reference, $consideration, $fees, $trade_side, $client_name, $company_name, $trade_date, $is_custodian_trade = false, $is_company_trade = false) {
     try {
         $entries_created = 0;
         
@@ -728,19 +722,24 @@ function createEquityAccountingEntries($db, $trade_reference, $consideration, $f
         $csdr_fee = $fees['csdr'] ?? $csd_fee;
         
         // =====================================================
-        // NO CASH AT BANK ENTRIES - Fees are directly credited
-        // to their respective payable/income accounts
+        // 1. Credit Brokerage Income (411) - EXEMPT for company trades ONLY
         // =====================================================
-        
-        // 1. Credit Brokerage Income (411)
         if ($brokerage_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, BROKERAGE_COMMISSION_INCOME_CODE, 'Equity brokerage income')) {
-            if (recordGeneralLedgerEntry($db, $trade_date, $brokerage_income, 0, $brokerage_fee, 
-                "Equity brokerage income - {$trade_reference} - {$client_name}", $trade_reference, 'fee')) {
-                $entries_created++;
+            if ($is_company_trade) {
+                error_log("Company trade - EXEMPTING brokerage commission: {$trade_reference} - Amount: {$brokerage_fee}");
+                // Skip brokerage entry for company trades
+            } else {
+                // Record brokerage for client trades
+                if (recordGeneralLedgerEntry($db, $trade_date, $brokerage_income, 0, $brokerage_fee, 
+                    "Equity brokerage income - {$trade_reference} - {$client_name}", $trade_reference, 'fee')) {
+                    $entries_created++;
+                }
             }
         }
         
-        // 2. Credit VAT Payable (213)
+        // =====================================================
+        // 2. Credit VAT Payable (213) - Record for ALL trades
+        // =====================================================
         if ($vat_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, VAT_PAYABLE_CODE, 'VAT on equity brokerage')) {
             if (recordGeneralLedgerEntry($db, $trade_date, $vat_payable, 0, $vat_fee, 
                 "VAT on equity brokerage - {$trade_reference}", $trade_reference, 'fee')) {
@@ -748,7 +747,9 @@ function createEquityAccountingEntries($db, $trade_reference, $consideration, $f
             }
         }
         
-        // 3. Credit CMSA Payable (2111)
+        // =====================================================
+        // 3. Credit CMSA Payable (2111) - Record for ALL trades
+        // =====================================================
         if ($cmsa_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, CMSA_PAYABLE_CODE, 'CMSA fees payable')) {
             if (recordGeneralLedgerEntry($db, $trade_date, $cmsa_payable, 0, $cmsa_fee, 
                 "CMSA fees payable - {$trade_reference}", $trade_reference, 'fee')) {
@@ -756,7 +757,9 @@ function createEquityAccountingEntries($db, $trade_reference, $consideration, $f
             }
         }
         
-        // 4. Credit DSE Payable (2112)
+        // =====================================================
+        // 4. Credit DSE Payable (2112) - Record for ALL trades
+        // =====================================================
         if ($dse_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, DSE_PAYABLE_CODE, 'DSE fees payable')) {
             if (recordGeneralLedgerEntry($db, $trade_date, $dse_payable, 0, $dse_fee, 
                 "DSE fees payable - {$trade_reference}", $trade_reference, 'fee')) {
@@ -764,7 +767,9 @@ function createEquityAccountingEntries($db, $trade_reference, $consideration, $f
             }
         }
         
-        // 5. Credit CSDR Payable (2113)
+        // =====================================================
+        // 5. Credit CSDR Payable (2113) - Record for ALL trades
+        // =====================================================
         if ($csdr_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, CSDR_PAYABLE_CODE, 'CSDR fees payable')) {
             if (recordGeneralLedgerEntry($db, $trade_date, $csdr_payable, 0, $csdr_fee, 
                 "CSDR fees payable - {$trade_reference}", $trade_reference, 'fee')) {
@@ -772,7 +777,9 @@ function createEquityAccountingEntries($db, $trade_reference, $consideration, $f
             }
         }
         
-        // 6. Credit VRF Payable (2114)
+        // =====================================================
+        // 6. Credit VRF Payable (2114) - Record for ALL trades
+        // =====================================================
         if ($vrf_fee > 0 && !isGLDuplicateEntry($db, $trade_reference, VRF_PAYABLE_CODE, 'VRF fees payable')) {
             if (recordGeneralLedgerEntry($db, $trade_date, $vrf_payable, 0, $vrf_fee, 
                 "VRF fees payable - {$trade_reference}", $trade_reference, 'fee')) {
@@ -789,7 +796,7 @@ function createEquityAccountingEntries($db, $trade_reference, $consideration, $f
 }
 
 // =====================================================
-// UPDATED: Record Company trades to Marketable Securities (1151)
+// Updated: Record Company trades to Marketable Securities (1151)
 // Client trades are SKIPPED - will be entered manually via receipts
 // NO CASH AT BANK
 // =====================================================
@@ -829,7 +836,7 @@ function recordTradeReceivableEntry($db, $trade_reference, $consideration, $trad
     }
 }
 
-// Record regulatory fee assignment
+// Record regulatory fee assignment - Record for ALL trades
 function recordRegulatoryFeeAssignment($db, $trade_reference, $fees, $client_name, $trade_date, $security_id, $security_name, $consideration, $trade_side, $created_by, $additional_reference = '') {
     try {
         $check_stmt = $db->prepare("SELECT COUNT(*) as count FROM regulatory_fee_assignments WHERE trade_reference = ?");
@@ -866,7 +873,7 @@ function recordRegulatoryFeeAssignment($db, $trade_reference, $fees, $client_nam
 }
 
 // =====================================================
-// UPDATED: Record company investment to Marketable Securities
+// Updated: Record company investment to Marketable Securities
 // Uses: 1151 - Marketable Securities - Equities
 // NO CASH AT BANK
 // =====================================================
@@ -930,10 +937,19 @@ function recordCustodianTrade($db, $trade_data) {
     }
 }
 
-// Calculate custodian fees
-function calculateCustodianFees($fees) {
-    $brokerage_fees = ($fees['brokerage'] ?? 0) + ($fees['vat'] ?? 0);
-    $other_fees = ($fees['cmsa'] ?? 0) + ($fees['csd'] ?? 0) + ($fees['dse'] ?? 0) + ($fees['vrf'] ?? 0);
+// =====================================================
+// Calculate custodian fees - EXEMPT brokerage for company trades
+// =====================================================
+function calculateCustodianFees($fees, $is_company_trade = false) {
+    if ($is_company_trade) {
+        // Company trades: ONLY other fees (CMSA, DSE, CSDR, VRF) - NO brokerage
+        $brokerage_fees = 0; // Exempt brokerage
+        $other_fees = ($fees['cmsa'] ?? 0) + ($fees['csd'] ?? 0) + ($fees['dse'] ?? 0) + ($fees['vrf'] ?? 0);
+    } else {
+        // Client trades: ALL fees including brokerage
+        $brokerage_fees = ($fees['brokerage'] ?? 0) + ($fees['vat'] ?? 0);
+        $other_fees = ($fees['cmsa'] ?? 0) + ($fees['csd'] ?? 0) + ($fees['dse'] ?? 0) + ($fees['vrf'] ?? 0);
+    }
     
     return [
         'brokerage_fees' => round($brokerage_fees, 2),
@@ -949,8 +965,8 @@ function recordETFTrade($db, $trade_data) {
             INSERT INTO etf_trades 
             (trade_reference, etf_id, etf_name, isin, client_cds_account, client_name, 
              trade_side, quantity, price, consideration, trade_date, settlement_date, 
-             currency, sca_code, status, exchange_reference, additional_reference) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             currency, sca_code, status, exchange_reference, additional_reference, trader) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
         
         return $stmt->execute([
@@ -959,7 +975,8 @@ function recordETFTrade($db, $trade_data) {
             $trade_data['trade_side'], $trade_data['quantity'], $trade_data['price'],
             $trade_data['consideration'], $trade_data['trade_date'], $trade_data['settlement_date'],
             $trade_data['currency'], $trade_data['sca_code'], 'active',
-            $trade_data['exchange_reference'], $trade_data['additional_reference']
+            $trade_data['exchange_reference'], $trade_data['additional_reference'],
+            $trade_data['trader'] ?? ''
         ]);
         
     } catch (Exception $e) {
@@ -1173,13 +1190,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $custodian_trades_processed = 0;
                                 $custodian_trades_recorded = 0;
                                 $company_investments_recorded = 0;
-                                $victory_b13_receivables_recorded = 0;
                                 $etf_trades_recorded = 0;
                                 $regulatory_assignments_created = 0;
                                 $csd_references_used = 0;
                                 $duplicates_skipped = 0;
                                 $duplicate_references = [];
                                 $client_trades_skipped = 0;
+                                $company_trades_brokerage_exempted = 0;
                                 
                                 foreach ($preview_data as $preview_row) {
                                     // Check if this is a duplicate
@@ -1193,7 +1210,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     $mapped_data = $preview_row['mapped_data'];
                                     $trade_reference = $preview_row['trade_reference'];
                                     $exchange_reference = $mapped_data['exchange_reference'];
-                                    $additional_reference = $mapped_data['additional_reference'] ?? ''; // NEW: Get Additional Reference
+                                    $additional_reference = $mapped_data['additional_reference'] ?? '';
+                                    $trader = $mapped_data['trader'] ?? '';
                                     
                                     $is_csd_reference = (getCSDReferenceForTrade($db, $mapped_data['client_cds'], 
                                         $mapped_data['security_id'], $mapped_data['trade_date'], 
@@ -1218,7 +1236,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     $consideration = !empty($mapped_data['consideration']) ? (float)$mapped_data['consideration'] : ($quantity * $price);
                                     $settlement_date = $mapped_data['settlement_date'];
                                     
-                                    error_log("Trade {$trade_reference}: Exchange Ref: {$exchange_reference}, Additional Ref: {$additional_reference}, Trade Date: {$trade_date}, Settlement Date: {$settlement_date}");
+                                    error_log("Trade {$trade_reference}: Exchange Ref: {$exchange_reference}, Additional Ref: {$additional_reference}, Trader: {$trader}, Trade Date: {$trade_date}, Settlement Date: {$settlement_date}");
                                     
                                     if (!empty($client_cds) && !empty($client_name)) {
                                         checkAndInsertClient($db, $client_cds, $client_name, $current_user['username'] ?? 'system');
@@ -1258,8 +1276,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                                 trade_side, quantity, price, consideration, trade_date, settlement_date,
                                                 currency, sca_code, status, uploaded_by, capacity, broker_name, 
                                                 counterparty_broker, brokerage_fee_type, final_brokerage_fee,
-                                                exchange_reference, additional_reference, time_executed, origin
-                                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                                exchange_reference, additional_reference, trader, time_executed, origin
+                                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                         ");
                                         
                                         $trade_insert_stmt->execute([
@@ -1272,11 +1290,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                             substr($mapped_data['broker_name'] ?? '', 0, 100), substr($mapped_data['counterparty_broker'] ?? '', 0, 100),
                                             $brokerage_fee_type, round($final_brokerage_fee_amount, 2),
                                             $exchange_reference, substr($additional_reference, 0, 100),
+                                            substr($trader, 0, 100),
                                             $mapped_data['time_executed'] ?? null,
                                             $mapped_data['origin'] ?? null
                                         ]);
                                         
-                                        error_log("Successfully inserted trade: {$trade_reference} - Exchange Ref: {$exchange_reference} - Additional Ref: {$additional_reference} - Trade Date: {$trade_date}");
+                                        error_log("Successfully inserted trade: {$trade_reference} - Exchange Ref: {$exchange_reference} - Additional Ref: {$additional_reference} - Trader: {$trader} - Trade Date: {$trade_date}");
                                     } else {
                                         error_log("Trade with Exchange Reference '{$exchange_reference}' already exists. Skipping.");
                                         $duplicates_skipped++;
@@ -1301,13 +1320,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                             'currency' => 'TZS', 
                                             'sca_code' => substr($sca_code, 0, 20),
                                             'exchange_reference' => $exchange_reference,
-                                            'additional_reference' => $additional_reference
+                                            'additional_reference' => $additional_reference,
+                                            'trader' => $trader
                                         ];
                                         if (recordETFTrade($db, $etf_trade_data)) $etf_trades_recorded++;
                                     }
                                     
                                     // =====================================================
-                                    // UPDATED: ONLY Company trades go to Marketable Securities (1151)
+                                    // ONLY Company trades go to Marketable Securities (1151)
                                     // Client trades are SKIPPED - will be entered manually via receipts
                                     // =====================================================
                                     if ($consideration > 0) {
@@ -1324,21 +1344,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         }
                                     }
                                     
-                                    // Fees are still recorded for ALL trades (both company and client)
+                                    // =====================================================
+                                    // Fees: EXEMPT ONLY brokerage for company trades
+                                    // ALL other fees (VAT, CMSA, DSE, CSDR, VRF) are recorded
+                                    // =====================================================
                                     if ($consideration > 0) {
                                         $fees = calculateEquityFees($db, $consideration);
                                         
+                                        // Record regulatory fee assignment - ALL trades
                                         if (recordRegulatoryFeeAssignment($db, $trade_reference, $fees, $client_name, $trade_date, 
                                             $security_id, $mapped_data['stock_name'], $consideration, $trade_side, 
                                             $current_user['username'] ?? 'system', $additional_reference)) {
                                             $regulatory_assignments_created++;
                                         }
                                         
+                                        // Create accounting entries - EXEMPT brokerage for company trades
                                         if (createEquityAccountingEntries($db, $trade_reference, $consideration, $fees, $trade_side, 
-                                            $client_name, $company_name, $trade_date, $is_custodian_trade)) {
+                                            $client_name, $company_name, $trade_date, $is_custodian_trade, $is_company_trade)) {
                                             $financial_entries_created++;
                                         }
                                         
+                                        // Custodian trades - EXEMPT brokerage for company trades
                                         if ($is_custodian_trade) {
                                             $custodian_trades_processed++;
                                             $stmt = $db->prepare("SELECT custodian_code, custodian_name FROM custodians WHERE custodian_code = ?");
@@ -1346,7 +1372,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                             $custodian = $stmt->fetch(PDO::FETCH_ASSOC);
                                             
                                             if ($custodian) {
-                                                $custodian_fees = calculateCustodianFees($fees);
+                                                $custodian_fees = calculateCustodianFees($fees, $is_company_trade);
                                                 $custodian_trade_data = [
                                                     'trade_reference' => $trade_reference,
                                                     'custodian_code' => substr($custodian['custodian_code'], 0, 50),
@@ -1371,6 +1397,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                                 if (recordCustodianTrade($db, $custodian_trade_data)) $custodian_trades_recorded++;
                                             }
                                         }
+                                        
+                                        // Track company trades with brokerage exempted
+                                        if ($is_company_trade) {
+                                            $company_trades_brokerage_exempted++;
+                                            error_log("Company trade - Brokerage EXEMPTED: {$trade_reference} - {$client_name}");
+                                        }
                                     }
                                     
                                     $processed++;
@@ -1382,6 +1414,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     $success_message = "Successfully processed {$processed} trades";
                                     if ($etf_trades_recorded > 0) $success_message .= " ({$etf_trades_recorded} ETF trades)";
                                     if ($csd_references_used > 0) $success_message .= " <strong>{$csd_references_used} CSD references used</strong>";
+                                    
+                                    // Show company trades with brokerage exempted
+                                    if ($company_trades_brokerage_exempted > 0) {
+                                        $success_message .= "<br><div class='alert alert-warning mt-2'><i class='bi bi-exclamation-triangle'></i> <strong>{$company_trades_brokerage_exempted} company trades had brokerage commission EXEMPTED.</strong>";
+                                        $success_message .= "<br><small>Company trades: Brokerage commission (411) is exempted. All other fees (VAT, CMSA, DSE, CSDR, VRF) are recorded.</small></div>";
+                                    }
+                                    
                                     if ($financial_entries_created > 0) $success_message .= ". Created financial entries for {$financial_entries_created} trades";
                                     if ($company_investments_recorded > 0) $success_message .= ". <strong>{$company_investments_recorded} company trades recorded to Marketable Securities (1151)</strong>";
                                     if ($regulatory_assignments_created > 0) $success_message .= ". <strong>{$regulatory_assignments_created} regulatory fee assignments created</strong>";
@@ -1404,6 +1443,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         $success_message .= "</div>";
                                     }
                                     
+                                    $success_message .= "<br><small><strong>Additional Reference:</strong> Supports numbers, empty values, or 'MTP' for Mobile Trading Platform payments.</small>";
+                                    $success_message .= "<br><small><strong>Trader:</strong> Captures the trader name from the CSV.</small>";
+                                    $success_message .= "<br><small><strong>Commission:</strong> Company trades EXEMPT brokerage commission only. All other fees (VAT, CMSA, DSE, CSDR, VRF) are recorded.</small>";
                                     $preview_data = [];
                                 }
                                 
@@ -1457,7 +1499,21 @@ include '../includes/header.php';
                 <strong>Code:</strong> <?php echo htmlspecialchars($company_code); ?>
             </small></p>
             
-       
+            <p class="text-warning small">
+                <i class="bi bi-exclamation-triangle"></i> <strong>Duplicate Detection:</strong> If you upload a file with trades that already exist (matching Exchange Reference), they will be <strong>SKIPPED</strong> and you will be alerted with the count and list of skipped references.
+            </p>
+            <p class="text-info small">
+                <i class="bi bi-info-circle"></i> <strong>Accounting Changes:</strong> <strong>ONLY Company trades</strong> post to <strong>Marketable Securities - Equities (1151)</strong>. Client trades are <strong>SKIPPED</strong> for manual receipt entry. <strong>No Cash at Bank entries</strong> are created for trades or fees.
+            </p>
+            <p class="text-success small">
+                <i class="bi bi-plus-circle"></i> <strong>NEW:</strong> <strong>Additional Reference</strong> column now supported - can contain a number, be empty, or contain "MTP".
+            </p>
+            <p class="text-primary small">
+                <i class="bi bi-person"></i> <strong>NEW:</strong> <strong>Trader</strong> column now supported - captures the trader name from the CSV.
+            </p>
+            <p class="text-warning small">
+                <i class="bi bi-exclamation-triangle"></i> <strong>Commission Exemption:</strong> Company trades EXEMPT brokerage commission (411). All other fees (VAT, CMSA, DSE, CSDR, VRF) are recorded.
+            </p>
         </div>
     </div>
 
@@ -1488,7 +1544,9 @@ include '../includes/header.php';
                         <div class="form-text">
                             <strong>IMPORTANT:</strong> Only rows with <strong>"Asset Class = Equity"</strong> or <strong>"Asset Class = Exchange Traded Funds"</strong> will be processed<br>
                             <strong>ACCOUNT UPDATE:</strong> <strong>ONLY Company trades</strong> post to <strong>Marketable Securities - Equities (1151)</strong>. Client trades are <strong>SKIPPED</strong> for manual receipt entry.<br>
-                            <strong>NEW:</strong> <strong>Additional Reference</strong> column is now supported - values can be a number, empty, or "MTP".
+                            <strong>NEW:</strong> <strong>Additional Reference</strong> column is now supported - values can be a number, empty, or "MTP".<br>
+                            <strong>NEW:</strong> <strong>Trader</strong> column is now supported - captures the trader name.<br>
+                            <strong>Commission:</strong> Company trades EXEMPT brokerage commission. All other fees (VAT, CMSA, DSE, CSDR, VRF) are recorded.
                         </div>
                     </div>
                     <button type="submit" class="btn btn-primary" id="uploadButton">
@@ -1528,7 +1586,7 @@ include '../includes/header.php';
                             <tr><th>Line</th><th>Security</th><th>Name</th><th>SCA Code</th><th>Trade Type</th>
                             <th>Asset Type</th><th>CSD Account</th><th>Buy\Sell</th><th>Quantity</th><th>Price</th>
                             <th>Consideration</th><th>Trade Date</th><th>Settlement Date</th><th>Exchange Ref</th>
-                            <th>Additional Ref</th><th>Status</th></tr>
+                            <th>Additional Ref</th><th>Trader</th><th>Brokerage Status</th><th>Status</th></tr>
                         </thead>
                         <tbody>
                             <?php foreach ($preview_data as $preview_row): 
@@ -1553,6 +1611,14 @@ include '../includes/header.php';
                                 <td><?php echo htmlspecialchars($mapped_data['settlement_date']); ?></td>
                                 <td><code class="small"><?php echo htmlspecialchars($mapped_data['exchange_reference'] ?: 'N/A'); ?></code></td>
                                 <td><code class="small"><?php echo htmlspecialchars($mapped_data['additional_reference'] ?: 'N/A'); ?></code></td>
+                                <td><?php echo htmlspecialchars($mapped_data['trader'] ?: 'N/A'); ?></td>
+                                <td>
+                                    <?php if ($preview_row['is_company_trade']): ?>
+                                        <span class="badge bg-warning">Exempted</span>
+                                    <?php else: ?>
+                                        <span class="badge bg-success">Recorded</span>
+                                    <?php endif; ?>
+                                </td>
                                 <td>
                                     <?php if ($is_dup): ?>
                                         <span class="badge bg-warning">Duplicate</span>
@@ -1564,7 +1630,7 @@ include '../includes/header.php';
                                 </td>
                             </tr>
                             <?php if ($preview_row['has_errors']): ?>
-                            <tr class="table-warning"><td colspan="16" class="small"><strong>Error:</strong> <?php echo htmlspecialchars(implode('; ', $preview_row['errors'])); ?></td></tr>
+                            <tr class="table-warning"><td colspan="18" class="small"><strong>Error:</strong> <?php echo htmlspecialchars(implode('; ', $preview_row['errors'])); ?></td></tr>
                             <?php endif; ?>
                             <?php endforeach; ?>
                         </tbody>
@@ -1596,6 +1662,11 @@ include '../includes/header.php';
                             <li>Can contain the word <strong>"MTP"</strong> (Mobile Trading Platform payments)</li>
                             <li>Stored in database for reference and tracking</li>
                         </ul>
+                        <small class="text-muted mt-2"><strong>NEW: Trader Column</strong></small>
+                        <ul class="mb-0">
+                            <li>Captures the <strong>Trader</strong> name from the CSV</li>
+                            <li>Stored in the trades table for reference</li>
+                        </ul>
                     </div>
                     <div class="col-md-6">
                         <small class="text-muted"><strong>TIERED BROKERAGE:</strong></small>
@@ -1611,25 +1682,33 @@ include '../includes/header.php';
                         <ul class="mb-0">
                             <li><strong>Company Trades</strong>: Marketable Securities - Equities (1151)</li>
                             <li><strong>Client Trades</strong>: SKIPPED (Manual Receipt Entry)</li>
-                            <li><strong>Brokerage</strong>: 411 (Income)</li>
-                            <li><strong>VAT</strong>: 213 (Liability)</li>
-                            <li><strong>CMSA</strong>: 2111 (Liability)</li>
-                            <li><strong>DSE</strong>: 2112 (Liability)</li>
-                            <li><strong>CSDR</strong>: 2113 (Liability)</li>
-                            <li><strong>VRF</strong>: 2114 (Liability)</li>
+                            <li><strong>Brokerage (411)</strong>: EXEMPTED for Company Trades</li>
+                            <li><strong>VAT (213)</strong>: Recorded for ALL Trades</li>
+                            <li><strong>CMSA (2111)</strong>: Recorded for ALL Trades</li>
+                            <li><strong>DSE (2112)</strong>: Recorded for ALL Trades</li>
+                            <li><strong>CSDR (2113)</strong>: Recorded for ALL Trades</li>
+                            <li><strong>VRF (2114)</strong>: Recorded for ALL Trades</li>
+                        </ul>
+                        <hr>
+                        <small class="text-muted"><strong>Commission Exemption:</strong></small>
+                        <ul class="mb-0">
+                            <li><span class="badge bg-warning">Company Trades</span> Brokerage (411) EXEMPTED</li>
+                            <li><span class="badge bg-success">Client Trades</span> All fees recorded including brokerage</li>
+                            <li><span class="badge bg-info">All Trades</span> VAT, CMSA, DSE, CSDR, VRF are recorded</li>
                         </ul>
                     </div>
                 </div>
                 <div class="mt-2 alert alert-info">
                     <small><strong>Example CSV format that works:</strong></small>
-                    <pre class="mt-2 mb-0 small"><code>Security    Asset Class    Trade Date    Settlement Date    Quantity    Price    Buy\Sell    Exchange Reference    Additional Reference
-CRDB        Equity         2026/01/05    2026/01/06         1000        5000     Buy         EXCH-001              12345
-VERTEX-ETF  Exchange Traded Funds 2026/01/06    2026/01/07         2100        400      Buy         EXCH-002              MTP
-TBL         Equity         2026/01/07    2026/01/08         500         2000     Sell        EXCH-003              </code></pre>
+                    <pre class="mt-2 mb-0 small"><code>Security    Asset Class    Trade Date    Settlement Date    Quantity    Price    Buy\Sell    Exchange Reference    Additional Reference    Trader
+CRDB        Equity         2026/01/05    2026/01/06         1000        5000     Buy         EXCH-001              12345               John Doe
+VERTEX-ETF  Exchange Traded Funds 2026/01/06    2026/01/07         2100        400      Buy         EXCH-002              MTP                 Jane Smith
+TBL         Equity         2026/01/07    2026/01/08         500         2000     Sell        EXCH-003                                  Bob Johnson</code></pre>
                     <small class="text-success"><strong>Note:</strong> Exchange Reference must be unique for each trade to prevent duplicates.</small>
                     <small class="text-warning"><strong>Duplicate Alert:</strong> If a trade with the same Exchange Reference already exists, it will be <strong>SKIPPED</strong> and you will be notified.</small>
                     <small class="text-info"><strong>Account Update:</strong> <strong>ONLY Company trades</strong> post to <strong>Marketable Securities - Equities (1151)</strong>. Client trades are <strong>SKIPPED</strong> for manual receipt entry. No Cash at Bank entries.</small>
                     <small class="text-primary"><strong>Additional Reference:</strong> Supports numbers, empty values, or "MTP" for Mobile Trading Platform payments.</small>
+                    <small class="text-warning"><strong>Commission Exemption:</strong> Company trades EXEMPT brokerage commission (411). All other fees (VAT, CMSA, DSE, CSDR, VRF) are recorded.</small>
                 </div>
             </div>
         </div>
