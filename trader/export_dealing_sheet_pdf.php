@@ -520,19 +520,21 @@ if (!$is_sell && $broker_bank_details) { // Only for BUY orders
     $pdf->SetTextColor(100, 100, 100);
     $pdf->Cell(0, 4, 'Reference: Use Sheet Reference as payment reference', 0, 1, 'L');
     $pdf->SetTextColor(0, 0, 0);
-    
-    $pdf->Ln(39);
 }
 
 // ============================================
 // ========== MAIN SECTION END ================
 // ============================================
 
-// Draw a decorative separator line
-$pdf->Ln(50);
+// Calculate the Y position for the footer (static position from bottom)
+// A4 page height is 297mm, bottom margin is 25mm, so footer starts at 272mm from top
+$footer_y_position = 272; // Fixed position from top of page
+
+// Move to the fixed footer position
+$pdf->SetY($footer_y_position);
 
 // ============================================
-// ========== FOOTER SECTION ==================
+// ========== FOOTER SECTION (STATIC) =========
 // ============================================
 
 // ========== SIGNATURES ==========
@@ -558,14 +560,6 @@ $pdf->Ln(2);
 $pdf->SetFont('helvetica', 'I', 7);
 $pdf->SetTextColor(80, 80, 80);
 
-// Admin signature line
-
-
-// Draw a light separator before disclaimer
-$pdf->SetDrawColor(220, 220, 220);
-$pdf->SetLineWidth(0.2);
-$pdf->Line(15, $pdf->GetY(), 195, $pdf->GetY());
-$pdf->SetDrawColor(0, 0, 0);
 $pdf->Ln(3);
 
 // ========== DISCLAIMER ==========
