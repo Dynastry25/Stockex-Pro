@@ -1391,18 +1391,7 @@ include '../includes/header.php';
             <p class="text-warning small">
                 <i class="bi bi-exclamation-triangle"></i> <strong>Duplicate Detection:</strong> If you upload a file with trades that already exist (matching Exchange Reference), they will be <strong>SKIPPED</strong> and you will be alerted with the count and list of skipped references.
             </p>
-            <p class="text-info small">
-                <i class="bi bi-info-circle"></i> <strong>Accounting Changes:</strong> <strong>ONLY Company trades</strong> post to <strong>Marketable Securities - Bonds (1152)</strong>. Client trades are <strong>SKIPPED</strong> for manual receipt entry. <strong>No Cash at Bank entries</strong> are created for trades or fees.
-            </p>
-            <p class="text-success small">
-                <i class="bi bi-plus-circle"></i> <strong>NEW:</strong> <strong>Additional Reference</strong> column now supported - can contain a number, be empty, or contain "MTP".
-            </p>
-            <p class="text-primary small">
-                <i class="bi bi-person"></i> <strong>NEW:</strong> <strong>Trader</strong> column now supported - captures the trader name from the CSV.
-            </p>
-            <p class="text-warning small">
-                <i class="bi bi-exclamation-triangle"></i> <strong>Commission Exemption:</strong> Company trades EXEMPT brokerage commission (411). All other fees (VAT, CMSA, DSE, CSDR) are recorded.
-            </p>
+          
         </div>
     </div>
 
