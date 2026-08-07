@@ -809,19 +809,17 @@ if (isset($_GET['ajax_action'])) {
         exit;
     }
     
+    // ============================================
+    // UPDATED: Search clients ONLY from clients table
+    // ============================================
     if ($_GET['ajax_action'] === 'search_clients') {
         $search = $_GET['search'] ?? '';
         try {
-            $stmt = $db->prepare("SELECT DISTINCT client_name, client_cds_account FROM trades WHERE client_name LIKE :search LIMIT 30");
+            // ONLY search in clients table
+            $stmt = $db->prepare("SELECT client_name, cds_account as client_cds_account FROM clients WHERE client_name LIKE :search LIMIT 30");
             $stmt->bindValue(':search', "%$search%");
             $stmt->execute();
             $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            if (empty($results)) {
-                $stmt = $db->prepare("SELECT client_name, cds_account as client_cds_account FROM clients WHERE client_name LIKE :search LIMIT 30");
-                $stmt->bindValue(':search', "%$search%");
-                $stmt->execute();
-                $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            }
             echo json_encode($results);
         } catch (Exception $e) {
             echo json_encode([]);
@@ -1440,10 +1438,15 @@ document.getElementById('editReceiptFiles')?.addEventListener('change', function
     }
 });
 
-// Client search
+// ============================================
+// UPDATED: Client search - ONLY from clients table
+// ============================================
 document.getElementById('client_search')?.addEventListener('input', function() {
     const search = this.value;
-    if (search.length < 2) { document.getElementById('client_search_dropdown').style.display = 'none'; return; }
+    if (search.length < 2) { 
+        document.getElementById('client_search_dropdown').style.display = 'none'; 
+        return; 
+    }
     fetch('order_sheet.php?ajax_action=search_clients&search=' + encodeURIComponent(search))
         .then(r => r.json()).then(data => {
             const dropdown = document.getElementById('client_search_dropdown');
@@ -1461,7 +1464,16 @@ document.getElementById('client_search')?.addEventListener('input', function() {
                     dropdown.appendChild(div);
                 });
                 dropdown.style.display = 'block';
-            } else dropdown.style.display = 'none';
+            } else {
+                // Show "No clients found" message
+                const div = document.createElement('div');
+                div.innerHTML = '<span class="text-muted">No clients found</span>';
+                div.style.cursor = 'default';
+                dropdown.appendChild(div);
+                dropdown.style.display = 'block';
+            }
+        }).catch(() => {
+            document.getElementById('client_search_dropdown').style.display = 'none';
         });
 });
 
@@ -1469,7 +1481,10 @@ document.getElementById('client_search')?.addEventListener('input', function() {
 document.getElementById('security_search')?.addEventListener('input', function() {
     const search = this.value;
     const assetClass = document.getElementById('asset_class').value;
-    if (search.length < 2) { document.getElementById('security_search_dropdown').style.display = 'none'; return; }
+    if (search.length < 2) { 
+        document.getElementById('security_search_dropdown').style.display = 'none'; 
+        return; 
+    }
     fetch('order_sheet.php?ajax_action=get_securities&asset_class=' + encodeURIComponent(assetClass) + '&search=' + encodeURIComponent(search))
         .then(r => r.json()).then(data => {
             const dropdown = document.getElementById('security_search_dropdown');
@@ -1491,7 +1506,15 @@ document.getElementById('security_search')?.addEventListener('input', function()
                     dropdown.appendChild(div);
                 });
                 dropdown.style.display = 'block';
-            } else dropdown.style.display = 'none';
+            } else {
+                const div = document.createElement('div');
+                div.innerHTML = '<span class="text-muted">No securities found</span>';
+                div.style.cursor = 'default';
+                dropdown.appendChild(div);
+                dropdown.style.display = 'block';
+            }
+        }).catch(() => {
+            document.getElementById('security_search_dropdown').style.display = 'none';
         });
 });
 
@@ -1514,11 +1537,23 @@ document.getElementById('orderForm')?.addEventListener('submit', function(e) {
         });
 });
 
-function escapeHtml(text) { if (!text) return ''; return text.replace(/[&<>]/g, function(m) { if (m === '&') return '&amp;'; if (m === '<') return '&lt;'; if (m === '>') return '&gt;'; return m; }); }
+function escapeHtml(text) { 
+    if (!text) return ''; 
+    return text.replace(/[&<>]/g, function(m) { 
+        if (m === '&') return '&amp;'; 
+        if (m === '<') return '&lt;'; 
+        if (m === '>') return '&gt;'; 
+        return m; 
+    }); 
+}
 
 document.addEventListener('click', function(e) {
-    if (!document.getElementById('client_search')?.contains(e.target)) document.getElementById('client_search_dropdown').style.display = 'none';
-    if (!document.getElementById('security_search')?.contains(e.target)) document.getElementById('security_search_dropdown').style.display = 'none';
+    if (!document.getElementById('client_search')?.contains(e.target)) {
+        document.getElementById('client_search_dropdown').style.display = 'none';
+    }
+    if (!document.getElementById('security_search')?.contains(e.target)) {
+        document.getElementById('security_search_dropdown').style.display = 'none';
+    }
 });
 
 function openDealingReceiptModal(sheetId, sheetRef) {
