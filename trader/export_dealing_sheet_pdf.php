@@ -1,5 +1,10 @@
 <?php
-
+/**
+ * Export Order Sheet as PDF
+ * Separate file to avoid conflicts with main page
+ * 
+ * Usage: export_order_sheet_pdf.php?id=123
+ */
 
 // Error reporting for debugging (disable in production)
 error_reporting(E_ALL);
@@ -80,7 +85,7 @@ function getUserDisplayName($user) {
 $exportedByName = getUserDisplayName($current_user);
 
 // ============================================
-// FEES CALCULATION
+// FEES CALCULATION - FIXED FOR BONDS
 // ============================================
 function calculateFees($asset_class, $consideration, $quantity, $price) {
     $fees = [
@@ -97,10 +102,10 @@ function calculateFees($asset_class, $consideration, $quantity, $price) {
     $is_bond = ($asset_class === 'bond');
     
     if ($is_bond) {
-        // BOND FEES - based on FACE VALUE
+        // BOND FEES - based on FACE VALUE (quantity is face value)
         $face_value = $quantity;
         
-        // Brokerage: 0.063132% on first 100M, 0.035% on excess
+        // Brokerage: 0.063132% on first 100M, 0.035% on excess (based on FACE VALUE)
         $brokerage_first = min($face_value, 100000000) * (0.063132 / 100);
         $brokerage_excess = max($face_value - 100000000, 0) * (0.035 / 100);
         $fees['brokerage'] = $brokerage_first + $brokerage_excess;
@@ -117,9 +122,9 @@ function calculateFees($asset_class, $consideration, $quantity, $price) {
         }
         
         $fees['vat'] = $fees['brokerage'] * 0.18;
-        $fees['cmsa'] = $consideration * (0.0100 / 100);
-        $fees['csd'] = $face_value * (0.0118 / 100);
-        $fees['dse'] = $face_value * (0.02006 / 100);
+        $fees['cmsa'] = $consideration * (0.0100 / 100); // CMSA is based on CONSIDERATION
+        $fees['csd'] = $face_value * (0.0118 / 100);      // CSD based on FACE VALUE
+        $fees['dse'] = $face_value * (0.02006 / 100);     // DSE based on FACE VALUE
         $fees['fidelity'] = 0;
         
     } else {
@@ -155,26 +160,52 @@ function calculateFees($asset_class, $consideration, $quantity, $price) {
     return $fees;
 }
 
-// Calculate values
+// ============================================
+// CALCULATE VALUES - FIXED FOR BONDS
+// ============================================
 $executed_qty = floatval($sheet['executed_quantity'] ?? 0);
 $executed_price = floatval($sheet['executed_price'] ?? 0);
 $order_qty = floatval($sheet['quantity'] ?? 0);
 $order_price = floatval($sheet['order_price'] ?? 0);
 
+$is_bond = ($sheet['asset_class'] === 'bond');
+
+// Determine quantity and price to use
 if ($executed_qty > 0 && $executed_price > 0) {
-    $consideration = $executed_qty * $executed_price;
     $quantity = $executed_qty;
     $price = $executed_price;
-    $executed_value = $consideration;
 } else {
-    $consideration = $order_qty * $order_price;
     $quantity = $order_qty;
     $price = $order_price;
+}
+
+// ============================================
+// FIXED: Calculate Consideration for Bonds
+// ============================================
+if ($is_bond) {
+    // For bonds: Consideration = (Price% / 100) × Face Value
+    // Example: Price 98.5000% of Face Value 100,000,000 = 98,500,000
+    $consideration = ($price / 100) * $quantity;
+} else {
+    // For equities/ETFs: Consideration = Quantity × Price
+    $consideration = $quantity * $price;
+}
+
+// For display purposes - executed value
+if ($executed_qty > 0 && $executed_price > 0) {
+    if ($is_bond) {
+        $executed_value = ($executed_price / 100) * $executed_qty;
+    } else {
+        $executed_value = $executed_qty * $executed_price;
+    }
+} else {
     $executed_value = 0;
 }
 
+// ============================================
+// CALCULATE FEES
+// ============================================
 $fees = calculateFees($sheet['asset_class'], $consideration, $quantity, $price);
-$is_bond = ($sheet['asset_class'] === 'bond');
 $trade_side = strtoupper($sheet['order_type'] ?? 'BUY');
 $is_sell = ($trade_side === 'SELL');
 
@@ -232,7 +263,7 @@ if ($is_sell) {
     $transaction_fee = calculateTransactionFee($consideration);
 }
 
-// CORRECTED FORMULA: 
+// CORRECTED FORMULA:
 // For BUY: Total Payable = Consideration + Total Charges (NO transaction fee)
 // For SELL: Total Receivable = Consideration - Total Charges (WITH transaction fee)
 if ($is_sell) {
@@ -291,7 +322,7 @@ $pdf->SetFont('helvetica', 'B', 16);
 $pdf->Cell(0, 8, 'ORDER SHEET', 0, 1, 'C');
 $pdf->Ln(2);
 
-// Document info - REMOVED broker_code and department
+// Document info
 $pdf->SetFont('helvetica', '', 9);
 $pdf->Cell(50, 5, 'Sheet Reference:', 0, 0);
 $pdf->SetFont('helvetica', 'B', 9);
@@ -351,19 +382,19 @@ $pdf->Cell(0, 6, $sheet['security_id'] ?? 'N/A', 0, 1);
 $pdf->SetFont('helvetica', '', 9);
 $pdf->Cell(45, 6, 'Quantity:', 0, 0);
 $pdf->SetFont('helvetica', 'B', 9);
-$pdf->Cell(40, 6, number_format($order_qty, ($is_bond ? 2 : 0)), 0, 0);
+$pdf->Cell(40, 6, number_format($quantity, ($is_bond ? 2 : 0)), 0, 0);
 $pdf->SetFont('helvetica', '', 9);
 $pdf->Cell(30, 6, 'Price:', 0, 0);
 $pdf->SetFont('helvetica', 'B', 9);
 if ($is_bond) {
-    $pdf->Cell(0, 6, number_format($order_price, 2) . '%', 0, 1);
+    $pdf->Cell(0, 6, number_format($price, 4) . '%', 0, 1);
 } else {
-    $pdf->Cell(0, 6, 'TZS ' . number_format($order_price, 2), 0, 1);
+    $pdf->Cell(0, 6, 'TZS ' . number_format($price, 2), 0, 1);
 }
 
 // Row 4
 $pdf->SetFont('helvetica', '', 9);
-$pdf->Cell(45, 6, 'Consideration Value:', 0, 0);
+$pdf->Cell(45, 6, 'Consideration:', 0, 0);
 $pdf->SetFont('helvetica', 'B', 9);
 $pdf->Cell(40, 6, 'TZS ' . number_format($consideration, 2), 0, 0);
 $pdf->SetFont('helvetica', '', 9);
@@ -371,6 +402,14 @@ $pdf->Cell(30, 6, 'Order Date:', 0, 0);
 $pdf->SetFont('helvetica', 'B', 9);
 $order_date = date('d/m/Y', strtotime($sheet['order_date'] ?? date('Y-m-d')));
 $pdf->Cell(0, 6, $order_date, 0, 1);
+
+// Add note for bond consideration
+if ($is_bond) {
+    $pdf->SetFont('helvetica', 'I', 6.5);
+    $pdf->SetTextColor(100, 100, 100);
+    $pdf->Cell(0, 4, 'Bond Consideration = (Price% / 100) × Face Value', 0, 1, 'L');
+    $pdf->SetTextColor(0, 0, 0);
+}
 
 $pdf->Ln(2);
 
@@ -382,7 +421,7 @@ $pdf->Cell(0, 7, '3. FEES AND CHARGES', 0, 1, 'L', true);
 // Table header
 $pdf->SetFont('helvetica', 'B', 8);
 $pdf->Cell(100, 6, 'Description', 0, 0, 'L');
-$pdf->Cell(45, 6, 'Rate', 0, 0, 'R');
+$pdf->Cell(45, 6, 'Rate / Basis', 0, 0, 'R');
 $pdf->Cell(40, 6, 'Amount (TZS)', 0, 1, 'R');
 $pdf->SetLineWidth(0.2);
 $pdf->Line(15, $pdf->GetY(), 195, $pdf->GetY());
@@ -391,7 +430,7 @@ $pdf->SetFont('helvetica', '', 8);
 
 // Brokerage
 $pdf->Cell(100, 5, 'Brokerage Commission', 0, 0, 'L');
-$pdf->Cell(45, 5, $is_bond ? 'Tiered' : 'Tiered', 0, 0, 'R');
+$pdf->Cell(45, 5, $is_bond ? 'Tiered (Face Value)' : 'Tiered (Consideration)', 0, 0, 'R');
 $pdf->Cell(40, 5, number_format($fees['brokerage'], 2), 0, 1, 'R');
 
 // Tier details
@@ -412,30 +451,29 @@ $pdf->Cell(45, 5, '@ 18.00%', 0, 0, 'R');
 $pdf->Cell(40, 5, number_format($fees['vat'], 2), 0, 1, 'R');
 
 // CMSA
-$cmsa_rate = $is_bond ? '0.0100%' : '0.1400%';
+$cmsa_rate = $is_bond ? '0.0100% (Consideration)' : '0.1400% (Consideration)';
 $pdf->Cell(100, 5, 'CMSA Transaction Fee', 0, 0, 'L');
 $pdf->Cell(45, 5, '@ ' . $cmsa_rate, 0, 0, 'R');
 $pdf->Cell(40, 5, number_format($fees['cmsa'], 2), 0, 1, 'R');
 
 // DSE
-$dse_rate = $is_bond ? '0.02006%' : '0.1652%';
-$dse_label = $is_bond ? '@ ' . $dse_rate . ' (FV)' : '@ ' . $dse_rate;
+$dse_rate = $is_bond ? '0.02006% (Face Value)' : '0.1652% (Consideration)';
 $pdf->Cell(100, 5, 'DSE Transaction Fee', 0, 0, 'L');
-$pdf->Cell(45, 5, $dse_label, 0, 0, 'R');
+$pdf->Cell(45, 5, '@ ' . $dse_rate, 0, 0, 'R');
 $pdf->Cell(40, 5, number_format($fees['dse'], 2), 0, 1, 'R');
 
 // Fidelity (Equity/ETF only)
 if (!$is_bond) {
     $pdf->Cell(100, 5, 'Fidelity Fee', 0, 0, 'L');
-    $pdf->Cell(45, 5, '@ 0.0200%', 0, 0, 'R');
+    $pdf->Cell(45, 5, '@ 0.0200% (Consideration)', 0, 0, 'R');
     $pdf->Cell(40, 5, number_format($fees['fidelity'], 2), 0, 1, 'R');
 }
 
-// CDS
-$cds_rate = $is_bond ? '0.0118%' : '0.0708%';
-$cds_label = $is_bond ? '@ ' . $cds_rate . ' (FV)' : '@ ' . $cds_rate;
-$pdf->Cell(100, 5, 'CDS Fee', 0, 0, 'L');
-$pdf->Cell(45, 5, $cds_label, 0, 0, 'R');
+// CDS/CSD
+$cds_rate = $is_bond ? '0.0118% (Face Value)' : '0.0708% (Consideration)';
+$cds_label = $is_bond ? 'CSD Fee' : 'CDS Fee';
+$pdf->Cell(100, 5, $cds_label, 0, 0, 'L');
+$pdf->Cell(45, 5, '@ ' . $cds_rate, 0, 0, 'R');
 $pdf->Cell(40, 5, number_format($fees['csd'], 2), 0, 1, 'R');
 
 // Transaction Fee - ONLY FOR SELL
@@ -468,8 +506,7 @@ $pdf->SetTextColor(0, 0, 0);
 
 $pdf->Ln(3);
 
-// ========== SECTION 4: BROKER BANK DETAILS (BUY ONLY) - SINGLE COLUMN ==========
-// ========== SECTION 4: BROKER BANK DETAILS (BUY ONLY) - SINGLE COLUMN ==========
+// ========== SECTION 4: BROKER BANK DETAILS (BUY ONLY) ==========
 if (!$is_sell && $broker_bank_details) { // Only for BUY orders
     $pdf->SetFont('helvetica', 'B', 9);
     $pdf->SetFillColor(230, 230, 230);
@@ -481,7 +518,6 @@ if (!$is_sell && $broker_bank_details) { // Only for BUY orders
     $pdf->SetTextColor(0, 0, 0);
     $pdf->Ln(1);
     
-    // Single column bank details
     $pdf->SetFont('helvetica', '', 8);
     $pdf->Cell(35, 5, 'Bank:', 0, 0);
     $pdf->SetFont('helvetica', 'B', 8);
@@ -518,19 +554,9 @@ if (!$is_sell && $broker_bank_details) { // Only for BUY orders
 }
 
 // ============================================
-// ========== MAIN SECTION END ================
+// FOOTER SECTION
 // ============================================
-
-// Calculate the Y position for the footer (static position from bottom)
-// A4 page height is 297mm, bottom margin is 25mm, so footer starts at 272mm from top
-$footer_y_position = 240; // Fixed position from top of page
-
-// Move to the fixed footer position
-$pdf->SetY($footer_y_position);
-
-// ============================================
-// ========== FOOTER SECTION (STATIC) =========
-// ============================================
+$pdf->SetY(240);
 
 // ========== SIGNATURES ==========
 $pdf->SetFont('helvetica', 'B', 9);
@@ -551,12 +577,6 @@ $pdf->Cell(0, 10, '', 0, 1, 'L');
 
 $pdf->Ln(2);
 
-// ========== ADMIN FOOTER ==========
-$pdf->SetFont('helvetica', 'I', 7);
-$pdf->SetTextColor(80, 80, 80);
-
-$pdf->Ln(3);
-
 // ========== DISCLAIMER ==========
 $pdf->SetFont('helvetica', 'I', 5.5);
 $pdf->SetTextColor(120, 120, 120);
@@ -566,13 +586,9 @@ $pdf->MultiCell(0, 3, $disclaimer, 0, 'C');
 $pdf->SetTextColor(0, 0, 0);
 
 // ============================================
-// ========== END FOOTER SECTION ==============
+// OUTPUT PDF
 // ============================================
-
-// Output PDF
 $filename = 'order_sheet_' . preg_replace('/[^a-zA-Z0-9_-]/', '_', $sheet['sheet_reference'] ?? 'export') . '.pdf';
 $pdf->Output($filename, 'I');
 exit;
 ?>
-
-
