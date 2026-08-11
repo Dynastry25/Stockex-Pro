@@ -1,10 +1,5 @@
 <?php
-/**
- * Export Order Sheet as PDF
- * Separate file to avoid conflicts with main page
- * 
- * Usage: export_order_sheet_pdf.php?id=123BANK
- */
+
 
 // Error reporting for debugging (disable in production)
 error_reporting(E_ALL);
