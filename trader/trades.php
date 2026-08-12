@@ -1275,7 +1275,6 @@ function generateContractNotePDF($trade_id, $contract_type = 'single') {
 // Function to generate summary contract note for multiple trades
 function generateSummaryContractNote($client_id, $trade_date, $trade_side, $security_id) {
     global $db, $company_name, $current_user, $standard_rate_percentage;
-    error_log("Generating summary for: client=$client_id, date=$trade_date, side=$trade_side, security=$security_id");
     
     $stmt = $db->prepare("
         SELECT t.*, 
