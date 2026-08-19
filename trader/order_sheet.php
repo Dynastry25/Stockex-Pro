@@ -627,12 +627,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
             }
         }
         
+        // ============================================
+        // FIXED: Generate unique sheet reference
+        // ============================================
         if (empty($data['id'])) {
             $prefix = 'DS' . date('Ymd');
-            $stmt = $db->prepare("SELECT COUNT(*) FROM dealing_sheets WHERE sheet_reference LIKE ?");
+            
+            // Find the highest existing number for today
+            $stmt = $db->prepare("SELECT sheet_reference FROM dealing_sheets WHERE sheet_reference LIKE ? ORDER BY sheet_reference DESC LIMIT 1");
             $stmt->execute([$prefix . '%']);
-            $count = $stmt->fetchColumn() + 1;
-            $data['sheet_reference'] = $prefix . str_pad($count, 4, '0', STR_PAD_LEFT);
+            $last_ref = $stmt->fetchColumn();
+            
+            if ($last_ref) {
+                // Extract the number part and increment
+                $last_num = (int)substr($last_ref, -4);
+                $next_num = $last_num + 1;
+            } else {
+                $next_num = 1;
+            }
+            
+            $data['sheet_reference'] = $prefix . str_pad($next_num, 4, '0', STR_PAD_LEFT);
+            
+            // Safety net: If for some reason this reference already exists, keep incrementing
+            $check_stmt = $db->prepare("SELECT COUNT(*) FROM dealing_sheets WHERE sheet_reference = ?");
+            $check_stmt->execute([$data['sheet_reference']]);
+            if ($check_stmt->fetchColumn() > 0) {
+                // Find the actual max by getting the highest number
+                $stmt = $db->prepare("SELECT MAX(CAST(SUBSTRING(sheet_reference, -4) AS UNSIGNED)) as max_num 
+                                      FROM dealing_sheets 
+                                      WHERE sheet_reference LIKE ? AND sheet_reference REGEXP '^DS[0-9]{12}[0-9]{4}$'");
+                $stmt->execute([$prefix . '%']);
+                $result = $stmt->fetch(PDO::FETCH_ASSOC);
+                $next_num = ($result['max_num'] ?? 0) + 1;
+                $data['sheet_reference'] = $prefix . str_pad($next_num, 4, '0', STR_PAD_LEFT);
+            }
         }
         
         // Map priority
