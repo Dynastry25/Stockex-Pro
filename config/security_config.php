@@ -22,7 +22,7 @@ define('RATE_LIMIT_WINDOW', 60); // 1 minute
 define('ENVIRONMENT', 'production'); // 'development' or 'production'
 
 // Notifications
-define('ADMIN_NOTIFY_EMAIL', 'admin@yourdomain.com');
+define('ADMIN_NOTIFY_EMAIL', 'emswima@vfsl.co.tz');
 define('SYSTEM_EMAIL', 'noreply@yourdomain.com');
 
 // SMS Gateway (if using)
