@@ -382,6 +382,16 @@ function isImageReceipt($ref) {
     return in_array($ext, ['jpg', 'jpeg', 'png', 'gif']);
 }
 
+// Merge comma-separated receipt reference lists without duplicates
+function mergeReceiptRefs($existing, $new) {
+    $combined = array_merge(
+        !empty($existing) ? array_map('trim', explode(',', $existing)) : [],
+        !empty($new) ? array_map('trim', explode(',', $new)) : []
+    );
+    $combined = array_filter($combined);
+    return implode(',', array_values(array_unique($combined)));
+}
+
 // ============================================
 // Function to detect counterparty type using brokers table
 // ============================================
@@ -609,9 +619,9 @@ if (isset($_POST['upload_receipt'])) {
     }
     
     $redirect = 'dealing_sheet.php?' . http_build_query(array_filter([
-        'filter' => $_GET['filter'] ?? 'pending',
-        'asset_class' => $_GET['asset_class'] ?? 'all',
-        'search' => $_GET['search'] ?? ''
+        'filter' => $_POST['filter'] ?? $_GET['filter'] ?? 'pending',
+        'asset_class' => $_POST['asset_class'] ?? $_GET['asset_class'] ?? 'all',
+        'search' => $_POST['search'] ?? $_GET['search'] ?? ''
     ]));
     header('Location: ' . $redirect);
     exit;
@@ -849,12 +859,14 @@ foreach ($trades as $trade) {
     $grouped_trades[$group_key]['trade_count']++;
     $grouped_trades[$group_key]['fee_sum'] += (float)($trade['final_brokerage_fee'] ?? 0);
     
-    // Keep the most recent receipt info and fee type
+    // Merge receipt info across all trades in the group
     if (!empty($trade['payment_receipt'])) {
-        $grouped_trades[$group_key]['payment_receipt'] = $trade['payment_receipt'];
+        $existing = $grouped_trades[$group_key]['payment_receipt'];
+        $grouped_trades[$group_key]['payment_receipt'] = mergeReceiptRefs($existing, $trade['payment_receipt']);
     }
     if (!empty($trade['commission_receipt'])) {
-        $grouped_trades[$group_key]['commission_receipt'] = $trade['commission_receipt'];
+        $existing = $grouped_trades[$group_key]['commission_receipt'];
+        $grouped_trades[$group_key]['commission_receipt'] = mergeReceiptRefs($existing, $trade['commission_receipt']);
     }
     if (!empty($trade['receipt_comment'])) {
         $grouped_trades[$group_key]['receipt_comment'] = $trade['receipt_comment'];
@@ -1896,18 +1908,33 @@ function viewTrade(btn) {
 
 // Open upload modal
 function openUpload(tradeId, type) {
-    document.getElementById('modal_trade_id').value = tradeId;
-    document.getElementById('modal_receipt_type').value = type;
-    
-    const label = document.getElementById('modal_receipt_label');
-    if (type === 'commission') {
-        label.textContent = 'Commission Receipt';
-    } else {
-        label.textContent = 'Payment Receipt';
+    var tid = document.getElementById('modal_trade_id');
+    var typ = document.getElementById('modal_receipt_type');
+    var label = document.getElementById('modal_receipt_label');
+    if (tid) tid.value = tradeId;
+    if (typ) typ.value = type;
+    if (label) {
+        label.textContent = (type === 'commission') ? 'Commission Receipt' : 'Payment Receipt';
     }
-    
-    new bootstrap.Modal(document.getElementById('uploadModal')).show();
+
+    // Clear file input so the same/another file can be selected again
+    var fileInput = document.querySelector('#uploadModal input[type="file"]');
+    if (fileInput) fileInput.value = '';
+
+    // Reuse a single persistent instance (Bootstrap handles hide/show internally)
+    var modalEl = document.getElementById('uploadModal');
+    if (modalEl) bootstrap.Modal.getOrCreateInstance(modalEl).show();
 }
+
+// Clean up any leftover modal state/backdrop when returning via back-forward cache
+window.addEventListener('pageshow', function(e) {
+    if (e.persisted) {
+        var el = document.getElementById('uploadModal');
+        if (el && bootstrap.Modal.getInstance(el)) bootstrap.Modal.getInstance(el).dispose();
+        document.querySelectorAll('.modal-backdrop').forEach(function(b) { b.remove(); });
+        document.body.classList.remove('modal-open');
+    }
+});
 
 // Auto-dismiss alerts
 document.querySelectorAll('.alert').forEach(el => {
