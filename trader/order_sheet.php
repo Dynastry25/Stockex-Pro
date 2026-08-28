@@ -339,7 +339,7 @@ class DealingSheetPDF extends TCPDF {
             $this->Cell(0, 6, 'Remarks:', 0, 1);
             $this->SetFont('helvetica', '', 9);
             $this->MultiCell(0, 5, $sheet['remarks'], 0, 'L');
-            $this->Ln(4);
+            $this->Ln(10);
         }
 
         // ============================================
@@ -627,12 +627,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
             }
         }
         
+        // ============================================
+        // FIXED: Generate unique sheet reference
+        // ============================================
         if (empty($data['id'])) {
             $prefix = 'DS' . date('Ymd');
-            $stmt = $db->prepare("SELECT COUNT(*) FROM dealing_sheets WHERE sheet_reference LIKE ?");
+            
+            // Find the highest existing number for today
+            $stmt = $db->prepare("SELECT sheet_reference FROM dealing_sheets WHERE sheet_reference LIKE ? ORDER BY sheet_reference DESC LIMIT 1");
             $stmt->execute([$prefix . '%']);
-            $count = $stmt->fetchColumn() + 1;
-            $data['sheet_reference'] = $prefix . str_pad($count, 4, '0', STR_PAD_LEFT);
+            $last_ref = $stmt->fetchColumn();
+            
+            if ($last_ref) {
+                // Extract the number part and increment
+                $last_num = (int)substr($last_ref, -4);
+                $next_num = $last_num + 1;
+            } else {
+                $next_num = 1;
+            }
+            
+            $data['sheet_reference'] = $prefix . str_pad($next_num, 4, '0', STR_PAD_LEFT);
+            
+            // Safety net: If for some reason this reference already exists, keep incrementing
+            $check_stmt = $db->prepare("SELECT COUNT(*) FROM dealing_sheets WHERE sheet_reference = ?");
+            $check_stmt->execute([$data['sheet_reference']]);
+            if ($check_stmt->fetchColumn() > 0) {
+                // Find the actual max by getting the highest number
+                $stmt = $db->prepare("SELECT MAX(CAST(SUBSTRING(sheet_reference, -4) AS UNSIGNED)) as max_num 
+                                      FROM dealing_sheets 
+                                      WHERE sheet_reference LIKE ? AND sheet_reference REGEXP '^DS[0-9]{12}[0-9]{4}$'");
+                $stmt->execute([$prefix . '%']);
+                $result = $stmt->fetch(PDO::FETCH_ASSOC);
+                $next_num = ($result['max_num'] ?? 0) + 1;
+                $data['sheet_reference'] = $prefix . str_pad($next_num, 4, '0', STR_PAD_LEFT);
+            }
         }
         
         // Map priority
@@ -809,19 +837,17 @@ if (isset($_GET['ajax_action'])) {
         exit;
     }
     
+    // ============================================
+    // UPDATED: Search clients ONLY from clients table
+    // ============================================
     if ($_GET['ajax_action'] === 'search_clients') {
         $search = $_GET['search'] ?? '';
         try {
-            $stmt = $db->prepare("SELECT DISTINCT client_name, client_cds_account FROM trades WHERE client_name LIKE :search LIMIT 30");
+            // ONLY search in clients table
+            $stmt = $db->prepare("SELECT client_name, cds_account as client_cds_account FROM clients WHERE client_name LIKE :search LIMIT 30");
             $stmt->bindValue(':search', "%$search%");
             $stmt->execute();
             $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            if (empty($results)) {
-                $stmt = $db->prepare("SELECT client_name, cds_account as client_cds_account FROM clients WHERE client_name LIKE :search LIMIT 30");
-                $stmt->bindValue(':search', "%$search%");
-                $stmt->execute();
-                $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            }
             echo json_encode($results);
         } catch (Exception $e) {
             echo json_encode([]);
@@ -1440,10 +1466,15 @@ document.getElementById('editReceiptFiles')?.addEventListener('change', function
     }
 });
 
-// Client search
+// ============================================
+// UPDATED: Client search - ONLY from clients table
+// ============================================
 document.getElementById('client_search')?.addEventListener('input', function() {
     const search = this.value;
-    if (search.length < 2) { document.getElementById('client_search_dropdown').style.display = 'none'; return; }
+    if (search.length < 2) { 
+        document.getElementById('client_search_dropdown').style.display = 'none'; 
+        return; 
+    }
     fetch('order_sheet.php?ajax_action=search_clients&search=' + encodeURIComponent(search))
         .then(r => r.json()).then(data => {
             const dropdown = document.getElementById('client_search_dropdown');
@@ -1461,7 +1492,16 @@ document.getElementById('client_search')?.addEventListener('input', function() {
                     dropdown.appendChild(div);
                 });
                 dropdown.style.display = 'block';
-            } else dropdown.style.display = 'none';
+            } else {
+                // Show "No clients found" message
+                const div = document.createElement('div');
+                div.innerHTML = '<span class="text-muted">No clients found</span>';
+                div.style.cursor = 'default';
+                dropdown.appendChild(div);
+                dropdown.style.display = 'block';
+            }
+        }).catch(() => {
+            document.getElementById('client_search_dropdown').style.display = 'none';
         });
 });
 
@@ -1469,7 +1509,10 @@ document.getElementById('client_search')?.addEventListener('input', function() {
 document.getElementById('security_search')?.addEventListener('input', function() {
     const search = this.value;
     const assetClass = document.getElementById('asset_class').value;
-    if (search.length < 2) { document.getElementById('security_search_dropdown').style.display = 'none'; return; }
+    if (search.length < 2) { 
+        document.getElementById('security_search_dropdown').style.display = 'none'; 
+        return; 
+    }
     fetch('order_sheet.php?ajax_action=get_securities&asset_class=' + encodeURIComponent(assetClass) + '&search=' + encodeURIComponent(search))
         .then(r => r.json()).then(data => {
             const dropdown = document.getElementById('security_search_dropdown');
@@ -1491,7 +1534,15 @@ document.getElementById('security_search')?.addEventListener('input', function()
                     dropdown.appendChild(div);
                 });
                 dropdown.style.display = 'block';
-            } else dropdown.style.display = 'none';
+            } else {
+                const div = document.createElement('div');
+                div.innerHTML = '<span class="text-muted">No securities found</span>';
+                div.style.cursor = 'default';
+                dropdown.appendChild(div);
+                dropdown.style.display = 'block';
+            }
+        }).catch(() => {
+            document.getElementById('security_search_dropdown').style.display = 'none';
         });
 });
 
@@ -1514,11 +1565,23 @@ document.getElementById('orderForm')?.addEventListener('submit', function(e) {
         });
 });
 
-function escapeHtml(text) { if (!text) return ''; return text.replace(/[&<>]/g, function(m) { if (m === '&') return '&amp;'; if (m === '<') return '&lt;'; if (m === '>') return '&gt;'; return m; }); }
+function escapeHtml(text) { 
+    if (!text) return ''; 
+    return text.replace(/[&<>]/g, function(m) { 
+        if (m === '&') return '&amp;'; 
+        if (m === '<') return '&lt;'; 
+        if (m === '>') return '&gt;'; 
+        return m; 
+    }); 
+}
 
 document.addEventListener('click', function(e) {
-    if (!document.getElementById('client_search')?.contains(e.target)) document.getElementById('client_search_dropdown').style.display = 'none';
-    if (!document.getElementById('security_search')?.contains(e.target)) document.getElementById('security_search_dropdown').style.display = 'none';
+    if (!document.getElementById('client_search')?.contains(e.target)) {
+        document.getElementById('client_search_dropdown').style.display = 'none';
+    }
+    if (!document.getElementById('security_search')?.contains(e.target)) {
+        document.getElementById('security_search_dropdown').style.display = 'none';
+    }
 });
 
 function openDealingReceiptModal(sheetId, sheetRef) {

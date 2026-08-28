@@ -11,7 +11,8 @@ define('TRADE_RECEIVABLE_ACCOUNT_CODE', '1121');
 define('BROKERAGE_COMMISSION_INCOME_CODE', '411');
 define('CASH_AT_BANK_CODE', '1112');
 define('VAT_PAYABLE_CODE', '213');
-
+// Account codes for bonds
+define('MARKETABLE_SECURITIES_BONDS_CODE', '1152'); // Marketable Securities - Bonds
 // --- Regulatory Fee Payable Account Codes ---
 define('CMSA_PAYABLE_CODE', '2111');
 define('DSE_PAYABLE_CODE', '2112');

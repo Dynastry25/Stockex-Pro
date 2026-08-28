@@ -9,7 +9,7 @@ on:
 jobs:
   deploy:
     name: Deploy to Oracle Ubuntu Server
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
 
     steps:
       - name: Prepare SSH key

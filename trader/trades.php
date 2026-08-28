@@ -136,7 +136,7 @@ if (isset($_GET['export']) && $_GET['export'] == 'csv') {
     $export_stmt = $db->prepare("
         SELECT t.*, cl.default_brokerage_fee, cl.fee_type as client_fee_type, cl.liberty_mode as client_liberty_mode
         FROM trades t
-        LEFT JOIN clients cl ON t.client_name = cl.client_name
+        LEFT JOIN clients cl ON t.client_cds_account = cl.cds_account
         WHERE $where_clause
         ORDER BY t.created_at DESC
     ");
@@ -276,14 +276,11 @@ function calculateBrokerageFee($trade, $rate_percentage, $liberty_mode = 'replac
     }
 }
 
-// Function to get effective brokerage rate for a trade - FIXED for liberty
+// Function to get effective brokerage rate for a trade
 function getEffectiveBrokerageRate($db, $trade, $client) {
-    // Debug log
     error_log("getEffectiveBrokerageRate: Trade ID {$trade['id']}, Fee Type: {$trade['brokerage_fee_type']}");
     
-    // First check if this is a liberty trade
     if ($trade['brokerage_fee_type'] === 'liberty') {
-        // Get the client's liberty rate from the clients table
         $stmt = $db->prepare("SELECT default_brokerage_fee FROM clients WHERE cds_account = ? AND fee_type = 'liberty'");
         $stmt->execute([$trade['client_cds_account']]);
         $liberty_rate = $stmt->fetchColumn();
@@ -293,7 +290,6 @@ function getEffectiveBrokerageRate($db, $trade, $client) {
             return floatval($liberty_rate);
         }
         
-        // Fallback to trade's custom brokerage fee if available
         if (!empty($trade['custom_brokerage_fee']) && $trade['custom_brokerage_fee'] > 0) {
             error_log("getEffectiveBrokerageRate: Using trade custom rate {$trade['custom_brokerage_fee']}");
             return floatval($trade['custom_brokerage_fee']);
@@ -336,16 +332,14 @@ function getEffectiveBrokerageRate($db, $trade, $client) {
     return 0;
 }
 
-// Function to calculate bond fees for contract note - FIXED for liberty rate display
+// Function to calculate bond fees for contract note
 function calculateBondFeesForContract($face_value, $consideration, $effective_rate = null, $liberty_mode = 'replace_all', $is_liberty = false, $trade_side = 'Sell') {
     $fees = [];
     
-    // Debug logging
     error_log("calculateBondFeesForContract: face_value={$face_value}, effective_rate={$effective_rate}, liberty_mode={$liberty_mode}, is_liberty=" . ($is_liberty ? 'true' : 'false'));
     
     if ($is_liberty && $effective_rate !== null && $effective_rate > 0) {
         if ($liberty_mode === 'excess_only') {
-            // Liberty on excess only
             $brokerage_first_100m = min($face_value, 100000000) * (0.063132 / 100);
             $brokerage_excess = max($face_value - 100000000, 0) * ($effective_rate / 100);
             $fees['brokerage'] = $brokerage_first_100m + $brokerage_excess;
@@ -373,7 +367,6 @@ function calculateBondFeesForContract($face_value, $consideration, $effective_ra
                 ];
             }
         } else {
-            // Liberty replace all - Full liberty rate on entire face value
             $fees['brokerage'] = $face_value * ($effective_rate / 100);
             $fees['tier_details'][] = [
                 'amount' => $face_value,
@@ -383,7 +376,6 @@ function calculateBondFeesForContract($face_value, $consideration, $effective_ra
             ];
         }
     } else {
-        // Standard tiered calculation (no liberty)
         $brokerage_first_100m = min($face_value, 100000000) * (0.063132 / 100);
         $brokerage_excess = max($face_value - 100000000, 0) * (0.035 / 100);
         $fees['brokerage'] = $brokerage_first_100m + $brokerage_excess;
@@ -412,21 +404,12 @@ function calculateBondFeesForContract($face_value, $consideration, $effective_ra
         }
     }
     
-    // VAT on Brokerage (18%)
     $fees['vat'] = $fees['brokerage'] * 0.18;
-    
-    // CMSA Fee - Based on Consideration, rate 0.01%
     $fees['cmsa'] = $consideration * (0.01 / 100);
-    
-    // CDS Fee - Based on Face Value, rate 0.0118% (VAT inclusive)
     $fees['csd'] = $face_value * (0.0118 / 100);
-    
-    // DSE Fee - Based on Face Value, rate 0.02006% (VAT inclusive)
     $fees['dse'] = $face_value * (0.02006 / 100);
-    
     $fees['fidelity'] = 0.00;
     
-    // Bank Charges (flat fee based on consideration, SELL only)
     if (strtoupper($trade_side) !== 'BUY') {
         if ($consideration < 100000) $fees['bank_charges'] = 250;
         elseif ($consideration < 10000000) $fees['bank_charges'] = 2000;
@@ -461,7 +444,6 @@ function calculateEquityFeesForContract($db, $consideration, $effective_rate = n
     
     if ($is_liberty && $effective_rate !== null && $effective_rate > 0) {
         if ($liberty_mode === 'tier_override') {
-            // Tier override: first 10M standard, excess liberty
             $standard_rate_decimal = $standard_rate / 100;
             $liberty_rate_decimal = $effective_rate / 100;
             
@@ -492,7 +474,6 @@ function calculateEquityFeesForContract($db, $consideration, $effective_rate = n
                 ];
             }
         } else {
-            // Liberty replace all
             $fees['brokerage'] = $consideration * ($effective_rate / 100);
             $fees['tier_details'][] = [
                 'amount' => $consideration,
@@ -502,7 +483,6 @@ function calculateEquityFeesForContract($db, $consideration, $effective_rate = n
             ];
         }
     } else {
-        // Standard tiered calculation using defined tiers
         $config1 = getFeeConfiguration($db, 'BROKERAGE_TIER1', 'EQUITY');
         $rate1 = $config1['rate_percentage'] ?? 1.7000;
         $config2 = getFeeConfiguration($db, 'BROKERAGE_TIER2', 'EQUITY');
@@ -562,24 +542,14 @@ function calculateEquityFeesForContract($db, $consideration, $effective_rate = n
         }
     }
     
-    // VAT on brokerage (18%)
     $vat_config = getFeeConfiguration($db, 'VAT', 'ALL');
     $vat_rate = $vat_config['rate_percentage'] ?? 18.0000;
     $fees['vat'] = $fees['brokerage'] * ($vat_rate / 100);
-    
-    // CMSA Fee (0.14% of consideration)
     $fees['cmsa'] = $consideration * (0.1400 / 100);
-    
-    // DSE Fee (0.1652% of consideration)
     $fees['dse'] = $consideration * (0.1652 / 100);
-    
-    // Fidelity Fee (0.02% of consideration)
     $fees['fidelity'] = $consideration * (0.0200 / 100);
-    
-    // CDS Fee (0.0708% of consideration)
     $fees['csd'] = $consideration * (0.0708 / 100);
     
-    // Bank Charges (flat fee based on consideration, SELL only)
     if (strtoupper($trade_side) !== 'BUY') {
         if ($consideration < 100000) $fees['bank_charges'] = 250;
         elseif ($consideration < 10000000) $fees['bank_charges'] = 2000;
@@ -769,7 +739,6 @@ class ContractNotePDF extends TCPDF {
             $contract_title .= ' (SUMMARY)';
         }
         
-        // Add Liberty Mode to title if applicable
         if ($trade['brokerage_fee_type'] == 'liberty' || $trade['brokerage_fee_type'] == 'this_trade') {
             $liberty_mode_display = '';
             if (isset($trade['liberty_mode'])) {
@@ -1005,6 +974,7 @@ class ContractNotePDF extends TCPDF {
         $this->Cell(0, 8, 'Client: ' . strtoupper($client_name), 0, 1, 'L');
         $this->Cell(0, 8, 'Trade Date: ' . date('d/m/Y', strtotime($trade_date)), 0, 1, 'L');
         $this->Cell(0, 8, 'Security: ' . $security_id, 0, 1, 'L');
+        $this->Cell(0, 8, 'CDS Account: ' . $trades[0]['client_cds_account'], 0, 1, 'L');
         $this->Ln(5);
         
         $this->SetFont('helvetica', 'B', 8);
@@ -1084,6 +1054,10 @@ function getFeeConfiguration($db, $fee_type, $applies_to = 'ALL') {
     return $config;
 }
 
+// ===================================================================
+// FIX: Use CDS account as the unique identifier for client trades
+// ===================================================================
+
 // Handle trade actions
 if (isset($_GET['action']) && isset($_GET['id'])) {
     $action = $_GET['action'];
@@ -1092,7 +1066,7 @@ if (isset($_GET['action']) && isset($_GET['id'])) {
     $stmt = $db->prepare("
         SELECT t.*, cl.fee_type as client_fee_type, cl.default_brokerage_fee, cl.liberty_mode as client_liberty_mode
         FROM trades t
-        LEFT JOIN clients cl ON t.client_name = cl.client_name 
+        LEFT JOIN clients cl ON t.client_cds_account = cl.cds_account
         WHERE t.id = ?
     ");
     $stmt->execute([$trade_id]);
@@ -1131,7 +1105,8 @@ if (isset($_GET['action']) && isset($_GET['id'])) {
                 break;
                 
             case 'contract_note':
-                $client_id = $trade['client_cds_account'];
+                // 🔥 Use CDS account from the trade - this is the unique identifier
+                $cds_account = $trade['client_cds_account'];
                 $trade_date = $trade['trade_date'];
                 $trade_side = $trade['trade_side'];
                 $security_id = $trade['security_id'];
@@ -1145,16 +1120,18 @@ if (isset($_GET['action']) && isset($_GET['id'])) {
                     AND security_id = ?
                     AND status = 'active'
                 ");
-                $stmt->execute([$client_id, $trade_date, $trade_side, $security_id]);
+                $stmt->execute([$cds_account, $trade_date, $trade_side, $security_id]);
                 $result = $stmt->fetch();
                 
                 if ($result['trade_count'] > 1) {
                     $_SESSION['contract_modal_data'] = [
-                        'client_id' => $client_id,
+                        'cds_account' => $cds_account,  // 🔥 Store CDS as the primary key
+                        'client_id' => $cds_account,    // Keep for backward compatibility
                         'trade_date' => $trade_date,
                         'trade_side' => $trade_side,
                         'security_id' => $security_id,
-                        'trigger_trade_id' => $trade_id
+                        'trigger_trade_id' => $trade_id,
+                        'client_name' => $trade['client_name']  // For display only
                     ];
                     
                     header('Location: trades?show_contract_modal=1');
@@ -1171,7 +1148,7 @@ if (isset($_GET['action']) && isset($_GET['id'])) {
     redirect('trader/trades.php');
 }
 
-// Function to generate Contract Note PDF - FIXED for liberty rate
+// Function to generate Contract Note PDF
 function generateContractNotePDF($trade_id, $contract_type = 'single') {
     global $db, $company_name, $current_user, $standard_rate_percentage;
     
@@ -1197,7 +1174,7 @@ function generateContractNotePDF($trade_id, $contract_type = 'single') {
         LEFT JOIN etf_trades et ON t.trade_reference = et.trade_reference
         LEFT JOIN companies c_buyer ON t.client_name = c_buyer.company_name
         LEFT JOIN companies c_seller ON t.counterparty_name = c_seller.company_name
-        LEFT JOIN clients cl ON t.client_name = cl.client_name
+        LEFT JOIN clients cl ON t.client_cds_account = cl.cds_account
         WHERE t.id = ?
     ");
     $stmt->execute([$trade_id]);
@@ -1215,13 +1192,10 @@ function generateContractNotePDF($trade_id, $contract_type = 'single') {
         'liberty_mode' => $trade['client_liberty_mode']
     ];
     
-    // Get effective rate with proper liberty handling
     $effective_rate = getEffectiveBrokerageRate($db, $trade, $client);
     
-    // Debug log
     error_log("Contract Note - Trade ID: {$trade_id}, Rate: {$effective_rate}, Fee Type: {$trade['brokerage_fee_type']}");
     
-    // Determine liberty mode (from trade, client, or default)
     $liberty_mode = 'replace_all';
     $is_liberty = false;
     
@@ -1261,7 +1235,6 @@ function generateContractNotePDF($trade_id, $contract_type = 'single') {
     $order_number = str_pad($trade['id'], 6, '0', STR_PAD_LEFT);
     $exchange_ref = date('ymd', strtotime($trade['trade_date'])) . str_pad($trade['id'], 3, '0', STR_PAD_LEFT);
     
-    // Pass liberty mode and effective rate to contract note
     $trade['liberty_mode'] = $liberty_mode;
     $trade['effective_rate_for_display'] = $effective_rate;
     
@@ -1272,10 +1245,11 @@ function generateContractNotePDF($trade_id, $contract_type = 'single') {
     $pdf->Output($filename, 'I');
 }
 
-// Function to generate summary contract note for multiple trades
-function generateSummaryContractNote($client_id, $trade_date, $trade_side, $security_id) {
+// 🔥 FIXED: Generate summary contract note using CDS account as the unique identifier
+function generateSummaryContractNote($cds_account, $trade_date, $trade_side, $security_id) {
     global $db, $company_name, $current_user, $standard_rate_percentage;
     
+    // ✅ Use CDS account directly - NO name-based lookups
     $stmt = $db->prepare("
         SELECT t.*, 
                e.share_type,
@@ -1285,25 +1259,27 @@ function generateSummaryContractNote($client_id, $trade_date, $trade_side, $secu
                c_seller.company_name as seller_company_name,
                cl.fee_type as client_fee_type,
                cl.default_brokerage_fee,
-               cl.liberty_mode as client_liberty_mode
+               cl.liberty_mode as client_liberty_mode,
+               cl.address as client_address,
+               cl.email as client_email
         FROM trades t
         LEFT JOIN equities e ON t.security_id = e.security_id AND t.asset_class = 'equity'
         LEFT JOIN bonds b ON t.security_id = b.security_id AND t.asset_class = 'bond'
         LEFT JOIN companies c_buyer ON t.client_name = c_buyer.company_name
         LEFT JOIN companies c_seller ON t.counterparty_name = c_seller.company_name
-        LEFT JOIN clients cl ON t.client_name = cl.client_name 
-        WHERE t.client_cds_account = ? 
+        LEFT JOIN clients cl ON t.client_cds_account = cl.cds_account
+        WHERE t.client_cds_account = ?   -- 🔥 ONLY use CDS account
         AND t.trade_date = ? 
         AND t.trade_side = ? 
         AND t.security_id = ?
         AND t.status = 'active'
         ORDER BY t.created_at
     ");
-    $stmt->execute([$client_id, $trade_date, $trade_side, $security_id]);
+    $stmt->execute([$cds_account, $trade_date, $trade_side, $security_id]);
     $trades = $stmt->fetchAll();
     
     if (empty($trades)) {
-        die('No trades found for summary');
+        die('No trades found for CDS account: ' . htmlspecialchars($cds_account));
     }
 
     foreach ($trades as $trade) {
@@ -1325,7 +1301,6 @@ function generateSummaryContractNote($client_id, $trade_date, $trade_side, $secu
     ];
     $effective_rate = getEffectiveBrokerageRate($db, $first_trade, $client);
     
-    // Determine liberty mode for summary
     $liberty_mode = $first_trade['liberty_mode'] ?? ($client['liberty_mode'] ?? 'replace_all');
     $is_liberty = ($first_trade['brokerage_fee_type'] === 'liberty' || $first_trade['brokerage_fee_type'] === 'this_trade');
     
@@ -1361,7 +1336,7 @@ function generateSummaryContractNote($client_id, $trade_date, $trade_side, $secu
 
     $pdf->SetCreator(PDF_CREATOR);
     $pdf->SetAuthor($company_name);
-    $pdf->SetTitle('Contract Note Summary - ' . $client_id);
+    $pdf->SetTitle('Contract Note Summary - ' . $cds_account);
     $pdf->SetSubject('Trade Contract Note Summary');
 
     $pdf->setWatermarkEnabled(true);
@@ -1390,12 +1365,12 @@ function generateSummaryContractNote($client_id, $trade_date, $trade_side, $secu
     $pdf->addContractNote($summary_trade, $summary_fees, $contract_number, $order_number, $exchange_ref, true, $summary_data);
     $pdf->addSummaryBreakdown($trades, $summary_data, $client_name, $trade_date, $security_id, $trade_side);
 
-    $filename = 'contract_note_summary_' . $client_id . '_' . date('Ymd', strtotime($trade_date)) . '.pdf';
+    $filename = 'contract_note_summary_' . $cds_account . '_' . date('Ymd', strtotime($trade_date)) . '.pdf';
     $pdf->Output($filename, 'I');
 }
 
-// Function to generate detailed contract notes for multiple trades
-function generateDetailedContractNotes($client_id, $trade_date, $trade_side, $security_id) {
+// 🔥 FIXED: Generate detailed contract notes using CDS account
+function generateDetailedContractNotes($cds_account, $trade_date, $trade_side, $security_id) {
     global $db, $company_name, $current_user, $standard_rate_percentage;
     
     $stmt = $db->prepare("
@@ -1407,25 +1382,27 @@ function generateDetailedContractNotes($client_id, $trade_date, $trade_side, $se
                c_seller.company_name as seller_company_name,
                cl.fee_type as client_fee_type,
                cl.default_brokerage_fee,
-               cl.liberty_mode as client_liberty_mode
+               cl.liberty_mode as client_liberty_mode,
+               cl.address as client_address,
+               cl.email as client_email
         FROM trades t
         LEFT JOIN equities e ON t.security_id = e.security_id AND t.asset_class = 'equity'
         LEFT JOIN bonds b ON t.security_id = b.security_id AND t.asset_class = 'bond'
         LEFT JOIN companies c_buyer ON t.client_name = c_buyer.company_name
         LEFT JOIN companies c_seller ON t.counterparty_name = c_seller.company_name
-        LEFT JOIN clients cl ON t.client_name = cl.client_name 
-        WHERE t.client_cds_account = ? 
+        LEFT JOIN clients cl ON t.client_cds_account = cl.cds_account
+        WHERE t.client_cds_account = ?   -- 🔥 ONLY use CDS account
         AND t.trade_date = ? 
         AND t.trade_side = ? 
         AND t.security_id = ?
         AND t.status = 'active'
         ORDER BY t.created_at
     ");
-    $stmt->execute([$client_id, $trade_date, $trade_side, $security_id]);
+    $stmt->execute([$cds_account, $trade_date, $trade_side, $security_id]);
     $trades = $stmt->fetchAll();
     
     if (empty($trades)) {
-        die('No trades found for detailed notes');
+        die('No trades found for CDS account: ' . htmlspecialchars($cds_account));
     }
 
     foreach ($trades as $trade) {
@@ -1436,7 +1413,7 @@ function generateDetailedContractNotes($client_id, $trade_date, $trade_side, $se
 
     $pdf->SetCreator(PDF_CREATOR);
     $pdf->SetAuthor($company_name);
-    $pdf->SetTitle('Contract Notes - ' . $client_id);
+    $pdf->SetTitle('Contract Notes - ' . $cds_account);
     $pdf->SetSubject('Detailed Trade Contract Notes');
 
     $pdf->setWatermarkEnabled(true);
@@ -1474,7 +1451,6 @@ function generateDetailedContractNotes($client_id, $trade_date, $trade_side, $se
         $order_number = str_pad($trade['id'], 6, '0', STR_PAD_LEFT);
         $exchange_ref = date('ymd', strtotime($trade['trade_date'])) . str_pad($trade['id'], 3, '0', STR_PAD_LEFT);
         
-        // Pass liberty mode and effective rate to contract note
         $trade['liberty_mode'] = $liberty_mode;
         $trade['effective_rate_for_display'] = $effective_rate;
         
@@ -1484,25 +1460,29 @@ function generateDetailedContractNotes($client_id, $trade_date, $trade_side, $se
         $trade_index++;
     }
 
-    $filename = 'contract_notes_detailed_' . $client_id . '_' . date('Ymd', strtotime($trade_date)) . '.pdf';
+    $filename = 'contract_notes_detailed_' . $cds_account . '_' . date('Ymd', strtotime($trade_date)) . '.pdf';
     $pdf->Output($filename, 'I');
 }
 
-// Handle contract note generation based on modal selection
+// 🔥 FIXED: Handle contract note generation using CDS account
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['generate_contract_note'])) {
     $contract_type = $_POST['contract_type'];
-    $client_id = $_POST['client_id'];
+    $cds_account = $_POST['cds_account'] ?? $_POST['client_id'];  // 🔥 CDS is the key
     $trade_date = $_POST['trade_date'];
     $trade_side = $_POST['trade_side'];
     $security_id = $_POST['security_id'];
     $trigger_trade_id = $_POST['trigger_trade_id'];
     
+    if (empty($cds_account)) {
+        die('CDS account is required');
+    }
+    
     if ($contract_type == 'single') {
         generateContractNotePDF($trigger_trade_id, 'single');
     } elseif ($contract_type == 'summary') {
-        generateSummaryContractNote($client_id, $trade_date, $trade_side, $security_id);
+        generateSummaryContractNote($cds_account, $trade_date, $trade_side, $security_id);
     } elseif ($contract_type == 'detailed') {
-        generateDetailedContractNotes($client_id, $trade_date, $trade_side, $security_id);
+        generateDetailedContractNotes($cds_account, $trade_date, $trade_side, $security_id);
     }
     exit;
 }
@@ -1538,8 +1518,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['upload_trade'])) {
         if ($ref_exists) {
             $error_message = 'Trade reference "' . htmlspecialchars($trade_reference) . '" already exists.';
         } else {
-            $stmt_client = $db->prepare("SELECT fee_type, default_brokerage_fee, liberty_mode FROM clients WHERE client_name = ?");
-            $stmt_client->execute([$client_name]);
+            // 🔥 Use CDS account to look up client, not name
+            $stmt_client = $db->prepare("SELECT fee_type, default_brokerage_fee, liberty_mode FROM clients WHERE cds_account = ?");
+            $stmt_client->execute([$client_cds_account]);
             $client = $stmt_client->fetch();
             
             $brokerage_fee_type = 'normal';
@@ -1587,7 +1568,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['upload_trade'])) {
                     ];
                     $final_brokerage_fee = calculateBrokerageFee($temp_trade, $standard_rate, 'replace_all');
                 } else {
-                    // Equity tiered brokerage
                     $config1 = getFeeConfiguration($db, 'BROKERAGE_TIER1', 'EQUITY');
                     $rate1 = $config1['rate_percentage'] ?? 1.7000;
                     $config2 = getFeeConfiguration($db, 'BROKERAGE_TIER2', 'EQUITY');
@@ -1646,8 +1626,9 @@ $companies = [];
 $stmt = $db->query("SELECT id, company_name, company_code FROM companies WHERE status = 'active' ORDER BY company_name");
 $companies = $stmt->fetchAll();
 
+// 🔥 FIXED: Get clients sorted by name but ensure CDS is the key
 $clients = [];
-$stmt = $db->query("SELECT id, client_name, cds_account, fee_type, default_brokerage_fee, liberty_mode FROM clients WHERE status = 'active' ORDER BY client_name");
+$stmt = $db->query("SELECT id, client_name, cds_account, fee_type, default_brokerage_fee, liberty_mode FROM clients WHERE is_active = 1 ORDER BY client_name");
 $clients = $stmt->fetchAll();
 
 // Get trades with filtering
@@ -1739,11 +1720,11 @@ $stmt = $db->prepare("
            c_seller.company_name as seller_company_name,
            cl.id as client_id,
            cl.client_name as proper_client_name,
-                cl.fee_type as client_fee_type,
-                cl.default_brokerage_fee,
-                cl.liberty_mode as client_liberty_mode,
-                cl.address as client_address,
-                cl.email as client_email
+           cl.fee_type as client_fee_type,
+           cl.default_brokerage_fee,
+           cl.liberty_mode as client_liberty_mode,
+           cl.address as client_address,
+           cl.email as client_email
     FROM trades t
     LEFT JOIN equities e ON t.security_id = e.security_id AND t.asset_class = 'equity'
     LEFT JOIN bonds b ON t.security_id = b.security_id AND t.asset_class = 'bond'
@@ -1768,7 +1749,7 @@ $show_contract_modal = isset($_GET['show_contract_modal']) && isset($_SESSION['c
 
 $page_title = 'Trade Management';
 
-// AJAX handler for live search - returns JSON with table fragment
+// AJAX handler for live search
 $is_ajax = isset($_GET['ajax']) && $_GET['ajax'] === '1';
 if ($is_ajax) {
     ob_start();
@@ -1840,22 +1821,23 @@ include '../includes/header.php';
 
     <?php if ($show_contract_modal && isset($_SESSION['contract_modal_data'])): 
         $modal_data = $_SESSION['contract_modal_data'];
+        $cds_account = $modal_data['cds_account'];  // 🔥 Use CDS as the key
         
         $stmt = $db->prepare("
-            SELECT t.asset_class, t.client_name, COUNT(*) as trade_count, 
+            SELECT t.asset_class, t.client_name, t.client_cds_account, COUNT(*) as trade_count, 
                    SUM(quantity) as total_quantity, 
                    SUM(consideration) as total_consideration,
                    t.liberty_mode
             FROM trades t
-            WHERE t.client_cds_account = ? 
+            WHERE t.client_cds_account = ?   -- 🔥 Filter by CDS account
             AND t.trade_date = ? 
             AND t.trade_side = ? 
             AND t.security_id = ?
             AND t.status = 'active'
-            GROUP BY t.asset_class, t.client_name, t.liberty_mode
+            GROUP BY t.asset_class, t.client_name, t.client_cds_account, t.liberty_mode
         ");
         $stmt->execute([
-            $modal_data['client_id'], 
+            $cds_account, 
             $modal_data['trade_date'], 
             $modal_data['trade_side'], 
             $modal_data['security_id']
@@ -1868,7 +1850,7 @@ include '../includes/header.php';
         $stmt = $db->prepare("
             SELECT trade_reference, quantity, price, consideration, created_at, brokerage_fee_type, final_brokerage_fee, liberty_mode
             FROM trades 
-            WHERE client_cds_account = ? 
+            WHERE client_cds_account = ?   -- 🔥 Filter by CDS account
             AND trade_date = ? 
             AND trade_side = ? 
             AND security_id = ?
@@ -1876,7 +1858,7 @@ include '../includes/header.php';
             ORDER BY created_at
         ");
         $stmt->execute([
-            $modal_data['client_id'], 
+            $cds_account, 
             $modal_data['trade_date'], 
             $modal_data['trade_side'], 
             $modal_data['security_id']
@@ -1904,7 +1886,8 @@ include '../includes/header.php';
                             <i class="bi bi-info-circle-fill text-info me-2"></i>
                             <div>
                                 <h6 class="alert-heading mb-1">Multiple Trades Detected</h6>
-                                <p class="mb-0">Found <strong><?php echo $client_data['trade_count']; ?> trades</strong> for <?php echo htmlspecialchars($client_data['client_name']); ?> on <?php echo format_date($modal_data['trade_date']); ?></p>
+                                <p class="mb-0">Found <strong><?php echo $client_data['trade_count']; ?> trades</strong> for <strong><?php echo htmlspecialchars($client_data['client_name']); ?></strong> on <?php echo format_date($modal_data['trade_date']); ?></p>
+                                <p class="mb-0 small text-muted">CDS Account: <strong><?php echo htmlspecialchars($cds_account); ?></strong></p>
                             </div>
                         </div>
                     </div>
@@ -1932,6 +1915,10 @@ include '../includes/header.php';
                                     <div class="fw-semibold badge bg-<?php echo strtolower($modal_data['trade_side']) == 'buy' ? 'success' : 'danger'; ?> px-3 py-2">
                                         <?php echo ucfirst($modal_data['trade_side']); ?>
                                     </div>
+                                </div>
+                                <div class="col-md-12">
+                                    <label class="form-label text-muted small mb-1">CDS Account</label>
+                                    <div class="fw-semibold text-primary"><?php echo htmlspecialchars($cds_account); ?></div>
                                 </div>
                             </div>
                         </div>
@@ -1963,7 +1950,6 @@ include '../includes/header.php';
                                     <tr>
                                         <td><code><?php echo htmlspecialchars($trade['trade_reference']); ?></code></td>
                                         <td><?php echo number_format($trade['quantity']); ?></td>
-                                                                                </td>
                                         <td>TZS <?php echo number_format($trade['price'], 2); ?></td>
                                         <td>TZS <?php echo number_format($trade['consideration'], 2); ?></td>
                                         <td>TZS <?php echo number_format($trade['final_brokerage_fee'], 2); ?></td>
@@ -1977,7 +1963,9 @@ include '../includes/header.php';
                     </div>
                     
                     <form method="POST" action="">
-                        <input type="hidden" name="client_id" value="<?php echo htmlspecialchars($modal_data['client_id']); ?>">
+                        <!-- 🔥 CDS account is the primary identifier -->
+                        <input type="hidden" name="cds_account" value="<?php echo htmlspecialchars($cds_account); ?>">
+                        <input type="hidden" name="client_id" value="<?php echo htmlspecialchars($cds_account); ?>">
                         <input type="hidden" name="trade_date" value="<?php echo htmlspecialchars($modal_data['trade_date']); ?>">
                         <input type="hidden" name="trade_side" value="<?php echo htmlspecialchars($modal_data['trade_side']); ?>">
                         <input type="hidden" name="security_id" value="<?php echo htmlspecialchars($modal_data['security_id']); ?>">
@@ -2099,7 +2087,7 @@ include '../includes/header.php';
     endif; 
     ?>
 
-    <!-- Filters Section (collapsed by default) -->
+    <!-- Filters Section -->
     <div class="card dashboard-card mb-4">
         <div class="card-header bg-transparent border-0 pb-0">
             <div class="d-flex align-items-center">
@@ -2313,7 +2301,6 @@ include '../includes/header.php';
                                     $commission_icon = 'bi-tag-fill';
                                 }
                                 
-                                // Determine liberty mode display
                                 $liberty_mode_display = 'Standard';
                                 if ($trade['brokerage_fee_type'] == 'liberty' || $trade['brokerage_fee_type'] == 'this_trade') {
                                     $mode = $trade['liberty_mode'] ?? ($trade['client_liberty_mode'] ?? 'replace_all');
@@ -2410,7 +2397,7 @@ include '../includes/header.php';
                                             <?php else: ?>
                                                 <span class="fw-medium"><?php echo htmlspecialchars($trade['client_name']); ?></span>
                                             <?php endif; ?>
-                                            <small class="text-muted d-block"><?php echo htmlspecialchars($trade['client_cds_account']); ?></small>
+                                            <small class="text-muted d-block">CDS: <?php echo htmlspecialchars($trade['client_cds_account']); ?></small>
                                         </div>
                                     </td>
                                     <td class="border-0 py-3">
@@ -2598,7 +2585,7 @@ include '../includes/header.php';
                                 <?php foreach ($clients as $client): ?>
                                     <option value="<?php echo htmlspecialchars($client['client_name']); ?>" 
                                             data-cds="<?php echo htmlspecialchars($client['cds_account']); ?>">
-                                        <?php echo htmlspecialchars($client['client_name']); ?> (<?php echo htmlspecialchars($client['cds_account']); ?>)
+                                        <?php echo htmlspecialchars($client['client_name']); ?> (CDS: <?php echo htmlspecialchars($client['cds_account']); ?>)
                                     </option>
                                 <?php endforeach; ?>
                             </select>
@@ -2608,7 +2595,7 @@ include '../includes/header.php';
                         <div class="col-md-6">
                             <label for="client_cds_account" class="form-label fw-semibold">Client CDS Account</label>
                             <input type="text" class="form-control" id="client_cds_account" name="client_cds_account" 
-                                   placeholder="e.g., CDS001234" required>
+                                   placeholder="e.g., 801421" required>
                             <div class="invalid-feedback">Please enter client CDS account.</div>
                         </div>
                         
@@ -2872,7 +2859,6 @@ if (liveSearch) {
         clearTimeout(searchTimeout);
         searchTimeout = setTimeout(reloadTable, 300);
     });
-    // Listen for filter form submits to also reload ajax
     const filterForm = document.getElementById('filterForm');
     if (filterForm) {
         filterForm.addEventListener('submit', function(e) {
@@ -2883,7 +2869,6 @@ if (liveSearch) {
                 if (val) formUrl.searchParams.set(key, val);
                 else formUrl.searchParams.delete(key);
             });
-            // Preserve live search value
             const searchVal = liveSearch ? liveSearch.value.trim() : '';
             if (searchVal) formUrl.searchParams.set('search', searchVal);
             window.location.href = formUrl.toString();
@@ -2895,7 +2880,6 @@ if (liveSearch) {
 <?php
 if ($is_ajax) {
     $full_html = ob_get_clean();
-    // Extract table fragment between markers
     preg_match('/<!--AJAX_TABLE_START-->(.*?)<!--AJAX_TABLE_END-->/s', $full_html, $matches);
     $table_html = $matches[1] ?? '';
     header('Content-Type: application/json');
@@ -2910,7 +2894,5 @@ if ($is_ajax) {
     ]);
     exit;
 }
-include '../includes/footer.php'; ?>
-                                        
-                                        
-                                        
+include '../includes/footer.php';
+?>

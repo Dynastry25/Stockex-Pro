@@ -357,6 +357,8 @@ try {
     $db->exec("ALTER TABLE numeric_trade_receipts ADD COLUMN IF NOT EXISTS commission_receipt TEXT AFTER payment_receipt");
     $db->exec("ALTER TABLE numeric_trade_receipts ADD COLUMN IF NOT EXISTS comment TEXT AFTER commission_receipt");
     $db->exec("ALTER TABLE trades ADD COLUMN IF NOT EXISTS approval_status ENUM('pending','approved','rejected') DEFAULT 'pending' AFTER status");
+    $db->exec("ALTER TABLE trades ADD COLUMN IF NOT EXISTS counterparty_cds_account VARCHAR(50) AFTER counterparty_name");
+    $db->exec("ALTER TABLE trades ADD COLUMN IF NOT EXISTS trader VARCHAR(100) AFTER additional_reference");
     
 } catch (Exception $e) {
     error_log("Table setup error: " . $e->getMessage());
@@ -378,6 +380,136 @@ function isImageReceipt($ref) {
     if (empty($ref)) return false;
     $ext = strtolower(pathinfo($ref, PATHINFO_EXTENSION));
     return in_array($ext, ['jpg', 'jpeg', 'png', 'gif']);
+}
+
+// ============================================
+// Function to detect counterparty type using brokers table
+// ============================================
+function getCounterpartyType($db, $trade) {
+    $counterparty_cds = $trade['counterparty_cds_account'] ?? '';
+    $counterparty_name = $trade['counterparty_name'] ?? '';
+    $broker_name = $trade['broker_name'] ?? '';
+    $sca_code = $trade['sca_code'] ?? '';
+    $company_code = $trade['company_code'] ?? '';
+    $client_name = $trade['client_name'] ?? '';
+    
+    $type = 'none';
+    $display = '';
+    $matched_broker = null;
+    
+    // First, check if SCA code indicates custodian (not company code)
+    if (!empty($sca_code) && !empty($company_code) && $sca_code !== $company_code) {
+        $type = 'custodian';
+        $display = 'Custodian';
+        return [
+            'type' => $type,
+            'display' => $display,
+            'matched_broker' => $matched_broker,
+            'counterparty_name' => $counterparty_name,
+            'counterparty_cds' => $counterparty_cds,
+            'broker_name' => $broker_name,
+            'sca_code' => $sca_code
+        ];
+    }
+    
+    // Check if counterparty is a broker from the brokers table
+    if (!empty($counterparty_cds)) {
+        // Try to find by broker_code (matches counterparty_cds)
+        $stmt = $db->prepare("SELECT id, broker_code, broker_name FROM brokers WHERE broker_code = ? AND is_active = 1");
+        $stmt->execute([$counterparty_cds]);
+        $broker = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($broker) {
+            $type = 'broker';
+            $display = 'Broker';
+            $matched_broker = $broker;
+            return [
+                'type' => $type,
+                'display' => $display,
+                'matched_broker' => $matched_broker,
+                'counterparty_name' => $counterparty_name,
+                'counterparty_cds' => $counterparty_cds,
+                'broker_name' => $broker_name,
+                'sca_code' => $sca_code
+            ];
+        }
+    }
+    
+    // Try to find by broker_name
+    if (!empty($broker_name)) {
+        $stmt = $db->prepare("SELECT id, broker_code, broker_name FROM brokers WHERE broker_name LIKE ? OR broker_code = ? AND is_active = 1 LIMIT 1");
+        $stmt->execute(['%' . $broker_name . '%', $broker_name]);
+        $broker = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($broker) {
+            $type = 'broker';
+            $display = 'Broker';
+            $matched_broker = $broker;
+            return [
+                'type' => $type,
+                'display' => $display,
+                'matched_broker' => $matched_broker,
+                'counterparty_name' => $counterparty_name,
+                'counterparty_cds' => $counterparty_cds,
+                'broker_name' => $broker_name,
+                'sca_code' => $sca_code
+            ];
+        }
+    }
+    
+    // Try to find by counterparty_name
+    if (!empty($counterparty_name) && strtolower($counterparty_name) !== 'unknown' && strtolower($counterparty_name) !== '') {
+        $stmt = $db->prepare("SELECT id, broker_code, broker_name FROM brokers WHERE broker_name LIKE ? AND is_active = 1 LIMIT 1");
+        $stmt->execute(['%' . $counterparty_name . '%']);
+        $broker = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($broker) {
+            $type = 'broker';
+            $display = 'Broker';
+            $matched_broker = $broker;
+            return [
+                'type' => $type,
+                'display' => $display,
+                'matched_broker' => $matched_broker,
+                'counterparty_name' => $counterparty_name,
+                'counterparty_cds' => $counterparty_cds,
+                'broker_name' => $broker_name,
+                'sca_code' => $sca_code
+            ];
+        }
+    }
+    
+    // Check if client_name matches a broker (for self-trades)
+    if (!empty($client_name)) {
+        $stmt = $db->prepare("SELECT id, broker_code, broker_name FROM brokers WHERE broker_name LIKE ? AND is_active = 1 LIMIT 1");
+        $stmt->execute(['%' . $client_name . '%']);
+        $broker = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($broker) {
+            $type = 'broker';
+            $display = 'Broker';
+            $matched_broker = $broker;
+            return [
+                'type' => $type,
+                'display' => $display,
+                'matched_broker' => $matched_broker,
+                'counterparty_name' => $counterparty_name,
+                'counterparty_cds' => $counterparty_cds,
+                'broker_name' => $broker_name,
+                'sca_code' => $sca_code
+            ];
+        }
+    }
+    
+    // If not custodian and not in brokers table, mark as CLIENT
+    $type = 'client';
+    $display = 'Client';
+    
+    return [
+        'type' => $type,
+        'display' => $display,
+        'matched_broker' => $matched_broker,
+        'counterparty_name' => $counterparty_name,
+        'counterparty_cds' => $counterparty_cds,
+        'broker_name' => $broker_name,
+        'sca_code' => $sca_code
+    ];
 }
 
 // ============================================
@@ -610,16 +742,24 @@ $sql = "
         t.custom_brokerage_fee,
         t.liberty_mode,
         t.final_brokerage_fee,
+        t.counterparty_name,
+        t.counterparty_cds_account,
+        t.broker_name,
+        t.sca_code,
+        t.trader,
+        t.origin,
         tr.payment_receipt,
         tr.commission_receipt,
         tr.comment as receipt_comment,
         tr.is_approved,
         cl.fee_type as client_fee_type,
         cl.default_brokerage_fee,
-        cl.liberty_mode as client_liberty_mode
+        cl.liberty_mode as client_liberty_mode,
+        c.company_code
     FROM trades t
     LEFT JOIN numeric_trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
     LEFT JOIN clients cl ON t.client_cds_account = cl.cds_account
+    LEFT JOIN companies c ON c.is_active = 1
     WHERE t.additional_reference REGEXP '^[0-9]+$'
     AND t.additional_reference IS NOT NULL
     AND t.additional_reference != ''
@@ -646,9 +786,9 @@ if ($filter === 'pending') {
 }
 
 if (!empty($search)) {
-    $sql .= " AND (t.client_name LIKE ? OR t.security_id LIKE ? OR t.additional_reference LIKE ?)";
+    $sql .= " AND (t.client_name LIKE ? OR t.security_id LIKE ? OR t.additional_reference LIKE ? OR t.trader LIKE ?)";
     $search_param = "%$search%";
-    $params = array_merge($params, [$search_param, $search_param, $search_param]);
+    $params = array_merge($params, [$search_param, $search_param, $search_param, $search_param]);
 }
 
 $sql .= " ORDER BY t.trade_date DESC, t.id DESC LIMIT 500";
@@ -689,7 +829,15 @@ foreach ($trades as $trade) {
             'trade_count' => 0,
             'price_sum' => 0,
             'price_count' => 0,
-            'fee_sum' => 0
+            'fee_sum' => 0,
+            // Counterparty fields
+            'counterparty_name' => $trade['counterparty_name'] ?? '',
+            'counterparty_cds_account' => $trade['counterparty_cds_account'] ?? '',
+            'broker_name' => $trade['broker_name'] ?? '',
+            'sca_code' => $trade['sca_code'] ?? '',
+            'company_code' => $trade['company_code'] ?? '',
+            'trader' => $trade['trader'] ?? '',
+            'origin' => $trade['origin'] ?? ''
         ];
     }
     
@@ -714,6 +862,22 @@ foreach ($trades as $trade) {
     if (($trade['is_approved'] ?? 0) > ($grouped_trades[$group_key]['is_approved'] ?? 0)) {
         $grouped_trades[$group_key]['is_approved'] = $trade['is_approved'];
     }
+    // Keep the latest counterparty info (if different)
+    if (!empty($trade['counterparty_name'])) {
+        $grouped_trades[$group_key]['counterparty_name'] = $trade['counterparty_name'];
+    }
+    if (!empty($trade['counterparty_cds_account'])) {
+        $grouped_trades[$group_key]['counterparty_cds_account'] = $trade['counterparty_cds_account'];
+    }
+    if (!empty($trade['broker_name'])) {
+        $grouped_trades[$group_key]['broker_name'] = $trade['broker_name'];
+    }
+    if (!empty($trade['sca_code'])) {
+        $grouped_trades[$group_key]['sca_code'] = $trade['sca_code'];
+    }
+    if (!empty($trade['trader'])) {
+        $grouped_trades[$group_key]['trader'] = $trade['trader'];
+    }
 }
 
 // Calculate averages and fees
@@ -735,6 +899,9 @@ foreach ($grouped_trades as $group) {
     
     // Calculate full fees
     $group['fees'] = calculateFullFees($group, $effective_rate, $liberty_mode, $is_liberty);
+    
+    // Get counterparty type from brokers table
+    $group['counterparty'] = getCounterpartyType($db, $group);
     
     $final_trades[] = $group;
 }
@@ -810,25 +977,26 @@ if (isset($_GET['export_excel'])) {
     echo ".rejected { background-color: #f8d7da; }";
     echo "</style></head><body>";
     echo "<table border='1'>";
-    echo "<tr><th colspan='10' style='font-size:16px;padding:15px;'>ORDER INTAKE - " . htmlspecialchars($viewLabel) . " (" . $assetLabel . ") - " . htmlspecialchars($company_name) . "</th></tr>";
-    echo "<tr><td colspan='10' class='header-row'>Generated: " . date('d/m/Y H:i:s') . " | Total Trades: " . count($final_trades) . "</td></tr>";
-    echo "<tr><td colspan='10'></td></tr>";
+    echo "<tr><th colspan='11' style='font-size:16px;padding:15px;'>ORDER INTAKE - " . htmlspecialchars($viewLabel) . " (" . $assetLabel . ") - " . htmlspecialchars($company_name) . "</th></tr>";
+    echo "<tr><td colspan='11' class='header-row'>Generated: " . date('d/m/Y H:i:s') . " | Total Trades: " . count($final_trades) . "</td></tr>";
+    echo "<tr><td colspan='11'></td></tr>";
     
     echo "<tr>";
     echo "<th>Client</th>";
     echo "<th>Security</th>";
-    echo "<th>Asset Class</th>";
     echo "<th>Side</th>";
     echo "<th class='right'>Qty</th>";
     echo "<th class='right'>Price</th>";
     echo "<th class='right'>Value (TZS)</th>";
     echo "<th class='right'>Fees (TZS)</th>";
     echo "<th class='right'>Net Amount (TZS)</th>";
+    echo "<th>Trader</th>";
+    echo "<th>Counterparty</th>";
     echo "<th>Status</th>";
     echo "</tr>";
     
     if (empty($final_trades)) {
-        echo "<tr><td colspan='10' class='center'>No trades found</td></tr>";
+        echo "<tr><td colspan='11' class='center'>No trades found</td></tr>";
     } else {
         foreach ($final_trades as $trade) {
             $isBond = ($trade['asset_class'] ?? '') === 'bond';
@@ -846,16 +1014,31 @@ if (isset($_GET['export_excel'])) {
                 $net += floatval($fees['total'] ?? 0);
             }
             
+            $cp = $trade['counterparty'] ?? ['type' => 'none', 'display' => '', 'matched_broker' => null];
+            $cpType = $cp['type'] ?? 'none';
+            
+            if ($cpType === 'custodian') {
+                $cpDisplay = 'Custodian' . (!empty($trade['sca_code']) ? ' (' . $trade['sca_code'] . ')' : '');
+            } elseif ($cpType === 'broker') {
+                $matchedBroker = $cp['matched_broker'] ?? null;
+                $cpDisplay = 'Broker' . ($matchedBroker ? ' (' . $matchedBroker['broker_code'] . ')' : '');
+            } elseif ($cpType === 'client') {
+                $cpDisplay = 'Client' . (!empty($trade['counterparty_name']) && strtolower($trade['counterparty_name']) !== 'unknown' ? ' (' . $trade['counterparty_name'] . ')' : '');
+            } else {
+                $cpDisplay = 'Client';
+            }
+            
             echo "<tr class='" . $rowClass . "'>";
             echo "<td>" . htmlspecialchars($trade['client_name'] ?? '') . "</td>";
             echo "<td>" . htmlspecialchars($trade['security_id'] ?? '') . "</td>";
-            echo "<td class='center'>" . ucfirst(htmlspecialchars($trade['asset_class'] ?? '')) . "</td>";
             echo "<td class='center'>" . strtoupper(htmlspecialchars($trade['trade_side'] ?? '')) . "</td>";
             echo "<td class='right'>" . ($isBond ? 'TZS ' . number_format($trade['quantity'] ?? 0, 2) : number_format($trade['quantity'] ?? 0)) . "</td>";
             echo "<td class='right'>" . number_format($trade['price'] ?? 0, 4) . "</td>";
             echo "<td class='right'>" . number_format($trade['consideration'] ?? 0, 2) . "</td>";
             echo "<td class='right'>" . number_format($fees['total'] ?? 0, 2) . "</td>";
             echo "<td class='right'>" . number_format($net, 2) . "</td>";
+            echo "<td>" . htmlspecialchars($trade['trader'] ?? '') . "</td>";
+            echo "<td>" . htmlspecialchars($cpDisplay) . "</td>";
             echo "<td class='center'>" . $statusText . "</td>";
             echo "</tr>";
         }
@@ -867,12 +1050,12 @@ if (isset($_GET['export_excel'])) {
         echo "<td colspan='6' class='center'>TOTALS</td>";
         echo "<td class='right'>" . number_format($totalValue, 2) . "</td>";
         echo "<td class='right'>" . number_format($totalFees, 2) . "</td>";
-        echo "<td></td><td></td>";
+        echo "<td></td><td></td><td></td>";
         echo "</tr>";
     }
     
-    echo "<tr><td colspan='10'></td></tr>";
-    echo "<tr><td colspan='10' style='background-color:#f8f9fa;font-size:11px;'>Generated by " . htmlspecialchars($company_name) . " on " . date('d/m/Y H:i:s') . "</td></tr>";
+    echo "<tr><td colspan='11'></td></tr>";
+    echo "<tr><td colspan='11' style='background-color:#f8f9fa;font-size:11px;'>Generated by " . htmlspecialchars($company_name) . " on " . date('d/m/Y H:i:s') . "</td></tr>";
     echo "</table></body></html>";
     exit;
 }
@@ -1047,6 +1230,29 @@ include '../includes/header.php';
     padding-top: 3px;
     border-top: 1px solid #dee2e6;
 }
+.badge-counterparty {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-weight: 600;
+    display: inline-block;
+}
+.badge-counterparty.custodian {
+    background: #cce5ff;
+    color: #004085;
+}
+.badge-counterparty.broker {
+    background: #d4edda;
+    color: #155724;
+}
+.badge-counterparty.client {
+    background: #fff3cd;
+    color: #856404;
+}
+.badge-counterparty .broker-code {
+    font-weight: normal;
+    opacity: 0.7;
+}
 </style>
 
 <div class="container-fluid">
@@ -1127,7 +1333,7 @@ include '../includes/header.php';
             </div>
             <div class="col-6 col-md-4">
                 <label class="form-label">Search</label>
-                <input type="text" class="form-control form-control-sm" name="search" placeholder="Client, Security, Ref..." value="<?php echo safeHtml($search); ?>">
+                <input type="text" class="form-control form-control-sm" name="search" placeholder="Client, Security, Ref, Trader..." value="<?php echo safeHtml($search); ?>">
             </div>
             <div class="col-6 col-md-2">
                 <label class="form-label">&nbsp;</label>
@@ -1158,6 +1364,8 @@ include '../includes/header.php';
                                 <th class="text-end">Qty</th>
                                 <th class="text-end">Value</th>
                                 <th class="text-end" style="min-width:180px;">Fees Breakdown</th>
+                                <th>Trader</th>
+                                <th>Counterparty</th>
                                 <th>Receipts</th>
                                 <th>Status</th>
                                 <th class="text-end">Actions</th>
@@ -1179,6 +1387,66 @@ include '../includes/header.php';
                                 
                                 $fees = $trade['fees'] ?? [];
                                 $isSell = strtolower($trade['trade_side'] ?? '') === 'sell';
+                                
+                                // Get counterparty info
+                                $cp = $trade['counterparty'] ?? ['type' => 'none', 'display' => '', 'matched_broker' => null];
+                                $cpType = $cp['type'] ?? 'none';
+                                $matchedBroker = $cp['matched_broker'] ?? null;
+                                
+                                // Build counterparty display
+                                $cpHtml = '';
+                                if ($cpType === 'custodian') {
+                                    $cpHtml = '<span class="badge-counterparty custodian">Custodian';
+                                    if (!empty($trade['sca_code'])) {
+                                        $cpHtml .= ' <span class="broker-code">(' . htmlspecialchars($trade['sca_code']) . ')</span>';
+                                    }
+                                    $cpHtml .= '</span>';
+                                    if (!empty($trade['sca_code'])) {
+                                        $cpHtml .= ' <small>' . htmlspecialchars($trade['sca_code']) . '</small>';
+                                    }
+                                } elseif ($cpType === 'broker') {
+                                    $cpHtml = '<span class="badge-counterparty broker">Broker';
+                                    if ($matchedBroker && !empty($matchedBroker['broker_code'])) {
+                                        $cpHtml .= ' <span class="broker-code">(' . htmlspecialchars($matchedBroker['broker_code']) . ')</span>';
+                                    }
+                                    $cpHtml .= '</span>';
+                                    if ($matchedBroker && !empty($matchedBroker['broker_name'])) {
+                                        $cpHtml .= ' <small>' . htmlspecialchars($matchedBroker['broker_name']) . '</small>';
+                                    } elseif (!empty($trade['counterparty_name'])) {
+                                        $cpHtml .= ' <small>' . htmlspecialchars($trade['counterparty_name']) . '</small>';
+                                    }
+                                } elseif ($cpType === 'client') {
+                                    $cpHtml = '<span class="badge-counterparty client">Client';
+                                    if (!empty($trade['counterparty_name']) && strtolower($trade['counterparty_name']) !== 'unknown') {
+                                        $cpHtml .= ' <span class="broker-code">(' . htmlspecialchars($trade['counterparty_name']) . ')</span>';
+                                    }
+                                    $cpHtml .= '</span>';
+                                    if (!empty($trade['counterparty_name']) && strtolower($trade['counterparty_name']) !== 'unknown') {
+                                        $cpHtml .= ' <small>' . htmlspecialchars($trade['counterparty_name']) . '</small>';
+                                    }
+                                } else {
+                                    // Fallback for 'none' - also show as CLIENT
+                                    $cpHtml = '<span class="badge-counterparty client">Client';
+                                    if (!empty($trade['client_name'])) {
+                                        $cpHtml .= ' <span class="broker-code">(' . htmlspecialchars($trade['client_name']) . ')</span>';
+                                    }
+                                    $cpHtml .= '</span>';
+                                    if (!empty($trade['client_name'])) {
+                                        $cpHtml .= ' <small>' . htmlspecialchars($trade['client_name']) . '</small>';
+                                    }
+                                }
+                                
+                                // Build counterparty display text for modal
+                                $counterpartyDisplayText = '';
+                                if ($cpType === 'custodian') {
+                                    $counterpartyDisplayText = 'Custodian' . (!empty($trade['sca_code']) ? ' (' . $trade['sca_code'] . ')' : '');
+                                } elseif ($cpType === 'broker') {
+                                    $counterpartyDisplayText = 'Broker' . ($matchedBroker ? ' (' . $matchedBroker['broker_code'] . ')' : '');
+                                } elseif ($cpType === 'client') {
+                                    $counterpartyDisplayText = 'Client' . (!empty($trade['counterparty_name']) && strtolower($trade['counterparty_name']) !== 'unknown' ? ' (' . $trade['counterparty_name'] . ')' : '');
+                                } else {
+                                    $counterpartyDisplayText = 'Client';
+                                }
                             ?>
                                 <tr>
                                     <td><?php echo safeHtml($trade['client_name'] ?? ''); ?></td>
@@ -1217,13 +1485,7 @@ include '../includes/header.php';
                                                             </div>
                                                         <?php endforeach; ?>
                                                     <?php endif; ?>
-                                                    <div>VAT: TZS <?php echo number_format($fees['vat'] ?? 0, 2); ?></div>
-                                                    <div>CMSA: TZS <?php echo number_format($fees['cmsa'] ?? 0, 2); ?></div>
-                                                    <div>DSE: TZS <?php echo number_format($fees['dse'] ?? 0, 2); ?></div>
-                                                    <?php if (isset($fees['fidelity']) && $fees['fidelity'] > 0): ?>
-                                                        <div>Fidelity: TZS <?php echo number_format($fees['fidelity'], 2); ?></div>
-                                                    <?php endif; ?>
-                                                    <div>CDS: TZS <?php echo number_format($fees['csd'] ?? 0, 2); ?></div>
+                                                   
                                                     <div class="commission-total">
                                                         Net: TZS <?php echo number_format($fees['net_amount'] ?? 0, 2); ?>
                                                         <br>
@@ -1234,6 +1496,12 @@ include '../includes/header.php';
                                         <?php else: ?>
                                             <span class="text-muted">-</span>
                                         <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <?php echo !empty($trade['trader']) ? safeHtml($trade['trader']) : '<span class="text-muted" style="font-size:10px;">-</span>'; ?>
+                                    </td>
+                                    <td>
+                                        <?php echo $cpHtml; ?>
                                     </td>
                                     <td>
                                         <!-- Payment Receipts -->
@@ -1343,6 +1611,8 @@ include '../includes/header.php';
                                                 data-status="<?php echo $statusText; ?>"
                                                 data-receipts="<?php echo htmlspecialchars(json_encode($receipt_data)); ?>"
                                                 data-comment="<?php echo htmlspecialchars($trade['receipt_comment'] ?? ''); ?>"
+                                                data-trader="<?php echo htmlspecialchars($trade['trader'] ?? ''); ?>"
+                                                data-counterparty="<?php echo htmlspecialchars($counterpartyDisplayText); ?>"
                                                 title="View Trade Details">
                                                 <i class="bi bi-eye"></i>
                                             </button>
@@ -1442,7 +1712,15 @@ include '../includes/header.php';
                         <label class="text-muted small d-block">Fee Type</label>
                         <strong id="vt_fee_type"></strong>
                     </div>
-                    <div class="col-md-12">
+                    <div class="col-md-4">
+                        <label class="text-muted small d-block">Trader</label>
+                        <strong id="vt_trader"></strong>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="text-muted small d-block">Counterparty</label>
+                        <strong id="vt_counterparty"></strong>
+                    </div>
+                    <div class="col-md-4">
                         <label class="text-muted small d-block">Status</label>
                         <span class="badge" id="vt_status"></span>
                     </div>
@@ -1557,6 +1835,8 @@ function viewTrade(btn) {
     document.getElementById('vt_date').textContent = d.date;
     document.getElementById('vt_ref').textContent = d.ref || '-';
     document.getElementById('vt_fee_type').textContent = d.feeType === 'liberty' ? 'Liberty' : 'Normal';
+    document.getElementById('vt_trader').textContent = d.trader || '-';
+    document.getElementById('vt_counterparty').textContent = d.counterparty || '-';
     
     const statusEl = document.getElementById('vt_status');
     statusEl.textContent = d.status;
