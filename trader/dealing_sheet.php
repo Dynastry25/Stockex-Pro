@@ -1617,11 +1617,11 @@ include '../includes/header.php';
                                                 <i class="bi bi-eye"></i>
                                             </button>
                                             <?php if ($isApproved !== 1): ?>
-                                                <button class="btn btn-outline-secondary" onclick="openUpload(<?php echo $trade['id']; ?>, 'payment')" title="Upload Payment">
+                                                <button class="btn btn-outline-secondary" onclick="openUpload(event, <?php echo $trade['id']; ?>, 'payment')" title="Upload Payment">
                                                     <i class="bi bi-cash"></i>
                                                 </button>
                                                 <?php if ($isBond): ?>
-                                                    <button class="btn btn-outline-secondary" onclick="openUpload(<?php echo $trade['id']; ?>, 'commission')" title="Upload Commission">
+                                                    <button class="btn btn-outline-secondary" onclick="openUpload(event, <?php echo $trade['id']; ?>, 'commission')" title="Upload Commission">
                                                         <i class="bi bi-percent"></i>
                                                     </button>
                                                 <?php endif; ?>
@@ -1749,7 +1749,7 @@ include '../includes/header.php';
                 <h5 class="modal-title"><i class="bi bi-upload"></i> Upload Receipt</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form method="POST" enctype="multipart/form-data">
+            <form method="POST" enctype="multipart/form-data" id="uploadForm">
                 <div class="modal-body">
                     <input type="hidden" name="trade_id" id="modal_trade_id" value="">
                     <input type="hidden" name="upload_receipt" value="1">
@@ -1765,13 +1765,13 @@ include '../includes/header.php';
                     
                     <div class="mb-3">
                         <label class="form-label fw-semibold">Select Files</label>
-                        <input type="file" class="form-control" name="receipt_files[]" accept="image/*,.pdf" multiple>
+                        <input type="file" class="form-control" name="receipt_files[]" accept="image/*,.pdf" multiple id="receiptFiles">
                         <div class="form-text">JPG, PNG, GIF, PDF (Max 5MB each)</div>
                     </div>
                     
                     <div class="mb-3">
                         <label class="form-label fw-semibold">Comment (Optional)</label>
-                        <textarea class="form-control" name="receipt_comment" rows="2" placeholder="Add a note..."></textarea>
+                        <textarea class="form-control" name="receipt_comment" rows="2" placeholder="Add a note..." id="receiptComment"></textarea>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -1894,11 +1894,19 @@ function viewTrade(btn) {
     new bootstrap.Modal(document.getElementById('viewTradeModal')).show();
 }
 
-// Open upload modal
-function openUpload(tradeId, type) {
+// Open upload modal - FIXED VERSION
+function openUpload(event, tradeId, type) {
+    // Prevent default button behavior
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+    
+    // Set form values
     document.getElementById('modal_trade_id').value = tradeId;
     document.getElementById('modal_receipt_type').value = type;
     
+    // Update label
     const label = document.getElementById('modal_receipt_label');
     if (type === 'commission') {
         label.textContent = 'Commission Receipt';
@@ -1906,15 +1914,41 @@ function openUpload(tradeId, type) {
         label.textContent = 'Payment Receipt';
     }
     
-    new bootstrap.Modal(document.getElementById('uploadModal')).show();
+    // Reset the form fields to clear previous uploads
+    const fileInput = document.getElementById('receiptFiles');
+    if (fileInput) {
+        fileInput.value = '';
+    }
+    
+    const commentInput = document.getElementById('receiptComment');
+    if (commentInput) {
+        commentInput.value = '';
+    }
+    
+    // Show modal using Bootstrap's API
+    const modalElement = document.getElementById('uploadModal');
+    const modal = new bootstrap.Modal(modalElement);
+    modal.show();
 }
 
-// Auto-dismiss alerts
-document.querySelectorAll('.alert').forEach(el => {
-    setTimeout(() => {
-        const bsAlert = bootstrap.Alert.getOrCreateInstance(el);
-        if (bsAlert) bsAlert.close();
-    }, 5000);
+// Handle upload form submission
+document.addEventListener('DOMContentLoaded', function() {
+    const uploadForm = document.getElementById('uploadForm');
+    if (uploadForm) {
+        uploadForm.addEventListener('submit', function(e) {
+            // Let the form submit normally
+            // This ensures the modal doesn't interfere with the form submission
+            return true;
+        });
+    }
+    
+    // Auto-dismiss alerts
+    document.querySelectorAll('.alert').forEach(el => {
+        setTimeout(() => {
+            const bsAlert = bootstrap.Alert.getOrCreateInstance(el);
+            if (bsAlert) bsAlert.close();
+        }, 5000);
+    });
 });
 </script>
 
