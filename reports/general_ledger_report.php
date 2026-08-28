@@ -222,19 +222,19 @@ function generateGeneralLedgerReport($db, $filters) {
     if (file_exists($logo_file)) {
         $pdf->Image($logo_file, $lm + 2, 5, 18, 0, '', '', 'T', false, 300);
     }
-    $pdf->SetFont('times', 'B', 12);
+    $pdf->SetFont('helvetica', 'B', 12);
     $pdf->SetTextColor(4, 45, 146);
     $pdf->SetXY($lm, 5);
     $pdf->Cell(0, 5, strtoupper($company_name), 0, 1, 'C');
-    $pdf->SetFont('times', 'BI', 9);
+    $pdf->SetFont('helvetica', 'BI', 9);
     $pdf->SetTextColor(255, 0, 0);
     $pdf->SetX($lm);
     $pdf->Cell(0, 4, 'Stockbroker/Dealer, Fund Manager & Investment Advisor', 0, 1, 'C');
-    $pdf->SetFont('times', 'B', 8);
+    $pdf->SetFont('helvetica', 'B', 8);
     $pdf->SetTextColor(4, 45, 146);
     $pdf->SetX($lm);
     $pdf->Cell(0, 4, 'Members of the ' . $company_exchange, 0, 1, 'C');
-    $pdf->SetFont('times', '', 7);
+    $pdf->SetFont('helvetica', '', 7);
     $pdf->SetTextColor(4, 45, 146);
     $pdf->SetX($lm);
     $pdf->Cell(0, 3, $company_address, 0, 1, 'C');
@@ -242,7 +242,7 @@ function generateGeneralLedgerReport($db, $filters) {
     if (!empty($company_mobile)) $contact_info .= 'Mob: ' . $company_mobile;
     if (!empty($company_phone)) $contact_info .= '| Tel: ' . $company_phone;
     if (!empty($company_email)) $contact_info .= '| Email: ' . $company_email;
-    $pdf->SetFont('times', 'B', 7);
+    $pdf->SetFont('helvetica', 'B', 7);
     $pdf->SetTextColor(4, 45, 146);
     $pdf->SetX($lm);
     $pdf->Cell(0, 3, $contact_info, 0, 1, 'C');
@@ -272,6 +272,19 @@ function generateGeneralLedgerReport($db, $filters) {
     $pdf->SetFont('helvetica', '', 9);
     $pdf->Cell(0, 4, 'Date : ' . date('d/m/Y') . ' : ' . date('H:i:s'), 0, 1, 'C');
     $pdf->Ln(3);
+    
+    // Report explanation
+    $pdf->writeHTML('
+    <div style="background-color: #f0f4f8; border-left: 4px solid #002e92; padding: 8px 12px; margin: 5px 0 10px 0; font-size: 8px; color: #333;">
+        <strong>Report Overview:</strong> This General Ledger Report provides a comprehensive summary of all financial transactions 
+        recorded in the general ledger for the specified period. It shows the movement of funds across different accounts, 
+        including debits, credits, and running balances.<br/>
+        <strong>How to Read:</strong> Each entry shows the date, description, reference number, debit amount, credit amount, 
+        and the resulting balance. Debits increase asset/expense accounts; Credits increase liability/equity/revenue accounts.<br/>
+        <strong>Purpose:</strong> Use this for financial reconciliation, audit preparation, and monitoring account balances.
+    </div>
+    ', true, false, true, false, '', '');
+    $pdf->Ln(2);
     
     // Add filter information
     $filters_applied = [];

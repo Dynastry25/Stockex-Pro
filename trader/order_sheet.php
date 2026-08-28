@@ -63,7 +63,7 @@ class DealingSheetPDF extends TCPDF {
         
         if ($this->watermark_enabled) {
             $this->SetAlpha(0.05);
-            $this->SetFont('times', 'B', 45);
+            $this->SetFont('helvetica', 'B', 45);
             $this->SetTextColor(200, 200, 200);
             $this->StartTransform();
             $this->Rotate(45, 105, 150);

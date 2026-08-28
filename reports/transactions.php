@@ -172,14 +172,33 @@ function generateBondsSummaryHTML($client_balances, $company_name, $company_addr
             </div>
             
             <div class="header">
-                <div class="company-info">
-                    <strong>' . strtoupper($company_name) . '</strong><br>
-                    ' . htmlspecialchars($company_address) . '<br>
-                    Phone: ' . htmlspecialchars($company_phone) . ' | Email: ' . htmlspecialchars($company_email) . '
+                <div style="margin-bottom: 10px;">
+                    <img src="<?php echo BASE_URL; ?>assets/HeaderLogoVfsl.jpg" alt="VFSL Logo" style="height: 50px;">
                 </div>
+                <div class="company-info">
+                    <strong style="color: #002e92; font-size: 14px;">' . strtoupper($company_name) . '</strong><br>
+                    <span style="color: #cc0000; font-style: italic; font-size: 11px;">Stockbroker/Dealer, Fund Manager & Investment Advisor</span><br>
+                    <span style="color: #002e92; font-size: 10px;">Members of the Dar Es Salaam Stock Exchange</span><br>
+                    <span style="color: #666; font-size: 10px;">' . htmlspecialchars($company_address) . '</span><br>
+                    <span style="color: #666; font-size: 10px;">Mob: +255 752 824 977 | Tel: +255 22 211 2691 | Email: info@vfsl.co.tz</span>
+                </div>
+                <div style="border-top: 2px solid #002e92; border-bottom: 1px solid #cc0000; padding: 5px 0; margin-top: 5px;"></div>
                 <div class="report-title">BONDS TRANSACTIONS SUMMARY REPORT</div>
                 <div class="report-subtitle">FOR DATE: ' . $chosen_date . '</div>
                 <div class="report-subtitle">Date Printed: ' . $current_date . '</div>
+            </div>
+            
+            <div style="background-color: #f8f9fa; border-left: 4px solid #002e92; padding: 10px 15px; margin: 10px 0; font-size: 11px; color: #333;">
+                <strong>Report Overview:</strong> This Bonds Summary Report provides a consolidated view of all client positions in bond trading 
+                for the period <strong>' . $period_from . '</strong> to <strong>' . $period_to . '</strong>. It summarizes total inflows (from sales) and outflows 
+                (from purchases) for each client, showing their net exposure to the bond market.<br><br>
+                <strong>How to Read:</strong> Each row represents one client. <strong>Inflow (SALES)</strong> is the total value of bonds sold by the client 
+                (money coming in). <strong>Outflow (PURCHASES)</strong> is the total value of bonds bought by the client (money going out). 
+                The <strong>Net Position</strong> shows the difference: positive means the client is a net seller (received more than spent), 
+                negative means a net buyer (spent more than received). The <strong>Balance</strong> column shows the running cumulative total.<br><br>
+                <strong>Key Insights:</strong> A large positive net position indicates profit-taking or portfolio reduction. 
+                A large negative net position indicates accumulation or increased exposure. 
+                Use this report for client portfolio reviews and position monitoring.
             </div>
             
             <div class="table-responsive">
@@ -360,14 +379,32 @@ function generateEquitiesSummaryHTML($client_balances, $company_name, $company_a
             </div>
             
             <div class="header">
-                <div class="company-info">
-                    <strong>' . strtoupper($company_name) . '</strong><br>
-                    ' . htmlspecialchars($company_address) . '<br>
-                    Phone: ' . htmlspecialchars($company_phone) . ' | Email: ' . htmlspecialchars($company_email) . '
+                <div style="margin-bottom: 10px;">
+                    <img src="<?php echo BASE_URL; ?>assets/HeaderLogoVfsl.jpg" alt="VFSL Logo" style="height: 50px;">
                 </div>
+                <div class="company-info">
+                    <strong style="color: #002e92; font-size: 14px;">' . strtoupper($company_name) . '</strong><br>
+                    <span style="color: #cc0000; font-style: italic; font-size: 11px;">Stockbroker/Dealer, Fund Manager & Investment Advisor</span><br>
+                    <span style="color: #002e92; font-size: 10px;">Members of the Dar Es Salaam Stock Exchange</span><br>
+                    <span style="color: #666; font-size: 10px;">' . htmlspecialchars($company_address) . '</span><br>
+                    <span style="color: #666; font-size: 10px;">Mob: +255 752 824 977 | Tel: +255 22 211 2691 | Email: info@vfsl.co.tz</span>
+                </div>
+                <div style="border-top: 2px solid #002e92; border-bottom: 1px solid #cc0000; padding: 5px 0; margin-top: 5px;"></div>
                 <div class="report-title">EQUITIES TRANSACTIONS SUMMARY REPORT</div>
                 <div class="report-subtitle">FOR DATE: ' . $chosen_date . '</div>
                 <div class="report-subtitle">Date Printed: ' . $current_date . '</div>
+            </div>
+            
+            <div style="background-color: #f8f9fa; border-left: 4px solid #28a745; padding: 10px 15px; margin: 10px 0; font-size: 11px; color: #333;">
+                <strong>Report Overview:</strong> This Equities Summary Report provides a consolidated view of all client positions in share/equity 
+                trading for the period <strong>' . $period_from . '</strong> to <strong>' . $period_to . '</strong>. It summarizes total inflows (from sales) and outflows 
+                (from purchases) for each client, showing their net exposure to the equity market.<br><br>
+                <strong>How to Read:</strong> Each row represents one client. <strong>Inflow (SALES)</strong> is the total value of shares sold 
+                (money coming in). <strong>Outflow (PURCHASES)</strong> is the total value of shares bought (money going out). 
+                The <strong>Net Position</strong> shows the difference: positive = net seller, negative = net buyer. 
+                The <strong>Balance</strong> column shows the running cumulative total across all clients.<br><br>
+                <strong>Key Insights:</strong> Monitor clients with large negative positions — they may need additional funds for settlement. 
+                Clients with large positive positions may have cash available for new investments.
             </div>
             
             <div class="table-responsive">
@@ -549,14 +586,30 @@ function generateCombinedSummaryHTML($bond_balances, $equity_balances, $company_
             </div>
             
             <div class="header">
-                <div class="company-info">
-                    <strong>' . strtoupper($company_name) . '</strong><br>
-                    ' . htmlspecialchars($company_address) . '<br>
-                    Phone: ' . htmlspecialchars($company_phone) . ' | Email: ' . htmlspecialchars($company_email) . '
+                <div style="margin-bottom: 10px;">
+                    <img src="<?php echo BASE_URL; ?>assets/HeaderLogoVfsl.jpg" alt="VFSL Logo" style="height: 50px;">
                 </div>
+                <div class="company-info">
+                    <strong style="color: #002e92; font-size: 14px;">' . strtoupper($company_name) . '</strong><br>
+                    <span style="color: #cc0000; font-style: italic; font-size: 11px;">Stockbroker/Dealer, Fund Manager & Investment Advisor</span><br>
+                    <span style="color: #002e92; font-size: 10px;">Members of the Dar Es Salaam Stock Exchange</span><br>
+                    <span style="color: #666; font-size: 10px;">' . htmlspecialchars($company_address) . '</span><br>
+                    <span style="color: #666; font-size: 10px;">Mob: +255 752 824 977 | Tel: +255 22 211 2691 | Email: info@vfsl.co.tz</span>
+                </div>
+                <div style="border-top: 2px solid #002e92; border-bottom: 1px solid #cc0000; padding: 5px 0; margin-top: 5px;"></div>
                 <div class="report-title">COMBINED TRANSACTIONS SUMMARY REPORT</div>
                 <div class="report-subtitle">FOR DATE: ' . $chosen_date . '</div>
                 <div class="report-subtitle">Date Printed: ' . $current_date . '</div>
+            </div>
+            
+            <div style="background-color: #f8f9fa; border-left: 4px solid #6c757d; padding: 10px 15px; margin: 10px 0; font-size: 11px; color: #333;">
+                <strong>Report Overview:</strong> This Combined Summary Report consolidates client positions across both Bonds and Shares (Equities) 
+                for the period <strong>' . $chosen_date . '</strong>. It provides a complete overview of client exposure across all asset classes.<br><br>
+                <strong>How to Read:</strong> The report is divided into two sections — <strong>Bonds</strong> (blue) and <strong>Shares</strong> (green). 
+                Each section shows client-level inflow/outflow/net position summaries. The <strong>Overall Summary</strong> table at the bottom 
+                combines both asset classes to show the total market exposure per client.<br><br>
+                <strong>Purpose:</strong> Use this report for comprehensive portfolio reviews, risk assessment, and regulatory reporting. 
+                It helps identify clients with significant exposure across multiple asset classes.
             </div>';
     
     // Bonds Summary Section

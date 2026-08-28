@@ -38,7 +38,7 @@ class StatutoryDeductionsPDF extends TCPDF {
         $this->Ln(2);
         
         // Set font
-        $this->SetFont('times', 'I', 8);
+        $this->SetFont('helvetica', 'I', 8);
         
         // Disclaimer
         $disclaimer = $this->company_name . " has prepared this Report solely for informational purposes. " .
@@ -50,7 +50,7 @@ class StatutoryDeductionsPDF extends TCPDF {
         
         // Page number
         $this->SetY(-8);
-        $this->SetFont('times', '', 8);
+        $this->SetFont('helvetica', '', 8);
         $this->Cell(0, 6, 'Page ' . $this->getAliasNumPage() . ' of ' . $this->getAliasNbPages(), 0, 0, 'C');
     }
 }
@@ -166,7 +166,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' || isset($_GET['action']) || isset($_G
         $pdf->SetAutoPageBreak(TRUE, 35);
         
         // Set font
-        $pdf->SetFont('times', '', 12);
+        $pdf->SetFont('helvetica', '', 12);
         
         $formattedStartDate = date('d/m/Y', strtotime($start_date));
         $formattedEndDate = date('d/m/Y', strtotime($end_date));
@@ -191,10 +191,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' || isset($_GET['action']) || isset($_G
             
             // To and Date
             $pdf->Cell(20, 6, 'TO:', 0, 0);
-            $pdf->SetFont('times', 'B', 11);
+            $pdf->SetFont('helvetica', 'B', 11);
             $pdf->Cell(0, 6, $rate['name'], 0, 1);
             
-            $pdf->SetFont('times', '', 11);
+            $pdf->SetFont('helvetica', '', 11);
             $pdf->Cell(20, 6, 'DATE:', 0, 0);
             $pdf->Cell(0, 6, date('d/m/Y'), 0, 1);
             $pdf->Ln(8);
@@ -208,19 +208,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' || isset($_GET['action']) || isset($_G
             $pdf->Ln(2);
             
             $pdf->MultiCell(0, 6, 'Should you require any additional information or clarification regarding this remittance, please do not hesitate to contact our office.', 0, 'L');
-            $pdf->Ln(10);
+            $pdf->Ln(5);
+            
+            $explanationHtml = '<div style="background-color: #f0f4f8; border-left: 4px solid #002e92; padding: 8px 12px; margin: 5px 0 10px 0; font-size: 8px; color: #333;">
+                <strong>Report Overview:</strong> This Statutory Deductions Report breaks down all regulatory fees and levies charged on transactions 
+                during the specified period. These fees are mandated by the Dar Es Salaam Stock Exchange (DSE), 
+                Capital Markets and Securities Authority (CMSA), and Central Securities Depository (CSD).<br/>
+                <strong>Fee Structure:</strong> DSE Transaction Levy (0.02006%) | CMSA Levy (0.01%) | CSD Levy (0.0118%) | 
+                VAT on Brokerage Commission (18% of commission).<br/>
+                <strong>Purpose:</strong> Use this for regulatory compliance, fee reconciliation, and preparation of levy payments to DSE, CMSA, and CSD.
+            </div>';
+            $pdf->writeHTML($explanationHtml, true, false, true, false, '');
+            $pdf->Ln(5);
             
             // Table - Centered
             $table_start_x = 30;
             $pdf->SetX($table_start_x);
             
             // Table Header
-            $pdf->SetFont('times', 'B', 11);
+            $pdf->SetFont('helvetica', 'B', 11);
             $pdf->Cell(90, 8, 'PARTICULARS', 1, 0, 'C');
             $pdf->Cell(50, 8, 'AMOUNT (TZS)', 1, 1, 'C');
             
             // Table Data
-            $pdf->SetFont('times', '', 11);
+            $pdf->SetFont('helvetica', '', 11);
             $pdf->SetX($table_start_x);
             $pdf->Cell(90, 7, 'Total Purchases', 1, 0, 'L');
             $pdf->Cell(50, 7, $formattedPurchases, 1, 1, 'R');
@@ -229,17 +240,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' || isset($_GET['action']) || isset($_G
             $pdf->Cell(90, 7, 'Total Sales', 1, 0, 'L');
             $pdf->Cell(50, 7, $formattedSales, 1, 1, 'R');
             
-            $pdf->SetFont('times', 'B', 11);
+            $pdf->SetFont('helvetica', 'B', 11);
             $pdf->SetX($table_start_x);
             $pdf->Cell(90, 7, 'Total Transaction Value', 1, 0, 'L');
             $pdf->Cell(50, 7, $formattedTotal, 1, 1, 'R');
             
-            $pdf->SetFont('times', '', 11);
+            $pdf->SetFont('helvetica', '', 11);
             $pdf->SetX($table_start_x);
             $pdf->Cell(90, 7, 'Transaction Levy @ ' . $rate['rateLabel'], 1, 0, 'L');
             $pdf->Cell(50, 7, $formattedAmount, 1, 1, 'R');
             
-            $pdf->SetFont('times', 'B', 11);
+            $pdf->SetFont('helvetica', 'B', 11);
             $pdf->SetFillColor(232, 245, 232);
             $pdf->SetX($table_start_x);
             $pdf->Cell(90, 8, 'TOTAL FEES PAYABLE', 1, 0, 'C', true);
@@ -248,7 +259,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' || isset($_GET['action']) || isset($_G
             
 
             // Stamp section - Centered
-            $pdf->SetFont('times', 'B', 11);
+            $pdf->SetFont('helvetica', 'B', 11);
             $pdf->Cell(0, 7, 'RECEIVED AND ACKNOWLEDGED:', 0, 1, 'C');
             $pdf->Ln(4);
             
@@ -262,7 +273,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' || isset($_GET['action']) || isset($_G
             $pdf->SetDrawColor(150, 150, 150);
             $pdf->Rect($centerX, $currentY, $boxWidth, $boxHeight);
             $pdf->SetXY($centerX, $currentY + ($boxHeight/2) - 2);
-            $pdf->SetFont('times', '', 9);
+            $pdf->SetFont('helvetica', '', 9);
             $pdf->Cell($boxWidth, 4, $rate['agency'] . ' STAMP & SIGNATURE', 0, 1, 'C');
             
             // Right stamp box
@@ -274,7 +285,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' || isset($_GET['action']) || isset($_G
             $pdf->SetDrawColor(0, 0, 0);
             
             $pdf->SetY($currentY + $boxHeight + 8);
-            $pdf->SetFont('times', '', 10);
+            $pdf->SetFont('helvetica', '', 10);
             
             // Left signature details
             $pdf->SetX($centerX);

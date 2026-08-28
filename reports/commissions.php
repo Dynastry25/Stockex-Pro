@@ -908,6 +908,16 @@ function generateCommissionTable($pdf, $data, $report_by, $asset_class_type, $wa
     $pdf->Cell(0, 4, 'Generated: ' . date('d/m/Y H:i:s'), 0, 1, 'C');
     $pdf->Ln(3);
     
+    $explanationHtml = '<div style="background-color: #f0f4f8; border-left: 4px solid #002e92; padding: 8px 12px; margin: 5px 0 10px 0; font-size: 8px; color: #333;">
+        <strong>Report Overview:</strong> This Commission Report details all brokerage commissions earned from bond, equity, and commodity transactions 
+        during the specified period. It provides a breakdown of commission by asset class and trade type.<br/>
+        <strong>How to Read:</strong> Each section shows the trade details, gross commission, applicable deductions (VAT, regulatory levies), 
+        and the net commission earned. Bonds use 0.063% brokerage rate; Equities use 1.5%.<br/>
+        <strong>Purpose:</strong> Use this for revenue tracking, performance analysis, and financial reporting.
+    </div>';
+    $pdf->writeHTML($explanationHtml, true, false, true, false, '');
+    $pdf->Ln(3);
+    
     // Build headers
     if ($asset_class_type === 'bond') {
         $headers = ['#', 'PERIOD', 'QTY (FV)', 'CONSIDERATION', 'GROSS COMM', 'BROKER COMM', 'TOTAL LEVIES', 'DSE', 'CMSA', 'CSD', 'VAT', 'RETURN', 'NET COMM'];

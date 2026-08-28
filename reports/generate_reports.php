@@ -2,6 +2,7 @@
 require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
 require_once '../tcpdf/tcpdf.php';
+require_once __DIR__ . '/traits/ReportHeaderTrait.php';
 
 require_login();
 $db = getDBConnection();
@@ -111,9 +112,10 @@ function generateBondsEditListReport($db, $where_clause, $params, $company_name,
     $pdf->SetTitle('Bonds Purchases & Sales Transactions Edit List');
     $pdf->setPrintHeader(false);
     $pdf->setPrintFooter(false);
-    $pdf->SetMargins(10, 10, 10);
+    $pdf->SetMargins(10, 30, 10);
     $pdf->SetAutoPageBreak(TRUE, 15);
     $pdf->AddPage();
+    renderVfslPdfHeader($pdf);
 
     // Calculate fees for each transaction
     $processed_transactions = [];
@@ -157,6 +159,7 @@ function generateBondsEditListReport($db, $where_clause, $params, $company_name,
     // Generate HTML content
     $html = generateBondsEditListHTML($processed_transactions, $daily_totals, $company_name, $filters);
     $pdf->writeHTML($html, true, false, true, false, '');
+    renderVfslPdfFooter($pdf);
     $pdf->Output('bonds_edit_list_' . date('Y_m_d') . '.pdf', 'I');
 }
 
@@ -210,12 +213,14 @@ function generateBondsSummaryReport($db, $where_clause, $params, $company_name, 
     $pdf->SetTitle('Bonds Transactions Summary Report');
     $pdf->setPrintHeader(false);
     $pdf->setPrintFooter(false);
-    $pdf->SetMargins(10, 10, 10);
+    $pdf->SetMargins(10, 30, 10);
     $pdf->SetAutoPageBreak(TRUE, 15);
     $pdf->AddPage();
+    renderVfslPdfHeader($pdf);
 
     $html = generateBondsSummaryHTML($client_balances, $company_name, $filters);
     $pdf->writeHTML($html, true, false, true, false, '');
+    renderVfslPdfFooter($pdf);
     $pdf->Output('bonds_summary_' . date('Y_m_d') . '.pdf', 'I');
 }
 
@@ -265,12 +270,23 @@ function generateBondsEditListHTML($transactions, $daily_totals, $company_name, 
         .total-row { background-color: #f8f8f8; font-weight: bold; }
     </style>
     
-    <div class="header">
-        <div class="report-title">' . strtoupper($company_name) . '</div>
-        <div class="report-subtitle">Division : STOCK BROKING</div>
-        <div class="report-title">BONDS PURCHASES & SALES TRANSACTIONS EDIT LIST</div>
-        <div class="report-subtitle">FOR THE PERIOD [' . $period_from . ' - ' . $period_to . ']</div>
-        <div class="report-subtitle">Date : ' . $current_date . ' : ' . $current_time . '</div>
+    <div style="text-align: center; margin-bottom: 5px; padding-bottom: 3px;">
+        <div style="font-size: 11px; font-weight: bold; margin: 3px 0; color: #002e92;">BONDS PURCHASES & SALES TRANSACTIONS EDIT LIST</div>
+        <div style="font-size: 9px; margin: 2px 0; color: #666;">FOR THE PERIOD [' . $period_from . ' - ' . $period_to . ']</div>
+        <div style="font-size: 9px; margin: 2px 0; color: #666;">Date : ' . $current_date . ' : ' . $current_time . '</div>
+    </div>
+    
+    <div style="background-color: #f0f4f8; border-left: 4px solid #002e92; padding: 8px 12px; margin: 5px 0 10px 0; font-size: 8px; color: #333;">
+        <strong>Report Overview:</strong> This Bonds Edit List provides a detailed record of all bond purchase and sale transactions 
+        processed during the period <strong>' . $period_from . '</strong> to <strong>' . $period_to . '</strong>. 
+        Each row represents a single executed trade with the client, security, trade details, and a full breakdown of applicable charges.<br/><br/>
+        <strong>How to Read:</strong> Transactions are grouped by trade date. For each trade, the report shows the gross consideration 
+        (trade value), followed by charges: Brokerage Commission (0.063%), DSE Transaction Levy, CMSA Levy, CSD Levy, and VAT on Commission (18%). 
+        The final column shows the net amount — the actual cash impact after all charges. For BUY trades, charges are added; for SELL trades, charges are deducted.<br/><br/>
+        <strong>Key Columns:</strong> 
+        SLIPNO = Trade reference number | CONTRACT = Trade side and unique ID | 
+        CONSIDERATION = Quantity × Price | TOTAL CHARGES = Sum of all fees | 
+        GROSS/NET AMOUNT = Final settlement amount after charges.
     </div>
     
     <table>
@@ -393,6 +409,8 @@ function generateBondsEditListHTML($transactions, $daily_totals, $company_name, 
 }
 
 function generateBondsSummaryHTML($client_balances, $company_name, $filters) {
+    $period_from = date('d/m/Y', strtotime($filters['period_from']));
+    $period_to = date('d/m/Y', strtotime($filters['period_to']));
     $current_date = date('d/m/Y');
     
     $html = '
@@ -411,15 +429,19 @@ function generateBondsSummaryHTML($client_balances, $company_name, $filters) {
         .contact-info { font-size: 9px; margin: 5px 0; }
     </style>
     
-    <div class="header">
-        <div class="company-title">' . strtoupper($company_name) . '</div>
-        <div class="company-subtitle">Stock Broker / Dealer & Investment Advisor</div>
-        <div class="company-subtitle">Member of Dar es Salaam Stock Exchange</div>
-        <div class="contact-info">
-            ATC HOUSE, OHIO STREET/GARDEN AVENUE PO BOX 8706 DAR ES SALAAM<br>
-            Tel: +255 22 2112091 Mob: +255 788 284 540 Email: info@vfsl.co.tz
-        </div>
-        <div class="division">Division : STOCK BROKING</div>
+    <div style="text-align: center; margin-bottom: 5px; padding-bottom: 3px;">
+        <div style="font-size: 11px; font-weight: bold; margin: 3px 0; color: #002e92;">BONDS TRANSACTIONS SUMMARY</div>
+        <div style="font-size: 9px; margin: 2px 0; color: #666;">FOR THE PERIOD [' . $period_from . ' - ' . $period_to . ']</div>
+    </div>
+    
+    <div style="background-color: #f0f4f8; border-left: 4px solid #002e92; padding: 8px 12px; margin: 5px 0 10px 0; font-size: 8px; color: #333;">
+        <strong>Report Overview:</strong> This Bonds Summary Report provides a consolidated view of all client positions in bond trading 
+        for the specified period. It summarizes total inflows (from sales) and outflows (from purchases) for each client, showing their net exposure.<br/><br/>
+        <strong>How to Read:</strong> Each row represents one client. Inflow (SALES) = total value of bonds sold (money coming in). 
+        Outflow (PURCHASES) = total value of bonds bought (money going out). 
+        Net Position = Inflow minus Outflow. Positive = net seller; Negative = net buyer. 
+        Balance = running cumulative total.<br/><br/>
+        <strong>Purpose:</strong> Use this for client portfolio reviews, position monitoring, and settlement planning.
     </div>
     
     <table>

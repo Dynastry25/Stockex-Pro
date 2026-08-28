@@ -12,6 +12,7 @@ require_finance_officer();
 
 // Include TCPDF library from your local installation
 require_once('../tcpdf/tcpdf.php');
+require_once dirname(__DIR__) . '/reports/traits/ReportHeaderTrait.php';
 
 // Get receipt ID
 $receipt_id = isset($_GET['receipt_id']) ? (int)$_GET['receipt_id'] : 0;
@@ -174,11 +175,12 @@ function generatePDFReceipt($receipt) {
     $pdf->setPrintFooter(false);
     
     // Set margins
-    $pdf->SetMargins(15, 15, 15);
+    $pdf->SetMargins(10, 30, 10);
     $pdf->SetAutoPageBreak(TRUE, 15);
     
     // Add a page
     $pdf->AddPage();
+    renderVfslPdfHeader($pdf);
     
     // Set font
     $pdf->SetFont('helvetica', '', 10);
@@ -224,18 +226,17 @@ function generatePDFReceipt($receipt) {
     </style>
     
     <div class="text-center">
-        <!-- Company Header -->
-        <div class="company-name">' . htmlspecialchars($receipt['company_name'] ?? 'STOCK BROKER') . '</div>
-        <div class="company-details">
-            TZS<br>
-            P.O Box 675, Dar es Salaam, Tanzania<br>
-            Tel: 0767676767 | Mob: +255769296960 | Email: info@vfsl.co.tz
-        </div>
-        
         <!-- Receipt Title -->
         <div class="receipt-title">OFFICIAL RECEIPT</div>
         
         <div class="divider"></div>
+        
+        <div style="background-color: #f0f4f8; border-left: 4px solid #002e92; padding: 8px 12px; margin: 5px 0 10px 0; font-size: 8px; color: #333;">
+            <strong>Payment Receipt</strong> — This document serves as official confirmation of payment received by 
+            VICTORY FINANCIAL SERVICES LIMITED. Please retain for your records.<br/>
+            <strong>How to Read:</strong> The receipt shows the payment details including amount, payment method, 
+            related trade reference, and the account the payment was applied to.
+        </div>
         
         <!-- Receipt Details Table -->
         <table class="table-details">
@@ -335,6 +336,7 @@ function generatePDFReceipt($receipt) {
     $pdf->writeHTML($html, true, false, true, false, '');
     
     // Close and output PDF document
+    renderVfslPdfFooter($pdf);
     return $pdf->Output('', 'S'); // Return as string
 }
 
