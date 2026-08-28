@@ -648,6 +648,9 @@ include '../includes/header.php';
                                         <button class="btn btn-outline-warning btn-sm" title="Merge Accounts" onclick="showMergeModal(<?php echo $client['id']; ?>, '<?php echo htmlspecialchars(addslashes($client['client_name'])); ?>', '<?php echo htmlspecialchars($client['cds_account']); ?>')">
                                             <i class="bi bi-link-45deg"></i>
                                         </button>
+                                        <button class="btn btn-outline-info btn-sm" title="Send Update Link - populate a secure link for the client to update their own details" onclick="showPortalLinkModal('<?php echo htmlspecialchars(addslashes($client['client_name'])); ?>', '<?php echo htmlspecialchars($client['cds_account']); ?>')">
+                                            <i class="bi bi-send"></i>
+                                        </button>
                                         <?php if (in_array($user['role'], ['system_admin', 'ceo'])): ?>
                                         <button class="btn btn-outline-danger btn-sm" title="Delete Client" onclick="confirmDelete(<?php echo $client['id']; ?>, '<?php echo htmlspecialchars(addslashes($client['client_name'])); ?>')">
                                             <i class="bi bi-trash"></i>
@@ -1019,6 +1022,74 @@ include '../includes/header.php';
     </div>
 </div>
 
+<!-- Portal Self-Service Link Modal -->
+<div class="modal fade" id="portalLinkModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-send text-info me-1"></i> Send Client Update Link</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle me-2"></i>
+                    Generate a secure link for the client to <strong>update their own phone, email and bank/payment details</strong>.
+                    The link is shown <strong>only once</strong>, expires after the set hours, and can be used up to the
+                    allowed number of times. Generating a new link automatically revokes any previous one.
+                </div>
+
+                <div class="d-flex align-items-center mb-3">
+                    <i class="bi bi-person-circle fs-3 text-secondary me-2"></i>
+                    <div>
+                        <div class="fw-semibold" id="portalClientName">-</div>
+                        <small class="text-muted">CDS: <span id="portalClientCds">-</span></small>
+                    </div>
+                </div>
+
+                <div class="row g-3 mb-3">
+                    <div class="col-md-6">
+                        <label for="portalExpiryHours" class="form-label">Link validity (hours)</label>
+                        <input type="number" class="form-control" id="portalExpiryHours" value="72" min="1" max="720">
+                        <div class="form-text">Default 72 hours (3 days).</div>
+                    </div>
+                    <div class="col-md-6">
+                        <label for="portalMaxUses" class="form-label">Maximum uses</label>
+                        <input type="number" class="form-control" id="portalMaxUses" value="20" min="1" max="100">
+                        <div class="form-text">Default 20 uses.</div>
+                    </div>
+                </div>
+
+                <div id="portalGenerateStatus" class="mb-2"></div>
+
+                <div id="portalLinkResult" class="d-none">
+                    <label class="form-label fw-semibold">Send this link to the client:</label>
+                    <div class="input-group mb-2">
+                        <input type="text" class="form-control" id="portalLinkText" readonly>
+                        <button class="btn btn-outline-success" type="button" id="portalCopyBtn" onclick="portalCopyLink()">
+                            <i class="bi bi-clipboard me-1"></i>Copy
+                        </button>
+                    </div>
+                    <div class="form-text mb-2" id="portalLinkMeta"></div>
+                    <div class="alert alert-warning py-2 mb-2">
+                        <i class="bi bi-exclamation-triangle-fill me-1"></i>
+                        This link is only shown once. Store it in your message to the client now. Anyone with the link
+                        can update this client's details until it expires or is revoked.
+                    </div>
+                    <button class="btn btn-outline-danger btn-sm" type="button" onclick="portalRevokeLinks(true)">
+                        <i class="bi bi-slash-circle me-1"></i>Revoke active links for this client
+                    </button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-info text-white" id="portalGenerateBtn" onclick="portalGenerateLink()">
+                    <i class="bi bi-magic me-1"></i>Generate Link
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <style>
 .badge.bg-purple, .badge[style*="background-color: #6f42c1"] {
     background-color: #6f42c1 !important;
@@ -1135,6 +1206,127 @@ document.getElementById('national_id')?.addEventListener('input', function(e) {
         }
     });
 <?php endif; ?>
+
+// ===== Client Self-Service Portal Link =====
+const PORTAL_API_URL = '<?php echo BASE_URL; ?>api/portal/index.php';
+let portalCsrfToken = null;
+
+function portalEnsureCsrfToken() {
+    if (portalCsrfToken) {
+        return Promise.resolve(portalCsrfToken);
+    }
+    return fetch(PORTAL_API_URL + '?action=csrf_token')
+        .then(r => r.json())
+        .then(body => {
+            if (!body.success) throw new Error(body.error || 'Could not obtain a security token.');
+            portalCsrfToken = body.data.csrf_token;
+            return portalCsrfToken;
+        });
+}
+
+function portalShowStatus(message, type) {
+    const el = document.getElementById('portalGenerateStatus');
+    if (!message) { el.innerHTML = ''; return; }
+    const icons = { success: 'check-circle-fill', danger: 'exclamation-triangle-fill', warning: 'exclamation-triangle-fill', info: 'info-circle-fill' };
+    el.innerHTML = `<div class="alert alert-${type} py-2 mb-0"><i class="bi bi-${icons[type] || 'info-circle-fill'} me-1"></i>${message}</div>`;
+}
+
+function portalSetBusy(busy) {
+    const btn = document.getElementById('portalGenerateBtn');
+    btn.disabled = busy;
+    btn.querySelector('i').className = busy ? 'bi bi-hourglass-split me-1' : 'bi bi-magic me-1';
+}
+
+function showPortalLinkModal(clientName, cdsAccount) {
+    document.getElementById('portalClientName').textContent = clientName || '-';
+    document.getElementById('portalClientCds').textContent = cdsAccount || '-';
+    document.getElementById('portalExpiryHours').value = 72;
+    document.getElementById('portalMaxUses').value = 20;
+    document.getElementById('portalLinkResult').classList.add('d-none');
+    document.getElementById('portalLinkText').value = '';
+    document.getElementById('portalLinkMeta').textContent = '';
+    portalShowStatus('', null);
+    portalSetBusy(false);
+    new bootstrap.Modal(document.getElementById('portalLinkModal')).show();
+}
+
+function portalGenerateLink() {
+    const cds = document.getElementById('portalClientCds').textContent.trim();
+    const expiresHours = Math.min(720, Math.max(1, parseInt(document.getElementById('portalExpiryHours').value, 10) || 72));
+    const maxUses = Math.min(100, Math.max(1, parseInt(document.getElementById('portalMaxUses').value, 10) || 20));
+    const payload = { cds_account: cds, expires_hours: expiresHours, max_uses: maxUses };
+
+    portalSetBusy(true);
+    portalShowStatus('', null);
+
+    portalEnsureCsrfToken()
+        .then(token => {
+            payload.csrf_token = token;
+            return fetch(PORTAL_API_URL + '?action=mint_link', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+        })
+        .then(resp => resp.json().then(body => ({ status: resp.status, body })))
+        .then(({ status, body }) => {
+            if (!body.success) throw Object.assign(new Error(body.error || 'Failed to generate the link.'), { status, details: body.details });
+            const data = body.data;
+            document.getElementById('portalLinkText').value = data.link;
+            document.getElementById('portalLinkMeta').textContent =
+                `Valid until ${data.expires_at} · up to ${data.max_uses} uses · ${data.client_name} (CDS ${data.cds_account}).`;
+            document.getElementById('portalLinkResult').classList.remove('d-none');
+            portalShowStatus('Link generated &mdash; copy it and send it to the client now.', 'success');
+        })
+        .catch(err => {
+            const msgs = {
+                401: 'Your session has expired. Please log in again.',
+                403: 'Security token expired. Please log in again and retry.',
+                404: 'Client not found. Reload the page and try again.',
+                429: 'Too many requests. Wait a minute and try again.'
+            };
+            portalShowStatus(msgs[err.status] || err.message, 'danger');
+        })
+        .finally(() => portalSetBusy(false));
+}
+
+function portalCopyLink() {
+    const input = document.getElementById('portalLinkText');
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(input.value).then(() => {
+            const btn = document.getElementById('portalCopyBtn');
+            const old = btn.innerHTML;
+            btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Copied!';
+            btn.classList.add('btn-success');
+            btn.classList.remove('btn-outline-success');
+            setTimeout(() => { btn.innerHTML = old; btn.classList.remove('btn-success'); btn.classList.add('btn-outline-success'); }, 2000);
+        });
+    } else {
+        input.select();
+        input.setSelectionRange(0, 99999);
+        try { document.execCommand('copy'); } catch (e) { /* ignore */ }
+    }
+}
+
+function portalRevokeLinks(showConfirmation) {
+    const cds = document.getElementById('portalClientCds').textContent.trim();
+    if (!cds || cds === '-') return;
+    if (showConfirmation && !confirm(`Revoke all active update links for CDS ${cds}?`)) return;
+
+    portalEnsureCsrfToken()
+        .then(token => fetch(PORTAL_API_URL + '?action=revoke_link', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ csrf_token: token, cds_account: cds })
+        }))
+        .then(resp => resp.json().then(body => ({ status: resp.status, body })))
+        .then(({ status, body }) => {
+            if (!body.success) throw Object.assign(new Error(body.error || 'Failed to revoke links.'), { status });
+            document.getElementById('portalLinkResult').classList.add('d-none');
+            portalShowStatus('Revoked ' + body.data.revoked_tokens + ' active link(s) for this client.', 'success');
+        })
+        .catch(err => portalShowStatus(err.message, 'danger'));
+}
 </script>
 
 <?php include '../includes/footer.php'; ?>
