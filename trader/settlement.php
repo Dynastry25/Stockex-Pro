@@ -1,6 +1,6 @@
 <?php
 // ============================================
-// SETTLEMENT.PHP - COMPLETE WITH ALL MODALS
+// SETTLEMENT.PHP - COMPLETE WITH AUTO-FILTER
 // ============================================
 
 require_once '../config/config.php';
@@ -355,9 +355,6 @@ function getGroupedTrades($db, $date_from, $date_to, $hide_buy_orders = true, $t
 
 // ============================================
 // AJAX HANDLERS
-// ============================================
-// ============================================
-// AJAX HANDLERS - FIXED
 // ============================================
 if (isset($_GET['ajax'])) {
     // Clear any output buffers
@@ -940,6 +937,16 @@ $trade_side_filter = isset($_GET['side']) ? $_GET['side'] : 'sell_only';
 $hide_buy_orders = isset($_GET['hide_buy']) ? $_GET['hide_buy'] : '1';
 $filter_tab = isset($_GET['tab']) ? $_GET['tab'] : 'all';
 
+// Get filter values from GET (for auto-filter)
+$filter_client = isset($_GET['filter_client']) ? trim($_GET['filter_client']) : '';
+$filter_security = isset($_GET['filter_security']) ? trim($_GET['filter_security']) : '';
+$filter_side = isset($_GET['filter_side']) ? $_GET['filter_side'] : '';
+$filter_status = isset($_GET['filter_status']) ? $_GET['filter_status'] : '';
+$filter_date_from = isset($_GET['filter_date_from']) ? $_GET['filter_date_from'] : '';
+$filter_date_to = isset($_GET['filter_date_to']) ? $_GET['filter_date_to'] : '';
+$filter_amount_min = isset($_GET['filter_amount_min']) ? (float)$_GET['filter_amount_min'] : 0;
+$filter_amount_max = isset($_GET['filter_amount_max']) ? (float)$_GET['filter_amount_max'] : 0;
+
 $records_per_page = 50;
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 if ($page < 1) $page = 1;
@@ -947,39 +954,91 @@ $offset = ($page - 1) * $records_per_page;
 
 $grouped_trades = getGroupedTrades($db, $two_days_ago, $next_30_days, $hide_buy_orders, $trade_side_filter);
 
-// Filter by tab
+// Apply auto-filters
 $filtered_trades = [];
 foreach ($grouped_trades as $trade) {
-    $status = $trade['settlement_status'] ?? 'pending';
+    $include = true;
     
-    if ($filter_tab === 'all') {
+    // Client filter
+    if (!empty($filter_client)) {
+        if (stripos($trade['client_name'], $filter_client) === false) {
+            $include = false;
+        }
+    }
+    
+    // Security filter
+    if (!empty($filter_security)) {
+        if (stripos($trade['security_id'], $filter_security) === false) {
+            $include = false;
+        }
+    }
+    
+    // Side filter
+    if (!empty($filter_side) && $filter_side !== 'all') {
+        if (strtolower($trade['trade_side']) !== strtolower($filter_side)) {
+            $include = false;
+        }
+    }
+    
+    // Status filter
+    if (!empty($filter_status) && $filter_status !== 'all') {
+        $status = $trade['settlement_status'] ?? 'pending';
+        // Check for special status types
+        if ($filter_status === 'overdue') {
+            if ($status === 'paid' || $status === 'linked' || $status === 'failed') {
+                $include = false;
+            }
+            $settlement_date = $trade['settlement_date'] ?? $trade['trade_date'];
+            if ($settlement_date >= $today) {
+                $include = false;
+            }
+        } elseif ($filter_status === 'today') {
+            if ($status === 'paid' || $status === 'linked' || $status === 'failed') {
+                $include = false;
+            }
+            $settlement_date = $trade['settlement_date'] ?? $trade['trade_date'];
+            if ($settlement_date != $today) {
+                $include = false;
+            }
+        } elseif ($filter_status === 'pending') {
+            if ($status === 'paid' || $status === 'linked' || $status === 'failed') {
+                $include = false;
+            }
+        } else {
+            if ($status !== $filter_status) {
+                $include = false;
+            }
+        }
+    }
+    
+    // Date range filter
+    if (!empty($filter_date_from)) {
+        $settlement_date = $trade['settlement_date'] ?? $trade['trade_date'];
+        if ($settlement_date < $filter_date_from) {
+            $include = false;
+        }
+    }
+    if (!empty($filter_date_to)) {
+        $settlement_date = $trade['settlement_date'] ?? $trade['trade_date'];
+        if ($settlement_date > $filter_date_to) {
+            $include = false;
+        }
+    }
+    
+    // Amount range filter
+    if ($filter_amount_min > 0) {
+        if (floatval($trade['total_consideration']) < $filter_amount_min) {
+            $include = false;
+        }
+    }
+    if ($filter_amount_max > 0) {
+        if (floatval($trade['total_consideration']) > $filter_amount_max) {
+            $include = false;
+        }
+    }
+    
+    if ($include) {
         $filtered_trades[] = $trade;
-    } elseif ($filter_tab === 'overdue') {
-        if ($status !== 'paid' && $status !== 'linked' && $status !== 'failed') {
-            $settlement_date = $trade['settlement_date'] ?? $trade['trade_date'];
-            if ($settlement_date < $today) {
-                $filtered_trades[] = $trade;
-            }
-        }
-    } elseif ($filter_tab === 'today') {
-        if ($status !== 'paid' && $status !== 'linked' && $status !== 'failed') {
-            $settlement_date = $trade['settlement_date'] ?? $trade['trade_date'];
-            if ($settlement_date == $today) {
-                $filtered_trades[] = $trade;
-            }
-        }
-    } elseif ($filter_tab === 'paid') {
-        if ($status === 'paid') {
-            $filtered_trades[] = $trade;
-        }
-    } elseif ($filter_tab === 'linked') {
-        if ($status === 'linked') {
-            $filtered_trades[] = $trade;
-        }
-    } elseif ($filter_tab === 'failed') {
-        if ($status === 'failed') {
-            $filtered_trades[] = $trade;
-        }
     }
 }
 
@@ -987,7 +1046,7 @@ $total_records = count($filtered_trades);
 $total_pages = ceil($total_records / $records_per_page);
 $paginated_trades = array_slice($filtered_trades, $offset, $records_per_page);
 
-// Calculate stats from ALL trades
+// Calculate stats from filtered trades
 $stats = [
     'total_count' => 0,
     'total_value' => 0,
@@ -1005,7 +1064,7 @@ $stats = [
     'upcoming_value' => 0
 ];
 
-foreach ($grouped_trades as $trade) {
+foreach ($filtered_trades as $trade) {
     $stats['total_count']++;
     $stats['total_value'] += floatval($trade['total_consideration']);
     
@@ -1034,13 +1093,6 @@ foreach ($grouped_trades as $trade) {
 }
 
 $page_title = 'Trade Settlement';
-
-// Output JS early (echo here is safe: POST/AJAX handlers already redirected/exited)
-if (!isset($_GET['ajax'])) {
-    echo '<script>' . "\n";
-    echo file_get_contents(__DIR__ . '/../assets/js/settlement.js');
-    echo "\n" . '</script>' . "\n";
-}
 
 include '../includes/header.php';
 ?>
@@ -1095,6 +1147,49 @@ include '../includes/header.php';
     .linked-badge i {
         margin-right: 4px;
     }
+    .filter-section {
+        background: #f8f9fa;
+        padding: 15px;
+        border-radius: 8px;
+        margin-bottom: 15px;
+        border: 1px solid #e9ecef;
+    }
+    .filter-section .filter-label {
+        font-size: 12px;
+        font-weight: 600;
+        margin-bottom: 4px;
+        color: #6c757d;
+    }
+    .filter-section .form-control-sm {
+        font-size: 13px;
+    }
+    .filter-actions {
+        display: flex;
+        gap: 8px;
+        align-items: flex-end;
+        justify-content: flex-end;
+    }
+    .filter-actions .btn {
+        height: 32px;
+        font-size: 13px;
+    }
+    .filter-badge {
+        background: #e9ecef;
+        padding: 2px 10px;
+        border-radius: 12px;
+        font-size: 11px;
+        color: #495057;
+        margin-right: 4px;
+        display: inline-block;
+    }
+    .filter-badge .remove-filter {
+        cursor: pointer;
+        margin-left: 4px;
+        color: #dc3545;
+    }
+    .filter-badge .remove-filter:hover {
+        color: #a71d2a;
+    }
 </style>
 
 <div class="page-header">
@@ -1139,43 +1234,124 @@ include '../includes/header.php';
         </div>
     <?php endif; ?>
 
-    <!-- Filter Section -->
-    <div class="card mb-4">
-        <div class="card-header bg-light">
-            <div class="row align-items-center">
-                <div class="col-md-6">
-                    <h5 class="mb-0">Filters</h5>
+    <!-- Filter Section - AUTO FILTER -->
+    <div class="filter-section">
+        <form method="GET" id="filterForm" onchange="this.submit()">
+            <div class="row g-2">
+                <!-- Hidden fields to preserve existing filters -->
+                <input type="hidden" name="tab" value="<?php echo htmlspecialchars($filter_tab); ?>">
+                <input type="hidden" name="side" value="<?php echo htmlspecialchars($trade_side_filter); ?>">
+                <input type="hidden" name="hide_buy" value="<?php echo htmlspecialchars($hide_buy_orders); ?>">
+                <input type="hidden" name="page" value="1">
+                
+                <div class="col-6 col-md-2">
+                    <div class="filter-label">Client</div>
+                    <input type="text" class="form-control form-control-sm" name="filter_client" 
+                           value="<?php echo htmlspecialchars($filter_client); ?>" 
+                           placeholder="Search client..." 
+                           oninput="this.form.submit()">
                 </div>
-                <div class="col-md-6 text-end">
-                    <form method="GET" class="d-inline">
-                        <input type="hidden" name="page" value="1">
-                        <input type="hidden" name="tab" value="<?php echo htmlspecialchars($filter_tab); ?>">
-                        <div class="row g-2 justify-content-end">
-                            <div class="col-auto">
-                                <select class="form-select form-select-sm" name="side" onchange="this.form.submit()">
-                                    <option value="all" <?php echo $trade_side_filter === 'all' ? 'selected' : ''; ?>>All Trades</option>
-                                    <option value="sell_only" <?php echo $trade_side_filter === 'sell_only' ? 'selected' : ''; ?>>Sell Only</option>
-                                </select>
-                            </div>
-                            <div class="col-auto">
-                                <div class="form-check">
-                                    <input class="form-check-input" type="checkbox" name="hide_buy" value="1" id="hideBuyCheck" 
-                                           <?php echo $hide_buy_orders === '1' ? 'checked' : ''; ?> onchange="this.form.submit()">
-                                    <label class="form-check-label" for="hideBuyCheck">
-                                        Hide Buy Orders
-                                    </label>
-                                </div>
-                            </div>
-                            <div class="col-auto">
-                                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="resetFilters()">
-                                    <i class="bi bi-x-circle"></i> Reset
-                                </button>
-                            </div>
-                        </div>
-                    </form>
+                
+                <div class="col-6 col-md-2">
+                    <div class="filter-label">Security</div>
+                    <input type="text" class="form-control form-control-sm" name="filter_security" 
+                           value="<?php echo htmlspecialchars($filter_security); ?>" 
+                           placeholder="Search security..." 
+                           oninput="this.form.submit()">
+                </div>
+                
+                <div class="col-4 col-md-1">
+                    <div class="filter-label">Side</div>
+                    <select class="form-select form-select-sm" name="filter_side" onchange="this.form.submit()">
+                        <option value="">All</option>
+                        <option value="buy" <?php echo $filter_side === 'buy' ? 'selected' : ''; ?>>Buy</option>
+                        <option value="sell" <?php echo $filter_side === 'sell' ? 'selected' : ''; ?>>Sell</option>
+                    </select>
+                </div>
+                
+                <div class="col-4 col-md-1">
+                    <div class="filter-label">Status</div>
+                    <select class="form-select form-select-sm" name="filter_status" onchange="this.form.submit()">
+                        <option value="">All</option>
+                        <option value="pending" <?php echo $filter_status === 'pending' ? 'selected' : ''; ?>>Pending</option>
+                        <option value="paid" <?php echo $filter_status === 'paid' ? 'selected' : ''; ?>>Paid</option>
+                        <option value="linked" <?php echo $filter_status === 'linked' ? 'selected' : ''; ?>>Linked</option>
+                        <option value="failed" <?php echo $filter_status === 'failed' ? 'selected' : ''; ?>>Failed</option>
+                        <option value="overdue" <?php echo $filter_status === 'overdue' ? 'selected' : ''; ?>>Overdue</option>
+                        <option value="today" <?php echo $filter_status === 'today' ? 'selected' : ''; ?>>Due Today</option>
+                    </select>
+                </div>
+                
+                <div class="col-4 col-md-1">
+                    <div class="filter-label">From</div>
+                    <input type="date" class="form-control form-control-sm" name="filter_date_from" 
+                           value="<?php echo htmlspecialchars($filter_date_from); ?>" 
+                           onchange="this.form.submit()">
+                </div>
+                
+                <div class="col-4 col-md-1">
+                    <div class="filter-label">To</div>
+                    <input type="date" class="form-control form-control-sm" name="filter_date_to" 
+                           value="<?php echo htmlspecialchars($filter_date_to); ?>" 
+                           onchange="this.form.submit()">
+                </div>
+                
+                <div class="col-3 col-md-1">
+                    <div class="filter-label">Min (TZS)</div>
+                    <input type="number" class="form-control form-control-sm" name="filter_amount_min" 
+                           value="<?php echo $filter_amount_min > 0 ? $filter_amount_min : ''; ?>" 
+                           placeholder="0" step="1000"
+                           oninput="this.form.submit()">
+                </div>
+                
+                <div class="col-3 col-md-1">
+                    <div class="filter-label">Max (TZS)</div>
+                    <input type="number" class="form-control form-control-sm" name="filter_amount_max" 
+                           value="<?php echo $filter_amount_max > 0 ? $filter_amount_max : ''; ?>" 
+                           placeholder="∞" step="1000"
+                           oninput="this.form.submit()">
+                </div>
+                
+                <div class="col-6 col-md-1">
+                    <div class="filter-label">&nbsp;</div>
+                    <div class="filter-actions">
+                        <a href="settlement.php?tab=<?php echo urlencode($filter_tab); ?>&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?>" 
+                           class="btn btn-outline-secondary btn-sm" title="Clear all filters">
+                            <i class="bi bi-x-circle"></i> Clear
+                        </a>
+                    </div>
                 </div>
             </div>
-        </div>
+            
+            <!-- Active Filters Display -->
+            <?php 
+            $active_filters = [];
+            if (!empty($filter_client)) $active_filters[] = ['label' => 'Client: ' . htmlspecialchars($filter_client), 'param' => 'filter_client'];
+            if (!empty($filter_security)) $active_filters[] = ['label' => 'Security: ' . htmlspecialchars($filter_security), 'param' => 'filter_security'];
+            if (!empty($filter_side)) $active_filters[] = ['label' => 'Side: ' . ucfirst($filter_side), 'param' => 'filter_side'];
+            if (!empty($filter_status)) $active_filters[] = ['label' => 'Status: ' . ucfirst(str_replace('_', ' ', $filter_status)), 'param' => 'filter_status'];
+            if (!empty($filter_date_from)) $active_filters[] = ['label' => 'From: ' . htmlspecialchars($filter_date_from), 'param' => 'filter_date_from'];
+            if (!empty($filter_date_to)) $active_filters[] = ['label' => 'To: ' . htmlspecialchars($filter_date_to), 'param' => 'filter_date_to'];
+            if ($filter_amount_min > 0) $active_filters[] = ['label' => 'Min: ' . number_format($filter_amount_min, 0), 'param' => 'filter_amount_min'];
+            if ($filter_amount_max > 0) $active_filters[] = ['label' => 'Max: ' . number_format($filter_amount_max, 0), 'param' => 'filter_amount_max'];
+            ?>
+            <?php if (!empty($active_filters)): ?>
+                <div class="row mt-2">
+                    <div class="col-12">
+                        <small class="text-muted">Active filters:</small>
+                        <?php foreach ($active_filters as $filter): ?>
+                            <span class="filter-badge">
+                                <?php echo $filter['label']; ?>
+                                <a href="#" class="remove-filter" data-param="<?php echo $filter['param']; ?>" title="Remove filter">
+                                    <i class="bi bi-x"></i>
+                                </a>
+                            </span>
+                        <?php endforeach; ?>
+                        <span class="text-muted small">(<?php echo $total_records; ?> results)</span>
+                    </div>
+                </div>
+            <?php endif; ?>
+        </form>
     </div>
 
     <!-- Summary Cards -->
@@ -1298,37 +1474,37 @@ include '../includes/header.php';
         <div class="card-header bg-transparent border-0">
             <ul class="nav nav-tabs nav-tabs-custom" id="settlementTabs" role="tablist">
                 <li class="nav-item">
-                    <a class="nav-link <?php echo $filter_tab === 'all' ? 'active' : ''; ?>" href="?tab=all&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?>" role="tab">
+                    <a class="nav-link <?php echo $filter_tab === 'all' ? 'active' : ''; ?>" href="?tab=all&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_status) ? '&filter_status=' . urlencode($filter_status) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" role="tab">
                         <i class="bi bi-list-check me-2"></i>All Settlements
                         <span class="badge bg-primary ms-2"><?php echo $stats['total_count']; ?></span>
                     </a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link <?php echo $filter_tab === 'overdue' ? 'active' : ''; ?>" href="?tab=overdue&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?>" role="tab">
+                    <a class="nav-link <?php echo $filter_tab === 'overdue' ? 'active' : ''; ?>" href="?tab=overdue&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_status) ? '&filter_status=' . urlencode($filter_status) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" role="tab">
                         <i class="bi bi-exclamation-triangle me-2"></i>Overdue
                         <span class="badge bg-danger ms-2"><?php echo $stats['overdue_count']; ?></span>
                     </a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link <?php echo $filter_tab === 'today' ? 'active' : ''; ?>" href="?tab=today&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?>" role="tab">
+                    <a class="nav-link <?php echo $filter_tab === 'today' ? 'active' : ''; ?>" href="?tab=today&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_status) ? '&filter_status=' . urlencode($filter_status) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" role="tab">
                         <i class="bi bi-calendar-day me-2"></i>Due Today
                         <span class="badge bg-warning ms-2"><?php echo $stats['today_count']; ?></span>
                     </a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link <?php echo $filter_tab === 'paid' ? 'active' : ''; ?>" href="?tab=paid&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?>" role="tab">
+                    <a class="nav-link <?php echo $filter_tab === 'paid' ? 'active' : ''; ?>" href="?tab=paid&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_status) ? '&filter_status=' . urlencode($filter_status) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" role="tab">
                         <i class="bi bi-check-circle me-2"></i>Paid
                         <span class="badge bg-success ms-2"><?php echo $stats['paid_count']; ?></span>
                     </a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link <?php echo $filter_tab === 'linked' ? 'active' : ''; ?>" href="?tab=linked&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?>" role="tab">
+                    <a class="nav-link <?php echo $filter_tab === 'linked' ? 'active' : ''; ?>" href="?tab=linked&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_status) ? '&filter_status=' . urlencode($filter_status) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" role="tab">
                         <i class="bi bi-link me-2"></i>Linked
                         <span class="badge bg-info ms-2"><?php echo $stats['linked_count']; ?></span>
                     </a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link <?php echo $filter_tab === 'failed' ? 'active' : ''; ?>" href="?tab=failed&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?>" role="tab">
+                    <a class="nav-link <?php echo $filter_tab === 'failed' ? 'active' : ''; ?>" href="?tab=failed&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_status) ? '&filter_status=' . urlencode($filter_status) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" role="tab">
                         <i class="bi bi-x-circle me-2"></i>Failed
                         <span class="badge bg-dark ms-2"><?php echo $stats['failed_count']; ?></span>
                     </a>
@@ -1581,12 +1757,12 @@ include '../includes/header.php';
                             <ul class="pagination justify-content-center">
                                 <?php if ($page > 1): ?>
                                     <li class="page-item">
-                                        <a class="page-link" href="?page=1&tab=<?php echo urlencode($filter_tab); ?>&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?>" aria-label="First">
+                                        <a class="page-link" href="?page=1&tab=<?php echo urlencode($filter_tab); ?>&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_status) ? '&filter_status=' . urlencode($filter_status) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" aria-label="First">
                                             <span aria-hidden="true">&laquo;&laquo;</span>
                                         </a>
                                     </li>
                                     <li class="page-item">
-                                        <a class="page-link" href="?page=<?php echo $page - 1; ?>&tab=<?php echo urlencode($filter_tab); ?>&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?>" aria-label="Previous">
+                                        <a class="page-link" href="?page=<?php echo $page - 1; ?>&tab=<?php echo urlencode($filter_tab); ?>&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_status) ? '&filter_status=' . urlencode($filter_status) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" aria-label="Previous">
                                             <span aria-hidden="true">&laquo;</span>
                                         </a>
                                     </li>
@@ -1598,7 +1774,7 @@ include '../includes/header.php';
                                 
                                 for ($i = $start_page; $i <= $end_page; $i++): ?>
                                     <li class="page-item <?php echo $i == $page ? 'active' : ''; ?>">
-                                        <a class="page-link" href="?page=<?php echo $i; ?>&tab=<?php echo urlencode($filter_tab); ?>&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?>">
+                                        <a class="page-link" href="?page=<?php echo $i; ?>&tab=<?php echo urlencode($filter_tab); ?>&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_status) ? '&filter_status=' . urlencode($filter_status) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>">
                                             <?php echo $i; ?>
                                         </a>
                                     </li>
@@ -1606,12 +1782,12 @@ include '../includes/header.php';
                                 
                                 <?php if ($page < $total_pages): ?>
                                     <li class="page-item">
-                                        <a class="page-link" href="?page=<?php echo $page + 1; ?>&tab=<?php echo urlencode($filter_tab); ?>&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?>" aria-label="Next">
+                                        <a class="page-link" href="?page=<?php echo $page + 1; ?>&tab=<?php echo urlencode($filter_tab); ?>&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_status) ? '&filter_status=' . urlencode($filter_status) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" aria-label="Next">
                                             <span aria-hidden="true">&raquo;</span>
                                         </a>
                                     </li>
                                     <li class="page-item">
-                                        <a class="page-link" href="?page=<?php echo $total_pages; ?>&tab=<?php echo urlencode($filter_tab); ?>&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?>" aria-label="Last">
+                                        <a class="page-link" href="?page=<?php echo $total_pages; ?>&tab=<?php echo urlencode($filter_tab); ?>&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_status) ? '&filter_status=' . urlencode($filter_status) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" aria-label="Last">
                                             <span aria-hidden="true">&raquo;&raquo;</span>
                                         </a>
                                     </li>
@@ -1624,448 +1800,13 @@ include '../includes/header.php';
                         <?php endif; ?>
                     <?php endif; ?>
                 </div>
-                
-                <?php $settlement_trades = $grouped_trades; ?>
-                <!-- Overdue Tab -->
-                <div class="tab-pane fade" id="overdue" role="tabpanel">
-                    <?php 
-                    $overdue_trades = array_filter($settlement_trades, function($trade) {
-                        return ($trade['settlement_status_category'] ?? '') === 'overdue' && 
-                               $trade['settlement_status'] !== 'paid' && 
-                               $trade['settlement_status'] !== 'failed' &&
-                               $trade['settlement_status'] !== 'linked';
-                    });
-                    ?>
-                    <?php if (empty($overdue_trades)): ?>
-                        <div class="text-center py-5">
-                            <i class="bi bi-check-circle text-muted" style="font-size: 4rem; opacity: 0.3;"></i>
-                            <h5 class="text-muted mt-3">No Overdue Settlements</h5>
-                            <p class="text-muted">Great! All settlements are up to date.</p>
-                        </div>
-                    <?php else: ?>
-                        <div class="table-responsive">
-                            <table class="table table-hover">
-                                <thead>
-                                    <tr>
-                                        <th>Trade Ref</th>
-                                        <th>Client</th>
-                                        <th>Counterparty</th>
-                                        <th>Security</th>
-                                        <th>Side</th>
-                                        <th>Amount</th>
-                                        <th>Settlement Date</th>
-                                        <th>Days Overdue</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php foreach ($overdue_trades as $trade): 
-                                        if (!empty($trade['settlement_date']) && $trade['settlement_date'] != '0000-00-00') {
-                                            $days_overdue = (strtotime($today) - strtotime($trade['settlement_date'])) / (60 * 60 * 24);
-                                        } else {
-                                            $days_overdue = 0;
-                                        }
-                                    ?>
-                                        <tr>
-                                            <td><?php echo htmlspecialchars($trade['trade_reference']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['client_name']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['counterparty_name']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['security_id']); ?></td>
-                                            <td>
-                                                <span class="badge bg-<?php echo strtolower($trade['trade_side']) == 'buy' ? 'success' : 'danger'; ?>">
-                                                    <?php echo ucfirst($trade['trade_side']); ?>
-                                                </span>
-                                            </td>
-                                            <td class="fw-bold text-danger">TZS <?php echo number_format($trade['consideration'], 2); ?></td>
-                                            <td>
-                                                <?php 
-                                                if (!empty($trade['settlement_date']) && $trade['settlement_date'] != '0000-00-00') {
-                                                    echo date('Y-m-d', strtotime($trade['settlement_date']));
-                                                } else {
-                                                    echo 'N/A';
-                                                }
-                                                ?>
-                                            </td>
-                                            <td>
-                                                <span class="badge bg-danger"><?php echo $days_overdue; ?> days</span>
-                                            </td>
-                                            <td>
-                                                <?php if ($trade['trade_side'] === 'sell'): ?>
-                                                    <div class="btn-group btn-group-sm">
-                                                        <?php if ($user_role !== 'trader'): ?>
-                                                        <button type="button" class="btn btn-success" onclick="showPaymentModal(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-cash-coin"></i> Pay Now
-                                                        </button>
-                                                        <?php endif; ?>
-                                                        <button type="button" class="btn btn-info" onclick="showLinkTradeModal(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-link"></i> Link
-                                                        </button>
-                                                        <button type="button" class="btn btn-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-x-lg"></i> Cancel
-                                                        </button>
-                                                        <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
-                                                            <i class="bi bi-file-earmark-text"></i>
-                                                        </a>
-                                                    </div>
-                                                <?php else: ?>
-                                                    <div class="btn-group btn-group-sm">
-                                                        <?php if ($user_role !== 'trader'): ?>
-                                                        <button type="button" class="btn btn-success" onclick="showPaymentModal(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-cash-coin"></i> Pay Now
-                                                        </button>
-                                                        <?php endif; ?>
-                                                        <button type="button" class="btn btn-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-x-lg"></i> Cancel
-                                                        </button>
-                                                        <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
-                                                            <i class="bi bi-file-earmark-text"></i>
-                                                        </a>
-                                                    </div>
-                                                <?php endif; ?>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
-                        </div>
-                    <?php endif; ?>
-                </div>
-                
-                <!-- Today Tab -->
-                <div class="tab-pane fade" id="today" role="tabpanel">
-                    <?php 
-                    $today_trades = array_filter($settlement_trades, function($trade) {
-                        return ($trade['settlement_status_category'] ?? '') === 'today' && 
-                               $trade['settlement_status'] !== 'paid' && 
-                               $trade['settlement_status'] !== 'failed' &&
-                               $trade['settlement_status'] !== 'linked';
-                    });
-                    ?>
-                    <?php if (empty($today_trades)): ?>
-                        <div class="text-center py-5">
-                            <i class="bi bi-check-circle text-muted" style="font-size: 4rem; opacity: 0.3;"></i>
-                            <h5 class="text-muted mt-3">No Settlements Due Today</h5>
-                            <p class="text-muted">All today's settlements are processed.</p>
-                        </div>
-                    <?php else: ?>
-                        <div class="table-responsive">
-                            <table class="table table-hover">
-                                <thead>
-                                    <tr>
-                                        <th>Trade Ref</th>
-                                        <th>Client</th>
-                                        <th>Counterparty</th>
-                                        <th>Security</th>
-                                        <th>Side</th>
-                                        <th>Amount</th>
-                                        <th>Settlement Date</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php foreach ($today_trades as $trade): ?>
-                                        <tr>
-                                            <td><?php echo htmlspecialchars($trade['trade_reference']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['client_name']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['counterparty_name']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['security_id']); ?></td>
-                                            <td>
-                                                <span class="badge bg-<?php echo strtolower($trade['trade_side']) == 'buy' ? 'success' : 'danger'; ?>">
-                                                    <?php echo ucfirst($trade['trade_side']); ?>
-                                                </span>
-                                            </td>
-                                            <td class="fw-bold text-warning">TZS <?php echo number_format($trade['consideration'], 2); ?></td>
-                                            <td>
-                                                <?php 
-                                                if (!empty($trade['settlement_date']) && $trade['settlement_date'] != '0000-00-00') {
-                                                    echo date('Y-m-d', strtotime($trade['settlement_date']));
-                                                } else {
-                                                    echo 'N/A';
-                                                }
-                                                ?>
-                                            </td>
-                                            <td>
-                                                <?php if ($trade['trade_side'] === 'sell'): ?>
-                                                    <div class="btn-group btn-group-sm">
-                                                        <?php if ($user_role !== 'trader'): ?>
-                                                        <button type="button" class="btn btn-success" onclick="showPaymentModal(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-cash-coin"></i> Pay Now
-                                                        </button>
-                                                        <?php endif; ?>
-                                                        <button type="button" class="btn btn-info" onclick="showLinkTradeModal(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-link"></i> Link
-                                                        </button>
-                                                        <button type="button" class="btn btn-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-x-lg"></i> Failed
-                                                        </button>
-                                                        <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
-                                                            <i class="bi bi-file-earmark-text"></i>
-                                                        </a>
-                                                    </div>
-                                                <?php else: ?>
-                                                    <div class="btn-group btn-group-sm">
-                                                        <?php if ($user_role !== 'trader'): ?>
-                                                        <button type="button" class="btn btn-success" onclick="showPaymentModal(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-cash-coin"></i> Pay Now
-                                                        </button>
-                                                        <?php endif; ?>
-                                                        <button type="button" class="btn btn-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
-                                                            <i class="bi bi-x-lg"></i> Cancel
-                                                        </button>
-                                                        <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
-                                                            <i class="bi bi-file-earmark-text"></i>
-                                                        </a>
-                                                    </div>
-                                                <?php endif; ?>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
-                        </div>
-                    <?php endif; ?>
-                </div>
-                
-                <!-- Paid Tab -->
-                <div class="tab-pane fade" id="paid" role="tabpanel">
-                    <?php 
-                    $paid_trades = array_filter($settlement_trades, function($trade) {
-                        return $trade['settlement_status'] === 'paid';
-                    });
-                    ?>
-                    <?php if (empty($paid_trades)): ?>
-                        <div class="text-center py-5">
-                            <i class="bi bi-check-circle text-muted" style="font-size: 4rem; opacity: 0.3;"></i>
-                            <h5 class="text-muted mt-3">No Paid Settlements</h5>
-                            <p class="text-muted">No settlements have been marked as paid yet.</p>
-                        </div>
-                    <?php else: ?>
-                        <div class="table-responsive">
-                            <table class="table table-hover">
-                                <thead>
-                                    <tr>
-                                        <th>Trade Ref</th>
-                                        <th>Client</th>
-                                        <th>Counterparty</th>
-                                        <th>Security</th>
-                                        <th>Side</th>
-                                        <th>Amount</th>
-                                        <th>Settlement Date</th>
-                                        <th>Paid By</th>
-                                        <th>Paid Date</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php foreach ($paid_trades as $trade): ?>
-                                        <tr>
-                                            <td><?php echo htmlspecialchars($trade['trade_reference']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['client_name']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['counterparty_name']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['security_id']); ?></td>
-                                            <td>
-                                                <span class="badge bg-<?php echo strtolower($trade['trade_side']) == 'buy' ? 'success' : 'danger'; ?>">
-                                                    <?php echo ucfirst($trade['trade_side']); ?>
-                                                </span>
-                                            </td>
-                                            <td class="fw-bold text-success">TZS <?php echo number_format($trade['consideration'], 2); ?></td>
-                                            <td>
-                                                <?php 
-                                                if (!empty($trade['settlement_date']) && $trade['settlement_date'] != '0000-00-00') {
-                                                    echo date('Y-m-d', strtotime($trade['settlement_date']));
-                                                } else {
-                                                    echo 'N/A';
-                                                }
-                                                ?>
-                                            </td>
-                                            <td><?php echo $trade['settled_by_username'] ?? 'N/A'; ?></td>
-                                            <td>
-                                                <?php 
-                                                if (!empty($trade['settled_at'])) {
-                                                    echo date('Y-m-d H:i', strtotime($trade['settled_at']));
-                                                } else {
-                                                    echo 'N/A';
-                                                }
-                                                ?>
-                                            </td>
-                                            <td>
-                                                <div class="btn-group btn-group-sm">
-                                                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="markAsUnpaid(<?php echo $trade['id']; ?>)">
-                                                        <i class="bi bi-arrow-counterclockwise"></i> Undo
-                                                    </button>
-                                                    <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
-                                                        <i class="bi bi-file-earmark-text"></i>
-                                                    </a>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
-                        </div>
-                    <?php endif; ?>
-                </div>
-                
-                <!-- Linked Tab -->
-                <div class="tab-pane fade" id="linked" role="tabpanel">
-                    <?php 
-                    $linked_trades = array_filter($settlement_trades, function($trade) {
-                        return $trade['settlement_status'] === 'linked';
-                    });
-                    ?>
-                    <?php if (empty($linked_trades)): ?>
-                        <div class="text-center py-5">
-                            <i class="bi bi-check-circle text-muted" style="font-size: 4rem; opacity: 0.3;"></i>
-                            <h5 class="text-muted mt-3">No Linked Settlements</h5>
-                            <p class="text-muted">No sell trades have been linked to buy trades.</p>
-                        </div>
-                    <?php else: ?>
-                        <div class="table-responsive">
-                            <table class="table table-hover">
-                                <thead>
-                                    <tr>
-                                        <th>Trade Ref</th>
-                                        <th>Client</th>
-                                        <th>Counterparty</th>
-                                        <th>Security</th>
-                                        <th>Amount</th>
-                                        <th>Settlement Date</th>
-                                        <th>Linked To</th>
-                                        <th>Linked Security</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php foreach ($linked_trades as $trade): ?>
-                                        <tr>
-                                            <td><?php echo htmlspecialchars($trade['trade_reference']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['client_name']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['counterparty_name']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['security_id']); ?></td>
-                                            <td class="fw-bold text-info">TZS <?php echo number_format($trade['consideration'], 2); ?></td>
-                                            <td>
-                                                <?php 
-                                                if (!empty($trade['settlement_date']) && $trade['settlement_date'] != '0000-00-00') {
-                                                    echo date('Y-m-d', strtotime($trade['settlement_date']));
-                                                } else {
-                                                    echo 'N/A';
-                                                }
-                                                ?>
-                                            </td>
-                                            <td>
-                                                <?php if ($trade['linked_trade_ref']): ?>
-                                                    <?php echo htmlspecialchars($trade['linked_trade_ref']); ?>
-                                                <?php else: ?>
-                                                    Buy #<?php echo $trade['linked_trade_id']; ?>
-                                                <?php endif; ?>
-                                            </td>
-                                            <td>
-                                                <?php if ($trade['linked_security']): ?>
-                                                    <?php echo htmlspecialchars($trade['linked_security']); ?>
-                                                <?php else: ?>
-                                                    N/A
-                                                <?php endif; ?>
-                                            </td>
-                                            <td>
-                                                <div class="btn-group btn-group-sm">
-                                                    <button type="button" class="btn btn-outline-info btn-sm" onclick="showLinkedDetails(<?php echo $trade['id']; ?>, <?php echo $trade['linked_trade_id']; ?>, '<?php echo addslashes($trade['linked_trade_ref']); ?>', '<?php echo addslashes($trade['linked_client_name']); ?>', '<?php echo addslashes($trade['linked_security']); ?>', '<?php echo $trade['linked_amount']; ?>')">
-                                                        <i class="bi bi-eye"></i> View Link
-                                                    </button>
-                                                    <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
-                                                        <i class="bi bi-file-earmark-text"></i>
-                                                    </a>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
-                        </div>
-                    <?php endif; ?>
-                </div>
-                
-                <!-- Failed Tab -->
-                <div class="tab-pane fade" id="failed" role="tabpanel">
-                    <?php 
-                    $failed_trades = array_filter($settlement_trades, function($trade) {
-                        return $trade['settlement_status'] === 'failed';
-                    });
-                    ?>
-                    <?php if (empty($failed_trades)): ?>
-                        <div class="text-center py-5">
-                            <i class="bi bi-check-circle text-muted" style="font-size: 4rem; opacity: 0.3;"></i>
-                            <h5 class="text-muted mt-3">No Failed Settlements</h5>
-                            <p class="text-muted">All settlements are processed successfully.</p>
-                        </div>
-                    <?php else: ?>
-                        <div class="table-responsive">
-                            <table class="table table-hover">
-                                <thead>
-                                    <tr>
-                                        <th>Trade Ref</th>
-                                        <th>Client</th>
-                                        <th>Counterparty</th>
-                                        <th>Security</th>
-                                        <th>Side</th>
-                                        <th>Amount</th>
-                                        <th>Settlement Date</th>
-                                        <th>Failure Reason</th>
-                                        <th>Action Needed</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php foreach ($failed_trades as $trade): ?>
-                                        <tr>
-                                            <td><?php echo htmlspecialchars($trade['trade_reference']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['client_name']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['counterparty_name']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['security_id']); ?></td>
-                                            <td>
-                                                <span class="badge bg-<?php echo strtolower($trade['trade_side']) == 'buy' ? 'success' : 'danger'; ?>">
-                                                    <?php echo ucfirst($trade['trade_side']); ?>
-                                                </span>
-                                            </td>
-                                            <td class="fw-bold text-dark">TZS <?php echo number_format($trade['consideration'], 2); ?></td>
-                                            <td>
-                                                <?php 
-                                                if (!empty($trade['settlement_date']) && $trade['settlement_date'] != '0000-00-00') {
-                                                    echo date('Y-m-d', strtotime($trade['settlement_date']));
-                                                } else {
-                                                    echo 'N/A';
-                                                }
-                                                ?>
-                                            </td>
-                                            <td><?php echo htmlspecialchars($trade['failure_reason']); ?></td>
-                                            <td><?php echo htmlspecialchars($trade['action_needed']); ?></td>
-                                            <td>
-                                                <div class="btn-group btn-group-sm">
-                                                    <button type="button" class="btn btn-outline-warning btn-sm" data-bs-toggle="modal" data-bs-target="#failureDetailsModal" 
-                                                            onclick="showFailureDetails(<?php echo $trade['id']; ?>, '<?php echo addslashes($trade['failure_reason']); ?>', '<?php echo addslashes($trade['action_needed']); ?>')">
-                                                        <i class="bi bi-info-circle"></i> Details
-                                                    </button>
-                                                    <button type="button" class="btn btn-outline-success btn-sm" onclick="retryFailed(<?php echo $trade['id']; ?>)">
-                                                        <i class="bi bi-arrow-repeat"></i> Retry
-                                                    </button>
-                                                    <a href="trades.php?action=contract_note&id=<?php echo $trade['id']; ?>" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">
-                                                        <i class="bi bi-file-earmark-text"></i>
-                                                    </a>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
-                        </div>
-                    <?php endif; ?>
-                </div>
             </div>
         </div>
     </div>
 </div>
 
 <!-- ============================================ -->
-<!-- ALL MODALS -->
+<!-- ALL MODALS (SAME AS BEFORE) -->
 <!-- ============================================ -->
 
 <!-- Link Trade Modal -->
@@ -2361,39 +2102,6 @@ include '../includes/header.php';
     </div>
 </div>
 
-<style>
-.floating-bulk-payment {
-    position: fixed;
-    bottom: 30px;
-    right: 30px;
-    z-index: 1000;
-}
-
-.floating-bulk-payment .btn {
-    width: 60px;
-    height: 60px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.5rem;
-}
-
-.floating-bulk-payment .badge {
-    font-size: 0.7rem;
-    padding: 0.25em 0.5em;
-}
-
-.trade-checkbox:checked {
-    background-color: var(--success-color);
-    border-color: var(--success-color);
-}
-
-.pagination .page-item.active .page-link {
-    background-color: var(--success-color);
-    border-color: var(--success-color);
-}
-</style>
-
 <!-- Export Modal -->
 <div class="modal fade" id="exportModal" tabindex="-1">
     <div class="modal-dialog">
@@ -2456,5 +2164,278 @@ include '../includes/header.php';
     <input type="hidden" name="trade_id" id="retryTradeId">
     <input type="hidden" name="retry_failed" value="1">
 </form>
+
+<script>
+// Remove filter handler
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.remove-filter').forEach(function(el) {
+        el.addEventListener('click', function(e) {
+            e.preventDefault();
+            var param = this.dataset.param;
+            var form = document.getElementById('filterForm');
+            var input = form.querySelector('[name="' + param + '"]');
+            if (input) {
+                input.value = '';
+            }
+            form.submit();
+        });
+    });
+    
+    // Auto-submit on any change
+    var filterForm = document.getElementById('filterForm');
+    if (filterForm) {
+        var inputs = filterForm.querySelectorAll('input, select');
+        inputs.forEach(function(input) {
+            input.addEventListener('change', function() {
+                filterForm.submit();
+            });
+        });
+    }
+});
+
+// Toggle select all
+function toggleSelectAll(checkbox) {
+    document.querySelectorAll('.trade-checkbox').forEach(function(cb) {
+        cb.checked = checkbox.checked;
+    });
+    updateBulkActions();
+}
+
+// Update bulk actions
+function updateBulkActions() {
+    var checked = document.querySelectorAll('.trade-checkbox:checked');
+    var count = checked.length;
+    var badge = document.getElementById('selectedCountBadge');
+    var floating = document.getElementById('floatingBulkPayment');
+    
+    if (badge) badge.textContent = count;
+    if (floating) {
+        floating.style.display = count > 0 ? 'block' : 'none';
+    }
+}
+
+// Show payment modal
+function showPaymentModal(tradeId) {
+    document.getElementById('paymentTradeId').value = tradeId;
+    new bootstrap.Modal(document.getElementById('paymentModal')).show();
+}
+
+// Show link trade modal
+function showLinkTradeModal(tradeId) {
+    document.getElementById('linkTradeId').value = tradeId;
+    // Load sale trade details
+    loadSaleTradeDetails(tradeId);
+    // Load available buy trades
+    loadAvailableBuyTrades(tradeId);
+    new bootstrap.Modal(document.getElementById('linkTradeModal')).show();
+}
+
+// Load sale trade details
+function loadSaleTradeDetails(tradeId) {
+    var container = document.getElementById('currentSaleDetails');
+    container.innerHTML = '<div class="text-center"><div class="spinner-border spinner-border-sm text-primary"></div> Loading...</div>';
+    
+    fetch('settlement.php?ajax=get_trade_details&trade_id=' + tradeId)
+        .then(response => response.json())
+        .then(data => {
+            if (data && data.id) {
+                container.innerHTML = `
+                    <div class="row">
+                        <div class="col-6"><strong>Client:</strong> ${data.client_name}</div>
+                        <div class="col-6"><strong>Security:</strong> ${data.security_id}</div>
+                        <div class="col-6"><strong>Side:</strong> ${data.trade_side}</div>
+                        <div class="col-6"><strong>Amount:</strong> TZS ${Number(data.consideration).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                        <div class="col-6"><strong>Trade Date:</strong> ${data.trade_date}</div>
+                        <div class="col-6"><strong>Reference:</strong> ${data.trade_reference}</div>
+                    </div>
+                `;
+            } else {
+                container.innerHTML = '<span class="text-danger">Could not load trade details</span>';
+            }
+        })
+        .catch(error => {
+            console.error('Error loading trade details:', error);
+            container.innerHTML = '<span class="text-danger">Error loading trade details</span>';
+        });
+}
+
+// Load available buy trades
+function loadAvailableBuyTrades(tradeId) {
+    var container = document.getElementById('buyTradesContainer');
+    var warning = document.getElementById('noBuyTradesWarning');
+    container.innerHTML = '<div class="text-center"><div class="spinner-border spinner-border-sm text-primary"></div> Loading available buy trades...</div>';
+    warning.style.display = 'none';
+    
+    fetch('settlement.php?ajax=get_grouped_buy_trades&trade_id=' + tradeId)
+        .then(response => response.json())
+        .then(data => {
+            if (data && data.length > 0) {
+                var html = '<div class="list-group">';
+                data.forEach(function(trade) {
+                    var checked = '';
+                    if (trade.settlement_status === 'linked' || trade.settlement_status === 'paid') {
+                        checked = 'disabled';
+                    }
+                    html += `
+                        <div class="list-group-item list-group-item-action d-flex align-items-center ${trade.settlement_status === 'linked' || trade.settlement_status === 'paid' ? 'bg-light' : ''}">
+                            <input class="form-check-input me-3" type="checkbox" name="linked_trade_ids[]" value="${trade.id}" ${checked}
+                                   onchange="updateLinkSubmitButton()">
+                            <div class="flex-grow-1">
+                                <div class="fw-semibold">${trade.security_id} (${trade.security_name})</div>
+                                <div class="small text-muted">
+                                    Ref: ${trade.trade_references || 'N/A'} | 
+                                    ${trade.total_quantity} shares @ ${Number(trade.avg_price).toFixed(2)} = 
+                                    TZS ${Number(trade.total_consideration).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                </div>
+                                <div class="small">
+                                    Trade Date: ${trade.trade_date} | 
+                                    ${trade.trade_count} trade(s) grouped
+                                </div>
+                                ${trade.settlement_status === 'linked' || trade.settlement_status === 'paid' ? 
+                                    '<span class="badge bg-secondary">Already ' + trade.settlement_status + '</span>' : ''}
+                            </div>
+                        </div>
+                    `;
+                });
+                html += '</div>';
+                container.innerHTML = html;
+            } else {
+                container.innerHTML = '';
+                warning.style.display = 'block';
+            }
+            updateLinkSubmitButton();
+        })
+        .catch(error => {
+            console.error('Error loading buy trades:', error);
+            container.innerHTML = '<span class="text-danger">Error loading available buy trades</span>';
+        });
+}
+
+// Update link submit button
+function updateLinkSubmitButton() {
+    var checked = document.querySelectorAll('input[name="linked_trade_ids[]"]:checked');
+    var btn = document.getElementById('linkSubmitBtn');
+    if (btn) {
+        btn.disabled = checked.length === 0;
+        btn.textContent = checked.length > 0 ? 'Link ' + checked.length + ' trade(s)' : 'Select at least one trade';
+    }
+}
+
+// Show grouped trades
+function showGroupedTrades(tradeId) {
+    var container = document.getElementById('groupedTradesContent');
+    container.innerHTML = '<div class="text-center"><div class="spinner-border spinner-border-sm text-primary"></div> Loading trade details...</div>';
+    new bootstrap.Modal(document.getElementById('groupedTradesModal')).show();
+    
+    fetch('settlement.php?ajax=get_grouped_trade_details&trade_id=' + tradeId)
+        .then(response => response.json())
+        .then(data => {
+            if (data && data.length > 0) {
+                var html = '<div class="table-responsive"><table class="table table-sm table-hover">';
+                html += '<thead><tr><th>Trade Ref</th><th>Side</th><th>Quantity</th><th>Price</th><th>Amount</th><th>Status</th></tr></thead><tbody>';
+                data.forEach(function(trade) {
+                    var status = trade.settlement_status || 'pending';
+                    var statusBadge = status === 'paid' ? 'success' : status === 'linked' ? 'info' : status === 'failed' ? 'dark' : 'warning';
+                    html += `
+                        <tr>
+                            <td>${trade.trade_reference}</td>
+                            <td><span class="badge bg-${trade.trade_side === 'sell' ? 'danger' : 'success'}">${trade.trade_side}</span></td>
+                            <td>${trade.quantity}</td>
+                            <td>${Number(trade.price).toFixed(2)}</td>
+                            <td>TZS ${Number(trade.consideration).toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                            <td><span class="badge bg-${statusBadge}">${status}</span></td>
+                        </tr>
+                    `;
+                });
+                html += '</tbody></table></div>';
+                container.innerHTML = html;
+            } else {
+                container.innerHTML = '<div class="text-center text-muted py-3">No grouped trades found</div>';
+            }
+        })
+        .catch(error => {
+            console.error('Error loading grouped trades:', error);
+            container.innerHTML = '<span class="text-danger">Error loading grouped trades</span>';
+        });
+}
+
+// Show linked details
+function showLinkedDetails(tradeId) {
+    // Implementation for showing linked details
+    alert('Linked details functionality - implement as needed');
+}
+
+// Mark as unpaid
+function markAsUnpaid(tradeId) {
+    if (confirm('Are you sure you want to undo this payment? This will mark the trade as unpaid.')) {
+        document.getElementById('unpaidTradeId').value = tradeId;
+        document.getElementById('unpaidForm').submit();
+    }
+}
+
+// Mark as failed
+function markAsFailed(tradeId) {
+    document.getElementById('failureTradeId').value = tradeId;
+    new bootstrap.Modal(document.getElementById('failureModal')).show();
+}
+
+// Retry failed
+function retryFailed(tradeId) {
+    if (confirm('Are you sure you want to retry this failed trade? It will be marked as unpaid and ready for payment.')) {
+        document.getElementById('retryTradeId').value = tradeId;
+        document.getElementById('retryFailedForm').submit();
+    }
+}
+
+// Show failure details
+function showFailureDetails(tradeId, reason, action) {
+    document.getElementById('detailsFailureReason').textContent = reason || 'No reason provided';
+    document.getElementById('detailsActionNeeded').textContent = action || 'No action specified';
+}
+
+// Toggle bank selection
+function toggleBankSelection() {
+    var mode = document.getElementById('payment_mode');
+    var bankField = document.getElementById('bankAccountField');
+    if (mode.value && (mode.options[mode.selectedIndex]?.text || '').toLowerCase().includes('bank')) {
+        bankField.style.display = 'block';
+    } else {
+        bankField.style.display = 'none';
+    }
+}
+
+function toggleBulkBankSelection() {
+    var mode = document.getElementById('bulk_payment_mode');
+    var bankField = document.getElementById('bulkBankAccountField');
+    if (mode.value && (mode.options[mode.selectedIndex]?.text || '').toLowerCase().includes('bank')) {
+        bankField.style.display = 'block';
+    } else {
+        bankField.style.display = 'none';
+    }
+}
+
+// Show bulk payment modal
+function showBulkPaymentModal() {
+    var checked = document.querySelectorAll('.trade-checkbox:checked');
+    var ids = [];
+    checked.forEach(function(cb) {
+        ids.push(cb.value);
+    });
+    
+    if (ids.length === 0) {
+        alert('Please select at least one trade.');
+        return;
+    }
+    
+    document.getElementById('bulkPaymentCount').textContent = ids.length;
+    document.getElementById('bulkPaymentTradeIds').innerHTML = '<input type="hidden" name="trade_ids" value="' + ids.join(',') + '">';
+    new bootstrap.Modal(document.getElementById('bulkPaymentModal')).show();
+}
+
+// Reset filters
+function resetFilters() {
+    window.location.href = 'settlement.php?tab=all&side=sell_only&hide_buy=1';
+}
+</script>
 
 <?php include '../includes/footer.php'; ?>
