@@ -1208,7 +1208,7 @@ document.getElementById('national_id')?.addEventListener('input', function(e) {
 <?php endif; ?>
 
 // ===== Client Self-Service Portal Link =====
-const PORTAL_API_URL = '/api/portal/index';
+const PORTAL_API_URL = '/api/portal/index.php';
 let portalCsrfToken = null;
 
 function portalEnsureCsrfToken() {
@@ -1268,24 +1268,41 @@ function portalGenerateLink() {
                 body: JSON.stringify(payload)
             });
         })
-        .then(resp => resp.json().then(body => ({ status: resp.status, body })))
+        .then(async resp => {
+            const text = await resp.text();
+            try {
+                const body = JSON.parse(text);
+                return { status: resp.status, body };
+            } catch (e) {
+                throw Object.assign(
+                    new Error('Server returned an unexpected response (not JSON). Check the server logs or contact the administrator.'),
+                    { status: resp.status, rawText: text.substring(0, 300) }
+                );
+            }
+        })
         .then(({ status, body }) => {
             if (!body.success) throw Object.assign(new Error(body.error || 'Failed to generate the link.'), { status, details: body.details });
             const data = body.data;
             document.getElementById('portalLinkText').value = data.link;
             document.getElementById('portalLinkMeta').textContent =
-                `Valid until ${data.expires_at} · up to ${data.max_uses} uses · ${data.client_name} (CDS ${data.cds_account}).`;
+                `Valid until ${data.expires_at} \u00b7 up to ${data.max_uses} uses \u00b7 ${data.client_name} (CDS ${data.cds_account}).`;
             document.getElementById('portalLinkResult').classList.remove('d-none');
-            portalShowStatus('Link generated &mdash; copy it and send it to the client now.', 'success');
+            portalShowStatus('Link generated \u2014 copy it and send it to the client now.', 'success');
         })
         .catch(err => {
             const msgs = {
                 401: 'Your session has expired. Please log in again.',
                 403: 'Security token expired. Please log in again and retry.',
                 404: 'Client not found. Reload the page and try again.',
+                405: 'Server rejected the request method. Contact the administrator.',
                 429: 'Too many requests. Wait a minute and try again.'
             };
-            portalShowStatus(msgs[err.status] || err.message, 'danger');
+            const msg = msgs[err.status] || err.message;
+            let detail = '';
+            if (err.rawText && err.rawText.includes('<')) {
+                detail = ' The server returned an HTML page instead of JSON \u2014 the API endpoint may be misconfigured on the server.';
+            }
+            portalShowStatus(msg + detail, 'danger');
         })
         .finally(() => portalSetBusy(false));
 }
