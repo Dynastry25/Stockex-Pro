@@ -10,7 +10,8 @@
     # RewriteBase /stockex/
 
     # Redirect /file.php -> /file (absolute path to avoid double subdirectory)
-    RewriteCond %{THE_REQUEST} \s/+(.+?)\.php[\s?] [NC]
+    # Exclude /api/ paths — stripping .php there converts POST to GET
+    RewriteCond %{THE_REQUEST} \s/+(?!api/)(.+?)\.php[\s?] [NC]
     RewriteRule ^ /%1 [R=301,L]
 
     # Internally map /file -> /file.php when it exists

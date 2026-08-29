@@ -1208,7 +1208,7 @@ document.getElementById('national_id')?.addEventListener('input', function(e) {
 <?php endif; ?>
 
 // ===== Client Self-Service Portal Link =====
-const PORTAL_API_URL = '/api/portal/index.php';
+const PORTAL_API_URL = '/api/portal/index';
 let portalCsrfToken = null;
 
 function portalEnsureCsrfToken() {
