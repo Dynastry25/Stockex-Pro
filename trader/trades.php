@@ -639,14 +639,14 @@ class ContractNotePDF extends TCPDF {
         
         $y = $this->GetY();
         
-        $this->SetFont('times', 'I', 7);
+        $this->SetFont('helvetica', 'I', 7);
         $this->SetTextColor(4, 45, 146);
         $this->SetXY(15, $y);
         $this->Cell(180, 3, '(Subject to the Rules and Practice of the Dar es Salaam Stock Exchange)', 0, 1, 'C');
         $y += 4;
         
         if ($this->total_trades > 1) {
-            $this->SetFont('times', '', 6);
+            $this->SetFont('helvetica', '', 6);
             $this->SetTextColor(120, 120, 120);
             $this->SetXY(15, $y);
             $this->Cell(10, 3, 'Trade ' . $this->current_trade . ' of ' . $this->total_trades, 0, 0, 'L');
@@ -656,7 +656,7 @@ class ContractNotePDF extends TCPDF {
         
         if ($this->watermark_enabled) {
             $this->SetAlpha(0.05);
-            $this->SetFont('times', 'B', 50);
+            $this->SetFont('helvetica', 'B', 50);
             $this->SetTextColor(200, 200, 200);
             $this->StartTransform();
             $this->Rotate(45, 105, 150);

@@ -382,6 +382,16 @@ function isImageReceipt($ref) {
     return in_array($ext, ['jpg', 'jpeg', 'png', 'gif']);
 }
 
+// Merge comma-separated receipt reference lists without duplicates
+function mergeReceiptRefs($existing, $new) {
+    $combined = array_merge(
+        !empty($existing) ? array_map('trim', explode(',', $existing)) : [],
+        !empty($new) ? array_map('trim', explode(',', $new)) : []
+    );
+    $combined = array_filter($combined);
+    return implode(',', array_values(array_unique($combined)));
+}
+
 // ============================================
 // Function to detect counterparty type using brokers table
 // ============================================
@@ -609,9 +619,9 @@ if (isset($_POST['upload_receipt'])) {
     }
     
     $redirect = 'dealing_sheet.php?' . http_build_query(array_filter([
-        'filter' => $_GET['filter'] ?? 'pending',
-        'asset_class' => $_GET['asset_class'] ?? 'all',
-        'search' => $_GET['search'] ?? ''
+        'filter' => $_POST['filter'] ?? $_GET['filter'] ?? 'pending',
+        'asset_class' => $_POST['asset_class'] ?? $_GET['asset_class'] ?? 'all',
+        'search' => $_POST['search'] ?? $_GET['search'] ?? ''
     ]));
     header('Location: ' . $redirect);
     exit;
@@ -849,12 +859,14 @@ foreach ($trades as $trade) {
     $grouped_trades[$group_key]['trade_count']++;
     $grouped_trades[$group_key]['fee_sum'] += (float)($trade['final_brokerage_fee'] ?? 0);
     
-    // Keep the most recent receipt info and fee type
+    // Merge receipt info across all trades in the group
     if (!empty($trade['payment_receipt'])) {
-        $grouped_trades[$group_key]['payment_receipt'] = $trade['payment_receipt'];
+        $existing = $grouped_trades[$group_key]['payment_receipt'];
+        $grouped_trades[$group_key]['payment_receipt'] = mergeReceiptRefs($existing, $trade['payment_receipt']);
     }
     if (!empty($trade['commission_receipt'])) {
-        $grouped_trades[$group_key]['commission_receipt'] = $trade['commission_receipt'];
+        $existing = $grouped_trades[$group_key]['commission_receipt'];
+        $grouped_trades[$group_key]['commission_receipt'] = mergeReceiptRefs($existing, $trade['commission_receipt']);
     }
     if (!empty($trade['receipt_comment'])) {
         $grouped_trades[$group_key]['receipt_comment'] = $trade['receipt_comment'];
@@ -977,13 +989,14 @@ if (isset($_GET['export_excel'])) {
     echo ".rejected { background-color: #f8d7da; }";
     echo "</style></head><body>";
     echo "<table border='1'>";
-    echo "<tr><th colspan='11' style='font-size:16px;padding:15px;'>ORDER INTAKE - " . htmlspecialchars($viewLabel) . " (" . $assetLabel . ") - " . htmlspecialchars($company_name) . "</th></tr>";
-    echo "<tr><td colspan='11' class='header-row'>Generated: " . date('d/m/Y H:i:s') . " | Total Trades: " . count($final_trades) . "</td></tr>";
-    echo "<tr><td colspan='11'></td></tr>";
+    echo "<tr><th colspan='12' style='font-size:16px;padding:15px;'>ORDER INTAKE - " . htmlspecialchars($viewLabel) . " (" . $assetLabel . ") - " . htmlspecialchars($company_name) . "</th></tr>";
+    echo "<tr><td colspan='12' class='header-row'>Generated: " . date('d/m/Y H:i:s') . " | Total Trades: " . count($final_trades) . "</td></tr>";
+    echo "<tr><td colspan='12'></td></tr>";
     
     echo "<tr>";
     echo "<th>Client</th>";
     echo "<th>Security</th>";
+    echo "<th>Trade Date</th>";
     echo "<th>Side</th>";
     echo "<th class='right'>Qty</th>";
     echo "<th class='right'>Price</th>";
@@ -996,7 +1009,7 @@ if (isset($_GET['export_excel'])) {
     echo "</tr>";
     
     if (empty($final_trades)) {
-        echo "<tr><td colspan='11' class='center'>No trades found</td></tr>";
+        echo "<tr><td colspan='12' class='center'>No trades found</td></tr>";
     } else {
         foreach ($final_trades as $trade) {
             $isBond = ($trade['asset_class'] ?? '') === 'bond';
@@ -1031,6 +1044,7 @@ if (isset($_GET['export_excel'])) {
             echo "<tr class='" . $rowClass . "'>";
             echo "<td>" . htmlspecialchars($trade['client_name'] ?? '') . "</td>";
             echo "<td>" . htmlspecialchars($trade['security_id'] ?? '') . "</td>";
+            echo "<td class='center'>" . (!empty($trade['trade_date']) ? date('d/m/Y', strtotime($trade['trade_date'])) : '—') . "</td>";
             echo "<td class='center'>" . strtoupper(htmlspecialchars($trade['trade_side'] ?? '')) . "</td>";
             echo "<td class='right'>" . ($isBond ? 'TZS ' . number_format($trade['quantity'] ?? 0, 2) : number_format($trade['quantity'] ?? 0)) . "</td>";
             echo "<td class='right'>" . number_format($trade['price'] ?? 0, 4) . "</td>";
@@ -1050,12 +1064,12 @@ if (isset($_GET['export_excel'])) {
         echo "<td colspan='6' class='center'>TOTALS</td>";
         echo "<td class='right'>" . number_format($totalValue, 2) . "</td>";
         echo "<td class='right'>" . number_format($totalFees, 2) . "</td>";
-        echo "<td></td><td></td><td></td>";
+        echo "<td></td><td></td><td></td><td></td>";
         echo "</tr>";
     }
     
-    echo "<tr><td colspan='11'></td></tr>";
-    echo "<tr><td colspan='11' style='background-color:#f8f9fa;font-size:11px;'>Generated by " . htmlspecialchars($company_name) . " on " . date('d/m/Y H:i:s') . "</td></tr>";
+    echo "<tr><td colspan='12'></td></tr>";
+    echo "<tr><td colspan='12' style='background-color:#f8f9fa;font-size:11px;'>Generated by " . htmlspecialchars($company_name) . " on " . date('d/m/Y H:i:s') . "</td></tr>";
     echo "</table></body></html>";
     exit;
 }
@@ -1360,6 +1374,7 @@ include '../includes/header.php';
                             <tr>
                                 <th>Client</th>
                                 <th>Security</th>
+                                <th>Trade Date</th>
                                 <th>Side</th>
                                 <th class="text-end">Qty</th>
                                 <th class="text-end">Value</th>
@@ -1455,6 +1470,13 @@ include '../includes/header.php';
                                         <span class="badge-asset"><?php echo $isBond ? 'Bond' : ucfirst($trade['asset_class'] ?? ''); ?></span>
                                         <?php if ($trade['brokerage_fee_type'] !== 'normal'): ?>
                                             <span class="badge bg-warning ms-1" style="font-size:8px;">LIBERTY</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="text-nowrap">
+                                        <?php if (!empty($trade['trade_date'])): ?>
+                                            <?php echo date('d/m/Y', strtotime($trade['trade_date'])); ?>
+                                        <?php else: ?>
+                                            <span class="text-muted" style="font-size:10px;">-</span>
                                         <?php endif; ?>
                                     </td>
                                     <td>
@@ -1896,18 +1918,33 @@ function viewTrade(btn) {
 
 // Open upload modal
 function openUpload(tradeId, type) {
-    document.getElementById('modal_trade_id').value = tradeId;
-    document.getElementById('modal_receipt_type').value = type;
-    
-    const label = document.getElementById('modal_receipt_label');
-    if (type === 'commission') {
-        label.textContent = 'Commission Receipt';
-    } else {
-        label.textContent = 'Payment Receipt';
+    var tid = document.getElementById('modal_trade_id');
+    var typ = document.getElementById('modal_receipt_type');
+    var label = document.getElementById('modal_receipt_label');
+    if (tid) tid.value = tradeId;
+    if (typ) typ.value = type;
+    if (label) {
+        label.textContent = (type === 'commission') ? 'Commission Receipt' : 'Payment Receipt';
     }
-    
-    new bootstrap.Modal(document.getElementById('uploadModal')).show();
+
+    // Clear file input so the same/another file can be selected again
+    var fileInput = document.querySelector('#uploadModal input[type="file"]');
+    if (fileInput) fileInput.value = '';
+
+    // Reuse a single persistent instance (Bootstrap handles hide/show internally)
+    var modalEl = document.getElementById('uploadModal');
+    if (modalEl) bootstrap.Modal.getOrCreateInstance(modalEl).show();
 }
+
+// Clean up any leftover modal state/backdrop when returning via back-forward cache
+window.addEventListener('pageshow', function(e) {
+    if (e.persisted) {
+        var el = document.getElementById('uploadModal');
+        if (el && bootstrap.Modal.getInstance(el)) bootstrap.Modal.getInstance(el).dispose();
+        document.querySelectorAll('.modal-backdrop').forEach(function(b) { b.remove(); });
+        document.body.classList.remove('modal-open');
+    }
+});
 
 // Auto-dismiss alerts
 document.querySelectorAll('.alert').forEach(el => {

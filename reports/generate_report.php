@@ -2,6 +2,7 @@
 require_once '../config/config.php';
 require_once '../auth/auth_middleware.php';
 require_once '../tcpdf/tcpdf.php';
+require_once __DIR__ . '/traits/ReportHeaderTrait.php';
 
 require_login();
 $db = getDBConnection();
@@ -258,12 +259,14 @@ function generateBondsEditListReport($db, $where_clause, $params, $company_name,
         $pdf->SetTitle('Bonds Purchases & Sales Transactions Edit List');
         $pdf->setPrintHeader(false);
         $pdf->setPrintFooter(false);
-        $pdf->SetMargins(10, 10, 10);
+        $pdf->SetMargins(10, 30, 10);
         $pdf->SetAutoPageBreak(TRUE, 15);
         $pdf->AddPage();
+        renderVfslPdfHeader($pdf);
 
         $html = generateBondsEditListHTML($transactions, $company_name, $company_code, $filters);
         $pdf->writeHTML($html, true, false, true, false, '');
+        renderVfslPdfFooter($pdf);
         $pdf->Output('bonds_edit_list_' . date('Y_m_d') . '.pdf', 'I');
     } else {
         // Display HTML
@@ -332,12 +335,14 @@ function generateBondsSummaryReport($db, $where_clause, $params, $company_name, 
         $pdf->SetTitle('Bonds Transactions Summary Report');
         $pdf->setPrintHeader(false);
         $pdf->setPrintFooter(false);
-        $pdf->SetMargins(10, 10, 10);
+        $pdf->SetMargins(10, 30, 10);
         $pdf->SetAutoPageBreak(TRUE, 15);
         $pdf->AddPage();
+        renderVfslPdfHeader($pdf);
 
         $html = generateBondsSummaryHTML($client_balances, $company_name, $company_code, $filters);
         $pdf->writeHTML($html, true, false, true, false, '');
+        renderVfslPdfFooter($pdf);
         $pdf->Output('bonds_summary_' . date('Y_m_d') . '.pdf', 'I');
     } else {
         // Display HTML
@@ -413,9 +418,10 @@ function generateBondsStatutoryDeductionsReport($db, $where_clause, $params, $co
         $pdf->SetTitle('Bonds Statutory Deductions Detailed Report');
         $pdf->setPrintHeader(false);
         $pdf->setPrintFooter(false);
-        $pdf->SetMargins(10, 10, 10);
+        $pdf->SetMargins(10, 30, 10);
         $pdf->SetAutoPageBreak(TRUE, 15);
         $pdf->AddPage();
+        renderVfslPdfHeader($pdf);
 
         $html = generateBondsStatutoryDeductionsHTML($transactions, $company_name, $company_code, $filters, [
             'total_purchases' => $total_purchases,
@@ -428,6 +434,7 @@ function generateBondsStatutoryDeductionsReport($db, $where_clause, $params, $co
             'total_fees' => $total_fees
         ]);
         $pdf->writeHTML($html, true, false, true, false, '');
+        renderVfslPdfFooter($pdf);
         $pdf->Output('bonds_statutory_deductions_' . date('Y_m_d') . '.pdf', 'I');
     } else {
         // Display HTML
@@ -477,12 +484,14 @@ function generateBondsCMSALevyReport($db, $where_clause, $params, $company_name,
         $pdf->SetTitle('CMSA Transaction Levy on Bonds');
         $pdf->setPrintHeader(false);
         $pdf->setPrintFooter(false);
-        $pdf->SetMargins(10, 10, 10);
+        $pdf->SetMargins(10, 30, 10);
         $pdf->SetAutoPageBreak(TRUE, 15);
         $pdf->AddPage();
+        renderVfslPdfHeader($pdf);
 
         $html = generateBondsCMSALevyHTML($totals, $cmsa_levy, $company_name, $company_code, $filters);
         $pdf->writeHTML($html, true, false, true, false, '');
+        renderVfslPdfFooter($pdf);
         $pdf->Output('bonds_cmsa_levy_' . date('Y_m_d') . '.pdf', 'I');
     } else {
         // Display HTML
@@ -523,12 +532,14 @@ function generateBondsDSELevyReport($db, $where_clause, $params, $company_name, 
         $pdf->SetTitle('DSE Transaction Levy on Bonds');
         $pdf->setPrintHeader(false);
         $pdf->setPrintFooter(false);
-        $pdf->SetMargins(10, 10, 10);
+        $pdf->SetMargins(10, 30, 10);
         $pdf->SetAutoPageBreak(TRUE, 15);
         $pdf->AddPage();
+        renderVfslPdfHeader($pdf);
 
         $html = generateBondsDSELevyHTML($totals, $dse_levy, $company_name, $company_code, $filters);
         $pdf->writeHTML($html, true, false, true, false, '');
+        renderVfslPdfFooter($pdf);
         $pdf->Output('bonds_dse_levy_' . date('Y_m_d') . '.pdf', 'I');
     } else {
         // Display HTML
@@ -569,12 +580,14 @@ function generateBondsCSDLevyReport($db, $where_clause, $params, $company_name, 
         $pdf->SetTitle('CSD Transaction Levy on Bonds');
         $pdf->setPrintHeader(false);
         $pdf->setPrintFooter(false);
-        $pdf->SetMargins(10, 10, 10);
+        $pdf->SetMargins(10, 30, 10);
         $pdf->SetAutoPageBreak(TRUE, 15);
         $pdf->AddPage();
+        renderVfslPdfHeader($pdf);
 
         $html = generateBondsCSDLevyHTML($totals, $csd_levy, $company_name, $company_code, $filters);
         $pdf->writeHTML($html, true, false, true, false, '');
+        renderVfslPdfFooter($pdf);
         $pdf->Output('bonds_csd_levy_' . date('Y_m_d') . '.pdf', 'I');
     } else {
         // Display HTML
@@ -616,12 +629,14 @@ function generateBondsVATLevyReport($db, $where_clause, $params, $company_name, 
         $pdf->SetTitle('VAT Transaction Levy on Bonds');
         $pdf->setPrintHeader(false);
         $pdf->setPrintFooter(false);
-        $pdf->SetMargins(10, 10, 10);
+        $pdf->SetMargins(10, 30, 10);
         $pdf->SetAutoPageBreak(TRUE, 15);
         $pdf->AddPage();
+        renderVfslPdfHeader($pdf);
 
         $html = generateBondsVATLevyHTML($totals, $vat_levy, $company_name, $company_code, $filters);
         $pdf->writeHTML($html, true, false, true, false, '');
+        renderVfslPdfFooter($pdf);
         $pdf->Output('bonds_vat_levy_' . date('Y_m_d') . '.pdf', 'I');
     } else {
         // Display HTML
@@ -691,11 +706,21 @@ function generateBondsEditListHTML($transactions, $company_name, $company_code, 
     </style>
     
     <div class="header">
-        <div class="report-title">' . strtoupper($company_name) . '</div>
-        <div class="report-subtitle">Division : STOCK BROKING</div>
         <div class="report-title">BONDS PURCHASES & SALES TRANSACTIONS EDIT LIST</div>
         <div class="report-subtitle">FOR THE PERIOD [' . $period_from . ' - ' . $period_to . ']</div>
         <div class="report-subtitle">Date : ' . $current_date . ' : ' . $current_time . '</div>
+    </div>
+    
+    <div style="background-color: #f0f4f8; border-left: 4px solid #002e92; padding: 8px 12px; margin: 5px 0 10px 0; font-size: 8px; color: #333;">
+        <strong>Report Overview:</strong> This Bonds Edit List provides a detailed record of all bond purchase and sale transactions 
+        processed during the period ' . $period_from . ' to ' . $period_to . '. 
+        Each row represents a single executed trade with the client, security, trade details, and a full breakdown of applicable charges.<br/>
+        <strong>How to Read:</strong> Transactions are grouped by trade date. Charges include: Brokerage Commission (0.063%), DSE Transaction Levy, CMSA Levy, CSD Levy, and VAT on Commission (18%). 
+        BUY trades: charges added to consideration. SELL trades: charges deducted from consideration.<br/>
+        <strong>Key Columns:</strong> 
+        SLIPNO = Trade reference | CONTRACT = Trade side:ID | 
+        CONSIDERATION = Quantity x Price | TOTAL CHARGES = All fees combined | 
+        GROSS/NET AMOUNT = Final settlement amount.
     </div>
     
     <table>
@@ -816,13 +841,14 @@ function generateBondsEditListHTML($transactions, $company_name, $company_code, 
 
 function generateBondsSummaryHTML($client_balances, $company_name, $company_code, $filters) {
     $current_date = date('d/m/Y');
+    $period_from = date('d/m/Y', strtotime($filters['period_from'] ?? date('Y-01-01')));
+    $period_to = date('d/m/Y', strtotime($filters['period_to'] ?? date('Y-m-d')));
     
     $html = '
     <style>
         .header { text-align: center; margin-bottom: 10px; border-bottom: 1px solid #000; padding-bottom: 5px; }
-        .company-title { font-size: 16px; font-weight: bold; margin: 5px 0; }
-        .company-subtitle { font-size: 10px; margin: 2px 0; }
-        .division { font-size: 11px; margin: 10px 0; font-weight: bold; }
+        .report-title { font-size: 14px; font-weight: bold; margin: 5px 0; }
+        .report-subtitle { font-size: 10px; margin: 2px 0; }
         .disclaimer { font-size: 8px; margin-top: 20px; color: #666; }
         table { width: 100%; border-collapse: collapse; font-size: 9px; margin: 5px 0; }
         th, td { border: 1px solid #000; padding: 4px; }
@@ -830,18 +856,18 @@ function generateBondsSummaryHTML($client_balances, $company_name, $company_code
         .text-left { text-align: left; }
         .text-right { text-align: right; }
         .total-row { background-color: #f8f8f8; font-weight: bold; }
-        .contact-info { font-size: 9px; margin: 5px 0; }
     </style>
     
     <div class="header">
-        <div class="company-title">' . strtoupper($company_name) . '</div>
-        <div class="company-subtitle">Stock Broker / Dealer & Investment Advisor</div>
-        <div class="company-subtitle">Member of Dar es Salaam Stock Exchange</div>
-        <div class="contact-info">
-            ATC HOUSE, OHIO STREET/GARDEN AVENUE PO BOX 8706 DAR ES SALAAM<br>
-            Tel: +255 22 2112091 Mob: +255 788 284 540 Email: info@vfsl.co.tz
-        </div>
-        <div class="division">Division : STOCK BROKING</div>
+        <div class="report-title">BONDS TRANSACTIONS SUMMARY</div>
+        <div class="report-subtitle">FOR THE PERIOD [' . $period_from . ' - ' . $period_to . ']</div>
+    </div>
+    
+    <div style="background-color: #f0f4f8; border-left: 4px solid #002e92; padding: 8px 12px; margin: 5px 0 10px 0; font-size: 8px; color: #333;">
+        <strong>Report Overview:</strong> This Bonds Summary Report provides a consolidated view of client positions in bond trading. 
+        It summarizes total inflows (sales) and outflows (purchases) for each client, showing their net market exposure.<br/>
+        <strong>How to Read:</strong> Inflow = bonds sold (money in). Outflow = bonds bought (money out). 
+        Net = Inflow minus Outflow. Positive = net seller. Negative = net buyer. Balance = running total.
     </div>
     
     <table>
@@ -908,9 +934,6 @@ function generateBondsStatutoryDeductionsHTML($transactions, $company_name, $com
     $html = '
     <style>
         .header { text-align: center; margin-bottom: 10px; border-bottom: 1px solid #000; padding-bottom: 5px; }
-        .company-title { font-size: 16px; font-weight: bold; margin: 5px 0; }
-        .company-subtitle { font-size: 10px; margin: 2px 0; }
-        .division { font-size: 11px; margin: 10px 0; font-weight: bold; }
         .report-title { font-size: 14px; font-weight: bold; margin: 5px 0; }
         .report-subtitle { font-size: 10px; margin: 2px 0; }
         .disclaimer { font-size: 8px; margin-top: 20px; color: #666; }
@@ -919,22 +942,22 @@ function generateBondsStatutoryDeductionsHTML($transactions, $company_name, $com
         th { background-color: #f0f0f0; font-weight: bold; }
         .text-left { text-align: left; }
         .text-right { text-align: right; }
-        .contact-info { font-size: 9px; margin: 5px 0; }
         .total-row { background-color: #f8f8f8; font-weight: bold; }
     </style>
     
     <div class="header">
-        <div class="company-title">' . strtoupper($company_name) . '</div>
-        <div class="company-subtitle">Stock Broker / Dealer & Investment Advisor</div>
-        <div class="company-subtitle">Member of Dar es Salaam Stock Exchange</div>
-        <div class="contact-info">
-            ATC HOUSE, OHIO STREET / GARDEN AVENUE PO BOX 8706 DAR ES SALAAM<br>
-            Tel: +255 22 2112091 Mob: +255 718 284 540 Email: info@vfsl.co.tz
-        </div>
-        <div class="division">Division : STOCK BROKING</div>
         <div class="report-title">BONDS STATUTORY DEDUCTIONS DETAILED REPORT</div>
         <div class="report-subtitle">FOR THE PERIOD [' . $period_from . ' - ' . $period_to . ']</div>
         <div class="report-subtitle">Date : ' . $current_date . ' : ' . $current_time . '</div>
+    </div>
+    
+    <div style="background-color: #f0f4f8; border-left: 4px solid #002e92; padding: 8px 12px; margin: 5px 0 10px 0; font-size: 8px; color: #333;">
+        <strong>Report Overview:</strong> This Statutory Deductions Report breaks down all regulatory fees and levies charged on bond transactions 
+        for the period ' . $period_from . ' to ' . $period_to . '. These fees are mandated by the Dar Es Salaam Stock Exchange (DSE), 
+        Capital Markets and Securities Authority (CMSA), and Central Securities Depository (CSD).<br/>
+        <strong>Fee Structure:</strong> DSE Transaction Levy (0.02006%) | CMSA Levy (0.01%) | CSD Levy (0.0118%) | 
+        VAT on Brokerage Commission (18% of 0.063% = 0.01134%).<br/>
+        <strong>Purpose:</strong> Use this report for regulatory compliance, fee reconciliation, and preparation of levy payments to DSE, CMSA, and CSD.
     </div>
     
     <table>
@@ -1058,10 +1081,6 @@ function generateBondsCMSALevyHTML($totals, $cmsa_levy, $company_name, $company_
     
     $html = '
     <style>
-        .header { text-align: center; margin-bottom: 10px; border-bottom: 1px solid #000; padding-bottom: 5px; }
-        .company-title { font-size: 16px; font-weight: bold; margin: 5px 0; }
-        .company-subtitle { font-size: 10px; margin: 2px 0; }
-        .division { font-size: 11px; margin: 10px 0; font-weight: bold; }
         .report-title { font-size: 14px; font-weight: bold; margin: 5px 0; }
         .disclaimer { font-size: 8px; margin-top: 20px; color: #666; }
         table { width: 100%; border-collapse: collapse; font-size: 10px; margin: 10px 0; }
@@ -1069,19 +1088,8 @@ function generateBondsCMSALevyHTML($totals, $cmsa_levy, $company_name, $company_
         th { background-color: #f0f0f0; font-weight: bold; }
         .text-left { text-align: left; }
         .text-right { text-align: right; }
-        .contact-info { font-size: 9px; margin: 5px 0; }
         .letter-header { margin: 15px 0; }
     </style>
-    
-    <div class="header">
-        <div class="company-title">' . strtoupper($company_name) . '</div>
-        <div class="company-subtitle">Stock Broker / Dealer & Investment Advisor</div>
-        <div class="company-subtitle">Member of Dar es Salaam Stock Exchange</div>
-        <div class="contact-info">
-            ATC HOUSE, OHIO STREET / GARDEN AVENUE PO BOX 8706 DAR ES SALAAM<br>
-            Tel: +255 22 2112091 Mob: +255 788 284 540 Email: info@vfsl.co.tz
-        </div>
-    </div>
     
     <div class="letter-header">
         <table>
@@ -1096,6 +1104,13 @@ function generateBondsCMSALevyHTML($totals, $cmsa_levy, $company_name, $company_
                 <td class="text-right"><strong>Date: ' . $current_date . '</strong></td>
             </tr>
         </table>
+    </div>
+    
+    <div style="background-color: #f0f4f8; border-left: 4px solid #002e92; padding: 8px 12px; margin: 5px 0 10px 0; font-size: 9px; color: #333;">
+        <strong>Re:</strong> CMSA Transaction Levy on Bonds for the period ' . $period_from . ' to ' . $period_to . '.<br/>
+        This document details the Capital Markets and Securities Authority (CMSA) levy payable on bond transactions. 
+        The CMSA levy is calculated at 0.01% of total transaction turnover (purchases + sales). 
+        Please find enclosed our payment for the amount shown below.
     </div>
     
     <div class="report-title" style="text-align: center; margin: 15px 0;">CMSA TRANSACTION LEVY ON BONDS</div>
@@ -1160,10 +1175,6 @@ function generateBondsDSELevyHTML($totals, $dse_levy, $company_name, $company_co
     
     $html = '
     <style>
-        .header { text-align: center; margin-bottom: 10px; border-bottom: 1px solid #000; padding-bottom: 5px; }
-        .company-title { font-size: 16px; font-weight: bold; margin: 5px 0; }
-        .company-subtitle { font-size: 10px; margin: 2px 0; }
-        .division { font-size: 11px; margin: 10px 0; font-weight: bold; }
         .report-title { font-size: 14px; font-weight: bold; margin: 5px 0; }
         .disclaimer { font-size: 8px; margin-top: 20px; color: #666; }
         table { width: 100%; border-collapse: collapse; font-size: 10px; margin: 10px 0; }
@@ -1171,19 +1182,8 @@ function generateBondsDSELevyHTML($totals, $dse_levy, $company_name, $company_co
         th { background-color: #f0f0f0; font-weight: bold; }
         .text-left { text-align: left; }
         .text-right { text-align: right; }
-        .contact-info { font-size: 9px; margin: 5px 0; }
         .letter-header { margin: 15px 0; }
     </style>
-    
-    <div class="header">
-        <div class="company-title">' . strtoupper($company_name) . '</div>
-        <div class="company-subtitle">Stock Broker / Dealer & Investment Advisor</div>
-        <div class="company-subtitle">Member of Dar es Salaam Stock Exchange</div>
-        <div class="contact-info">
-            ATC HOUSE, OHIO STREET / GARDEN AVENUE PO BOX 8706 DAR ES SALAAM<br>
-            Tel: +255 22 2112091 Mob: +255 788 284 540 Email: info@vfsl.co.tz
-        </div>
-    </div>
     
     <div class="letter-header">
         <table>
@@ -1198,6 +1198,13 @@ function generateBondsDSELevyHTML($totals, $dse_levy, $company_name, $company_co
                 <td class="text-right"><strong>Date: ' . $current_date . '</strong></td>
             </tr>
         </table>
+    </div>
+    
+    <div style="background-color: #f0f4f8; border-left: 4px solid #002e92; padding: 8px 12px; margin: 5px 0 10px 0; font-size: 9px; color: #333;">
+        <strong>Re:</strong> DSE Transaction Levy on Bonds for the period ' . $period_from . ' to ' . $period_to . '.<br/>
+        This document details the Dar Es Salaam Stock Exchange (DSE) Transaction Levy payable on bond transactions. 
+        The DSE levy is calculated at 0.02006% of total transaction turnover (purchases + sales). 
+        Please find enclosed our payment for the amount shown below.
     </div>
     
     <div class="report-title" style="text-align: center; margin: 15px 0;">DSE TRANSACTION LEVY ON BONDS</div>
@@ -1262,10 +1269,6 @@ function generateBondsCSDLevyHTML($totals, $csd_levy, $company_name, $company_co
     
     $html = '
     <style>
-        .header { text-align: center; margin-bottom: 10px; border-bottom: 1px solid #000; padding-bottom: 5px; }
-        .company-title { font-size: 16px; font-weight: bold; margin: 5px 0; }
-        .company-subtitle { font-size: 10px; margin: 2px 0; }
-        .division { font-size: 11px; margin: 10px 0; font-weight: bold; }
         .report-title { font-size: 14px; font-weight: bold; margin: 5px 0; }
         .disclaimer { font-size: 8px; margin-top: 20px; color: #666; }
         table { width: 100%; border-collapse: collapse; font-size: 10px; margin: 10px 0; }
@@ -1273,19 +1276,8 @@ function generateBondsCSDLevyHTML($totals, $csd_levy, $company_name, $company_co
         th { background-color: #f0f0f0; font-weight: bold; }
         .text-left { text-align: left; }
         .text-right { text-align: right; }
-        .contact-info { font-size: 9px; margin: 5px 0; }
         .letter-header { margin: 15px 0; }
     </style>
-    
-    <div class="header">
-        <div class="company-title">' . strtoupper($company_name) . '</div>
-        <div class="company-subtitle">Stock Broker / Dealer & Investment Advisor</div>
-        <div class="company-subtitle">Member of Dar es Salaam Stock Exchange</div>
-        <div class="contact-info">
-            ATC HOUSE, OHIO STREET / GARDEN AVENUE PO BOX 8706 DAR ES SALAAM<br>
-            Tel: +255 22 2112091 Mob: +255 788 284 540 Email: info@vfsl.co.tz
-        </div>
-    </div>
     
     <div class="letter-header">
         <table>
@@ -1300,6 +1292,13 @@ function generateBondsCSDLevyHTML($totals, $csd_levy, $company_name, $company_co
                 <td class="text-right"><strong>Date: ' . $current_date . '</strong></td>
             </tr>
         </table>
+    </div>
+    
+    <div style="background-color: #f0f4f8; border-left: 4px solid #002e92; padding: 8px 12px; margin: 5px 0 10px 0; font-size: 9px; color: #333;">
+        <strong>Re:</strong> CSD Transaction Levy on Bonds for the period ' . $period_from . ' to ' . $period_to . '.<br/>
+        This document details the Central Securities Depository (CSD) Levy payable on bond transactions. 
+        The CSD levy is calculated at 0.0118% of total transaction turnover (purchases + sales). 
+        Please find enclosed our payment for the amount shown below.
     </div>
     
     <div class="report-title" style="text-align: center; margin: 15px 0;">CSD TRANSACTION LEVY ON BONDS</div>
@@ -1364,10 +1363,6 @@ function generateBondsVATLevyHTML($totals, $vat_levy, $company_name, $company_co
     
     $html = '
     <style>
-        .header { text-align: center; margin-bottom: 10px; border-bottom: 1px solid #000; padding-bottom: 5px; }
-        .company-title { font-size: 16px; font-weight: bold; margin: 5px 0; }
-        .company-subtitle { font-size: 10px; margin: 2px 0; }
-        .division { font-size: 11px; margin: 10px 0; font-weight: bold; }
         .report-title { font-size: 14px; font-weight: bold; margin: 5px 0; }
         .disclaimer { font-size: 8px; margin-top: 20px; color: #666; }
         table { width: 100%; border-collapse: collapse; font-size: 10px; margin: 10px 0; }
@@ -1375,19 +1370,8 @@ function generateBondsVATLevyHTML($totals, $vat_levy, $company_name, $company_co
         th { background-color: #f0f0f0; font-weight: bold; }
         .text-left { text-align: left; }
         .text-right { text-align: right; }
-        .contact-info { font-size: 9px; margin: 5px 0; }
         .letter-header { margin: 15px 0; }
     </style>
-    
-    <div class="header">
-        <div class="company-title">' . strtoupper($company_name) . '</div>
-        <div class="company-subtitle">Stock Broker / Dealer & Investment Advisor</div>
-        <div class="company-subtitle">Member of Dar es Salaam Stock Exchange</div>
-        <div class="contact-info">
-            ATC HOUSE, OHIO STREET / GARDEN AVENUE PO BOX 8706 DAR ES SALAAM<br>
-            Tel: +255 22 2112091 Mob: +255 788 284 540 Email: info@vfsl.co.tz
-        </div>
-    </div>
     
     <div class="letter-header">
         <table>
@@ -1402,6 +1386,13 @@ function generateBondsVATLevyHTML($totals, $vat_levy, $company_name, $company_co
                 <td class="text-right"><strong>Date: ' . $current_date . '</strong></td>
             </tr>
         </table>
+    </div>
+    
+    <div style="background-color: #f0f4f8; border-left: 4px solid #002e92; padding: 8px 12px; margin: 5px 0 10px 0; font-size: 9px; color: #333;">
+        <strong>Re:</strong> VAT on Brokerage Commission for the period ' . $period_from . ' to ' . $period_to . '.<br/>
+        This document details the Value Added Tax (VAT) payable on brokerage commission for bond transactions. 
+        VAT is calculated at 18% of the gross brokerage commission (0.063% of turnover). 
+        Please find enclosed our payment for the amount shown below.
     </div>
     
     <div class="report-title" style="text-align: center; margin: 15px 0;">VAT TRANSACTION LEVY ON BONDS</div>

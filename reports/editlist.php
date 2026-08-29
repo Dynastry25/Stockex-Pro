@@ -216,14 +216,34 @@ function generateBondsEditListHTML($transactions, $company_name, $company_addres
             </div>
             
             <div class="header">
-                <div class="company-info">
-                    <strong>' . strtoupper($company_name) . '</strong><br>
-                    ' . htmlspecialchars($company_address) . '<br>
-                    Phone: ' . htmlspecialchars($company_phone) . ' | Email: ' . htmlspecialchars($company_email) . '
+                <div style="margin-bottom: 10px;">
+                    <img src="<?php echo BASE_URL; ?>assets/HeaderLogoVfsl.jpg" alt="VFSL Logo" style="height: 50px;">
                 </div>
+                <div class="company-info">
+                    <strong style="color: #002e92; font-size: 14px;">' . strtoupper($company_name) . '</strong><br>
+                    <span style="color: #cc0000; font-style: italic; font-size: 11px;">Stockbroker/Dealer, Fund Manager & Investment Advisor</span><br>
+                    <span style="color: #002e92; font-size: 10px;">Members of the Dar Es Salaam Stock Exchange</span><br>
+                    <span style="color: #666; font-size: 10px;">' . htmlspecialchars($company_address) . '</span><br>
+                    <span style="color: #666; font-size: 10px;">Mob: +255 752 824 977 | Tel: +255 22 211 2691 | Email: info@vfsl.co.tz</span>
+                </div>
+                <div style="border-top: 2px solid #002e92; border-bottom: 1px solid #cc0000; padding: 5px 0; margin-top: 5px;"></div>
                 <div class="report-title">BONDS PURCHASES & SALES TRANSACTIONS EDIT LIST</div>
                 <div class="report-subtitle">FOR DATE: ' . $chosen_date . '</div>
                 <div class="report-subtitle">Date Printed: ' . $current_date . ' - ' . $current_time . '</div>
+            </div>
+            
+            <div style="background-color: #f8f9fa; border-left: 4px solid #002e92; padding: 10px 15px; margin: 10px 0; font-size: 10px; color: #333;">
+                <strong>Report Overview:</strong> This Bonds Edit List provides a detailed record of all bond purchase and sale transactions 
+                processed by VICTORY FINANCIAL SERVICES LIMITED during the period <strong>' . $period_from . '</strong> to <strong>' . $period_to . '</strong>. 
+                Each row represents a single executed trade, showing the client, security, trade details, and a full breakdown of applicable charges.<br><br>
+                <strong>How to Read:</strong> Transactions are grouped by trade date. For each trade, the report shows the gross consideration 
+                (trade value), followed by charges: Brokerage Commission (0.063%), DSE Transaction Levy, CMSA Levy, CSD Levy, and VAT on Commission (18%). 
+                The final column shows the net amount — the actual cash impact after all charges. For BUY trades, charges are added to the consideration; 
+                for SELL trades, charges are deducted.<br><br>
+                <strong>Key Columns:</strong> 
+                <em>SLIPNO</em> = Trade reference number | <em>CONTRACT</em> = Trade side and unique ID | 
+                <em>CONSIDERATION</em> = Quantity × Price | <em>TOTAL CHARGES</em> = Sum of all fees | 
+                <em>GROSS/NET AMOUNT</em> = Final settlement amount after charges.
             </div>
             
             <div class="table-responsive">
@@ -513,14 +533,33 @@ function generateEquitiesEditListHTML($transactions, $company_name, $company_add
             </div>
             
             <div class="header">
-                <div class="company-info">
-                    <strong>' . strtoupper($company_name) . '</strong><br>
-                    ' . htmlspecialchars($company_address) . '<br>
-                    Phone: ' . htmlspecialchars($company_phone) . ' | Email: ' . htmlspecialchars($company_email) . '
+                <div style="margin-bottom: 10px;">
+                    <img src="<?php echo BASE_URL; ?>assets/HeaderLogoVfsl.jpg" alt="VFSL Logo" style="height: 50px;">
                 </div>
+                <div class="company-info">
+                    <strong style="color: #002e92; font-size: 14px;">' . strtoupper($company_name) . '</strong><br>
+                    <span style="color: #cc0000; font-style: italic; font-size: 11px;">Stockbroker/Dealer, Fund Manager & Investment Advisor</span><br>
+                    <span style="color: #002e92; font-size: 10px;">Members of the Dar Es Salaam Stock Exchange</span><br>
+                    <span style="color: #666; font-size: 10px;">' . htmlspecialchars($company_address) . '</span><br>
+                    <span style="color: #666; font-size: 10px;">Mob: +255 752 824 977 | Tel: +255 22 211 2691 | Email: info@vfsl.co.tz</span>
+                </div>
+                <div style="border-top: 2px solid #002e92; border-bottom: 1px solid #cc0000; padding: 5px 0; margin-top: 5px;"></div>
                 <div class="report-title">EQUITIES PURCHASES & SALES TRANSACTIONS EDIT LIST</div>
                 <div class="report-subtitle">FOR DATE: ' . $chosen_date . '</div>
                 <div class="report-subtitle">Date Printed: ' . $current_date . ' - ' . $current_time . '</div>
+            </div>
+            
+            <div style="background-color: #f8f9fa; border-left: 4px solid #28a745; padding: 10px 15px; margin: 10px 0; font-size: 10px; color: #333;">
+                <strong>Report Overview:</strong> This Equities Edit List provides a detailed record of all share purchase and sale transactions 
+                processed during the period <strong>' . $period_from . '</strong> to <strong>' . $period_to . '</strong>. Each row represents a single equity trade with 
+                full fee breakdown.<br><br>
+                <strong>How to Read:</strong> Transactions are grouped by trade date. For each trade, the report shows the gross consideration 
+                followed by charges: Brokerage Commission (1.5%), DSE Transaction Levy, CMSA Levy, CSD Levy, and VAT on Commission (18%). 
+                The <em>GROSS/NET AMOUNT</em> column shows the final settlement — BUY trades have charges added, SELL trades have charges deducted.<br><br>
+                <strong>Key Columns:</strong> 
+                <em>SLIPNO</em> = Trade reference | <em>CONTRACT</em> = Trade side (BUY:xxx or SELL:xxx) | 
+                <em>CONSIDERATION</em> = Quantity × Price | <em>TOTAL CHARGES</em> = Sum of all fees | 
+                <em>NET COMMISSION</em> = Brokerage commission after VAT deduction.
             </div>
             
             <div class="table-responsive">
@@ -775,14 +814,30 @@ function generateCombinedEditListHTML($bond_transactions, $equity_transactions, 
             </div>
             
             <div class="header">
-                <div class="company-info">
-                    <strong>' . strtoupper($company_name) . '</strong><br>
-                    ' . htmlspecialchars($company_address) . '<br>
-                    Phone: ' . htmlspecialchars($company_phone) . ' | Email: ' . htmlspecialchars($company_email) . '
+                <div style="margin-bottom: 10px;">
+                    <img src="<?php echo BASE_URL; ?>assets/HeaderLogoVfsl.jpg" alt="VFSL Logo" style="height: 50px;">
                 </div>
+                <div class="company-info">
+                    <strong style="color: #002e92; font-size: 14px;">' . strtoupper($company_name) . '</strong><br>
+                    <span style="color: #cc0000; font-style: italic; font-size: 11px;">Stockbroker/Dealer, Fund Manager & Investment Advisor</span><br>
+                    <span style="color: #002e92; font-size: 10px;">Members of the Dar Es Salaam Stock Exchange</span><br>
+                    <span style="color: #666; font-size: 10px;">' . htmlspecialchars($company_address) . '</span><br>
+                    <span style="color: #666; font-size: 10px;">Mob: +255 752 824 977 | Tel: +255 22 211 2691 | Email: info@vfsl.co.tz</span>
+                </div>
+                <div style="border-top: 2px solid #002e92; border-bottom: 1px solid #cc0000; padding: 5px 0; margin-top: 5px;"></div>
                 <div class="report-title">COMBINED TRANSACTIONS EDIT LIST (BONDS & SHARES)</div>
                 <div class="report-subtitle">FOR DATE: ' . $chosen_date . '</div>
                 <div class="report-subtitle">Date Printed: ' . $current_date . ' - ' . $current_time . '</div>
+            </div>
+            
+            <div style="background-color: #f8f9fa; border-left: 4px solid #6c757d; padding: 10px 15px; margin: 10px 0; font-size: 10px; color: #333;">
+                <strong>Report Overview:</strong> This Combined Edit List consolidates all bond and equity transactions processed on 
+                <strong>' . $chosen_date . '</strong> into a single view. It provides a complete picture of the day\'s trading activity across both asset classes.<br><br>
+                <strong>How to Read:</strong> The report is divided into two sections — <strong>Bonds</strong> (blue) and <strong>Shares/Equities</strong> (green). 
+                Each section shows individual trades grouped by date, with full fee breakdowns. Bonds use a 0.063% brokerage rate while equities use 1.5%. 
+                Summary cards at the bottom of each section show totals for quick reference.<br><br>
+                <strong>Purpose:</strong> Use this report for daily reconciliation, ensuring all trades are properly captured and fees are correctly calculated 
+                across both asset classes.
             </div>';
     
     // Process bond transactions

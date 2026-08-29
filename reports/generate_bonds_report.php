@@ -270,19 +270,19 @@ function generateBondsTransactionSummaryReport($db, $filters) {
     if (file_exists($logo_file)) {
         $pdf->Image($logo_file, $lm + 2, 5, 18, 0, '', '', 'T', false, 300);
     }
-    $pdf->SetFont('times', 'B', 12);
+    $pdf->SetFont('helvetica', 'B', 12);
     $pdf->SetTextColor(4, 45, 146);
     $pdf->SetXY($lm, 5);
     $pdf->Cell(0, 5, strtoupper($company_name), 0, 1, 'C');
-    $pdf->SetFont('times', 'BI', 9);
+    $pdf->SetFont('helvetica', 'BI', 9);
     $pdf->SetTextColor(255, 0, 0);
     $pdf->SetX($lm);
     $pdf->Cell(0, 4, 'Stockbroker/Dealer, Fund Manager & Investment Advisor', 0, 1, 'C');
-    $pdf->SetFont('times', 'B', 8);
+    $pdf->SetFont('helvetica', 'B', 8);
     $pdf->SetTextColor(4, 45, 146);
     $pdf->SetX($lm);
     $pdf->Cell(0, 4, 'Members of the ' . $company_exchange, 0, 1, 'C');
-    $pdf->SetFont('times', '', 7);
+    $pdf->SetFont('helvetica', '', 7);
     $pdf->SetTextColor(4, 45, 146);
     $pdf->SetX($lm);
     $pdf->Cell(0, 3, $company_address, 0, 1, 'C');
@@ -290,7 +290,7 @@ function generateBondsTransactionSummaryReport($db, $filters) {
     if (!empty($company_mobile)) $contact_info .= 'Mob: ' . $company_mobile;
     if (!empty($company_phone)) $contact_info .= '| Tel: ' . $company_phone;
     if (!empty($company_email)) $contact_info .= '| Email: ' . $company_email;
-    $pdf->SetFont('times', 'B', 7);
+    $pdf->SetFont('helvetica', 'B', 7);
     $pdf->SetTextColor(4, 45, 146);
     $pdf->SetX($lm);
     $pdf->Cell(0, 3, $contact_info, 0, 1, 'C');
@@ -317,6 +317,18 @@ function generateBondsTransactionSummaryReport($db, $filters) {
     $pdf->SetFont('helvetica', '', 9);
     $pdf->Cell(0, 4, 'Date : ' . date('d/m/Y') . ' : ' . date('H:i:s'), 0, 1, 'C');
     $pdf->Ln(3);
+    
+    // Report explanation
+    $pdf->writeHTML('
+    <div style="background-color: #f0f4f8; border-left: 4px solid #002e92; padding: 8px 12px; margin: 5px 0 10px 0; font-size: 8px; color: #333;">
+        <strong>Report Overview:</strong> This Bonds Transaction Summary provides a comprehensive overview of all bond trading activity 
+        for the specified period. It includes transaction volumes, values, fee breakdowns, and client position summaries.<br/>
+        <strong>How to Read:</strong> The report is organized by section — transaction details, fee summaries, and client positions. 
+        Use the totals at the bottom of each section for quick reference.<br/>
+        <strong>Purpose:</strong> Use this for regulatory reporting, management review, and performance analysis of the bonds desk.
+    </div>
+    ', true, false, true, false, '', '');
+    $pdf->Ln(2);
     
     // Add filter information
     $filters_applied = [];
