@@ -27,7 +27,7 @@ Two kinds of actors use this API:
 ### How the client token is delivered
 
 1. Staff calls `mint_link` → gets a **one-time** plaintext `token` + a ready-made `link`.
-2. Staff sends that link to the client by email/SMS: `https://<host>/client-update.html?t=<TOKEN>`.
+2. Staff sends that link to the client by email/SMS: `https://clients.vfsl.co.tz/client-update.html?t=<TOKEN>`.
 3. The page must, on load:
    - read `t` from the URL query string,
    - move it into the header `Authorization: Bearer <TOKEN>`,
@@ -114,7 +114,7 @@ Response `data`:
   "token": "ffcbe70216d9632f5740900dc35acaf89a21b5c72ba2e527c900d1e82f70a133",
   "expires_at": "2026-08-31 09:03:02",
   "max_uses": 20,
-  "link": "https://<host>/client-update.html?t=ffcbe70216d9632f5740900dc35acaf89a21b5c72ba2e527c900d1e82f70a133"
+  "link": "https://clients.vfsl.co.tz/client-update.html?t=ffcbe70216d9632f5740900dc35acaf89a21b5c72ba2e527c900d1e82f70a133"
 }
 ```
 

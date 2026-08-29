@@ -12,8 +12,9 @@ require_once __DIR__ . '/../../config/security_config.php';
 require_once __DIR__ . '/../../includes/security.php';
 
 // --- Configuration (overridable via config) ---
+// By default links point to the dedicated client subdomain (clients.vfsl.co.tz).
 if (!defined('PORTAL_PAGE_URL')) {
-    define('PORTAL_PAGE_URL', BASE_URL . 'client-update.html?t=');
+    define('PORTAL_PAGE_URL', CLIENT_PORTAL_URL . 'client-update.html?t=');
 }
 if (!defined('PORTAL_DEFAULT_EXPIRY_HOURS')) {
     define('PORTAL_DEFAULT_EXPIRY_HOURS', 72); // 3 days
