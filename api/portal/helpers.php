@@ -10,6 +10,7 @@
 require_once __DIR__ . '/../../config/config.php';
 require_once __DIR__ . '/../../config/security_config.php';
 require_once __DIR__ . '/../../includes/security.php';
+require_once __DIR__ . '/../../includes/sms.php';
 
 // --- Configuration (overridable via config) ---
 // By default links point to the dedicated client subdomain (clients.vfsl.co.tz).
@@ -33,6 +34,29 @@ if (!defined('PORTAL_VALID_CURRENCIES')) {
 }
 if (!defined('PORTAL_ENFORCE_HTTPS')) {
     define('PORTAL_ENFORCE_HTTPS', true);
+}
+
+// SMS OTP limits (env-overridable; cost control for a public self-serve flow).
+if (!defined('PORTAL_SMS_COOLDOWN_SEC')) {
+    define('PORTAL_SMS_COOLDOWN_SEC', max(10, (int)env('SMS_COOLDOWN_SEC', 60)));
+}
+if (!defined('PORTAL_SMS_MAX_PER_NUMBER_HOUR')) {
+    define('PORTAL_SMS_MAX_PER_NUMBER_HOUR', max(1, (int)env('SMS_MAX_PER_NUMBER_HOUR', 3)));
+}
+if (!defined('PORTAL_SMS_MAX_PER_NUMBER_DAY')) {
+    define('PORTAL_SMS_MAX_PER_NUMBER_DAY', max(1, (int)env('SMS_MAX_PER_NUMBER_DAY', 5)));
+}
+if (!defined('PORTAL_OTP_TTL_SEC')) {
+    define('PORTAL_OTP_TTL_SEC', max(60, (int)env('OTP_TTL_SEC', 300)));
+}
+if (!defined('PORTAL_OTP_MAX_ATTEMPTS')) {
+    define('PORTAL_OTP_MAX_ATTEMPTS', max(1, (int)env('OTP_MAX_ATTEMPTS', 3)));
+}
+if (!defined('PORTAL_SESSION_SELF_HOURS')) {
+    define('PORTAL_SESSION_SELF_HOURS', 2); // verified self-claim sessions last 2h
+}
+if (!defined('PORTAL_SESSION_SELF_USES')) {
+    define('PORTAL_SESSION_SELF_USES', 10);
 }
 
 /**
@@ -463,4 +487,306 @@ function portal_update_client($db, $clientId, $cleanFields) {
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
     return $applied;
+}
+
+// ===========================================================================
+// Public self-service flow helpers (SMS OTP verification + first-claim).
+// ===========================================================================
+
+/**
+ * Normalize a Tanzanian phone into E.164 (2557XXXXXXXX).
+ */
+function portal_normalize_phone($phone) {
+    return sms_normalize_number((string)$phone);
+}
+
+/**
+ * Send an SMS through the shared gateway.
+ */
+function portal_send_sms($phone, $message) {
+    return sms_send((string)$phone, (string)$message);
+}
+
+/**
+ * The standard OTP SMS body (ASCII / English so no hex encoding is needed).
+ */
+function portal_otp_message($code) {
+    return 'Your StockEx verification code is ' . $code
+        . '. It expires within ' . (int)(PORTAL_OTP_TTL_SEC / 60)
+        . ' minutes. Do not share it with anyone.';
+}
+
+/**
+ * Mask a client name for the name-confirmation step, e.g. "CH*****GO".
+ */
+function portal_mask_name($name) {
+    $name = trim((string)$name);
+    if ($name === '') {
+        return '';
+    }
+    $len = mb_strlen($name);
+    if ($len <= 4) {
+        return $name;
+    }
+    $stars = max(3, $len - 4);
+    return mb_substr($name, 0, 2) . str_repeat('*', $stars) . mb_substr($name, -2);
+}
+
+/**
+ * Name confirmation matcher: compares the typed name to the stored one,
+ * tolerating ordering ("LAST FIRST" vs "FIRST LAST") and extra words.
+ */
+function portal_name_matches($stored, $input) {
+    $norm = function ($s) {
+        return preg_replace('/\s+/', ' ', strtoupper(trim((string)$s)));
+    };
+    $a = $norm($stored);
+    $b = $norm($input);
+    if ($a === '' || $b === '') {
+        return false;
+    }
+    if ($a === $b) {
+        return true;
+    }
+    $wa = explode(' ', $a);
+    $wb = explode(' ', $b);
+    return count(array_diff($wa, $wb)) === 0 || count(array_diff($wb, $wa)) === 0;
+}
+
+/**
+ * The client's verified phone (E.164), or null when none is bound yet.
+ */
+function portal_verified_phone($db, $client) {
+    $cols = portal_table_columns($db, 'clients');
+    if (!in_array('phone_verified', $cols, true) || (int)($client['phone_verified'] ?? 0) !== 1) {
+        return null;
+    }
+    $contact = portal_read_contact($db, $client);
+    $phone = $contact['phone'] ?? null;
+    if ($phone === null || $phone === '') {
+        return null;
+    }
+    return sms_normalize_number($phone);
+}
+
+/**
+ * Channel state for the lookup step. 'established' means an OTP-bound
+ * number already exists; 'first_claim' means nothing verified yet.
+ */
+function portal_channel_state($db, $client) {
+    $verified = portal_verified_phone($db, $client);
+    if ($verified !== null) {
+        return ['state' => 'established', 'phone_e164' => $verified];
+    }
+    return ['state' => 'first_claim', 'phone_e164' => null];
+}
+
+/**
+ * Record the fact that a phone number was verified for a client.
+ */
+function portal_mark_phone_verified($db, $clientId, $phoneE164, $ip) {
+    $cols = portal_table_columns($db, 'clients');
+    $security = new SecurityManager();
+    $set = ["phone_verified = 1", "verified_phone_at = NOW()"];
+
+    if (in_array('phone', $cols, true)) {
+        $set[] = 'phone = :phone';
+    }
+    if (in_array('phone_encrypted', $cols, true)) {
+        $enc = $security->encryptSensitiveData(['phone' => $phoneE164]);
+        $set[] = 'phone_encrypted = :phone_enc';
+    }
+    if (in_array('updated_at', $cols, true)) {
+        $set[] = 'updated_at = NOW()';
+    }
+    if (in_array('kyc_updated_at', $cols, true)) {
+        $set[] = 'kyc_updated_at = NOW()';
+    }
+
+    $stmt = $db->prepare("UPDATE clients SET " . implode(', ', $set) . " WHERE id = :id");
+    $params = [':id' => $clientId];
+    if (in_array('phone', $cols, true)) {
+        $params[':phone'] = $phoneE164;
+    }
+    if (in_array('phone_encrypted', $cols, true)) {
+        $params[':phone_enc'] = $enc['phone'] ?? null;
+    }
+    $stmt->execute($params);
+}
+
+/**
+ * Bind an actual stored phone number on an established account (change_phone).
+ */
+function portal_set_phone($db, $clientId, $phoneE164) {
+    $cols = portal_table_columns($db, 'clients');
+    $security = new SecurityManager();
+    $set = ["phone_verified = 1", "verified_phone_at = NOW()"];
+    if (in_array('phone', $cols, true)) {
+        $set[] = 'phone = :phone';
+    }
+    if (in_array('phone_encrypted', $cols, true)) {
+        $enc = $security->encryptSensitiveData(['phone' => $phoneE164]);
+        $set[] = 'phone_encrypted = :phone_enc';
+    }
+    if (in_array('updated_at', $cols, true)) {
+        $set[] = 'updated_at = NOW()';
+    }
+    $stmt = $db->prepare("UPDATE clients SET " . implode(', ', $set) . " WHERE id = :id");
+    $params = [':id' => $clientId, ':phone' => $phoneE164, ':phone_enc' => $enc['phone'] ?? null];
+    $stmt->execute($params);
+}
+
+/**
+ * Issue an OTP (DB-backed, hashed, single-use). Returns ['code'=>..] on
+ * success, or ['error'=>.., 'cooldown_sec'=>..] when a limit is hit.
+ */
+function portal_otp_issue($db, $cdsAccount, $phoneE164, $purpose, $ip) {
+    $cdsAccount = strtoupper(trim($cdsAccount));
+    $validPurposes = ['bind_phone', 'session', 'change_phone_old', 'change_phone_new'];
+    if (!in_array($purpose, $validPurposes, true)) {
+        $purpose = 'bind_phone';
+    }
+
+    $stmt = $db->prepare(
+        "SELECT TIMESTAMPDIFF(SECOND, MAX(created_at), NOW()) AS elapsed
+         FROM otp_verifications
+         WHERE phone_e164 = :p AND created_at > (NOW() - INTERVAL 1 DAY)"
+    );
+    $stmt->execute([':p' => $phoneE164]);
+    $elapsed = (int)($stmt->fetch(PDO::FETCH_ASSOC)['elapsed'] ?? 999999);
+    if ($elapsed < PORTAL_SMS_COOLDOWN_SEC) {
+        return ['error' => 'A code was recently sent to this number.', 'cooldown_sec' => PORTAL_SMS_COOLDOWN_SEC - max(0, $elapsed)];
+    }
+
+    $stmt = $db->prepare("SELECT COUNT(*) c FROM otp_verifications WHERE phone_e164 = :p AND created_at > (NOW() - INTERVAL 1 HOUR)");
+    $stmt->execute([':p' => $phoneE164]);
+    $hourly = (int)$stmt->fetch(PDO::FETCH_ASSOC)['c'];
+
+    $stmt = $db->prepare("SELECT COUNT(*) c FROM otp_verifications WHERE phone_e164 = :p AND created_at > (NOW() - INTERVAL 1 DAY)");
+    $stmt->execute([':p' => $phoneE164]);
+    $daily = (int)$stmt->fetch(PDO::FETCH_ASSOC)['c'];
+
+    if ($hourly >= PORTAL_SMS_MAX_PER_NUMBER_HOUR) {
+        return ['error' => 'Too many codes were sent to this number recently. Please wait.'];
+    }
+    if ($daily >= PORTAL_SMS_MAX_PER_NUMBER_DAY) {
+        return ['error' => 'Daily SMS limit reached for this number. Try again tomorrow.'];
+    }
+
+    $code = str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+    $stmt = $db->prepare(
+        "INSERT INTO otp_verifications (cds_account, phone_e164, purpose, code_hash, expires_at, ip_address)
+         VALUES (:c, :p, :pur, :h, DATE_ADD(NOW(), INTERVAL " . (int)PORTAL_OTP_TTL_SEC . " SECOND), :ip)"
+    );
+    $stmt->execute([
+        ':c'   => $cdsAccount,
+        ':p'   => $phoneE164,
+        ':pur' => $purpose,
+        ':h'   => hash('sha256', $code),
+        ':ip'  => $ip
+    ]);
+    return ['code' => $code, 'otp_id' => (int)$db->lastInsertId()];
+}
+
+/**
+ * Verify a submitted code against the latest unconsumed OTP row.
+ * Consumes it on success; returns ['ok'=>true,...] or ['ok'=>false,'reason'=>..].
+ */
+function portal_otp_verify($db, $cdsAccount, $phoneE164, $code) {
+    $cdsAccount = strtoupper(trim($cdsAccount));
+    $stmt = $db->prepare(
+        "SELECT o.*, (o.expires_at > NOW()) AS otp_fresh
+         FROM otp_verifications o
+         WHERE o.cds_account = :c AND o.phone_e164 = :p AND o.consumed = 0
+         ORDER BY o.id DESC LIMIT 1"
+    );
+    $stmt->execute([':c' => $cdsAccount, ':p' => $phoneE164]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$row) {
+        return ['ok' => false, 'reason' => 'No verification found. Request a new code.'];
+    }
+    if (!(int)($row['otp_fresh'] ?? 0)) {
+        return ['ok' => false, 'reason' => 'Code expired. Request a new one.'];
+    }
+    if ((int)$row['attempts'] >= PORTAL_OTP_MAX_ATTEMPTS) {
+        return ['ok' => false, 'reason' => 'Too many attempts. Request a new code.'];
+    }
+
+    if (hash_equals($row['code_hash'], hash('sha256', trim((string)$code)))) {
+        $db->prepare("UPDATE otp_verifications SET consumed = 1, attempts = attempts + 1 WHERE id = :id")
+            ->execute([':id' => $row['id']]);
+        return ['ok' => true, 'otp_id' => (int)$row['id'], 'purpose' => $row['purpose']];
+    }
+
+    $db->prepare("UPDATE otp_verifications SET attempts = attempts + 1 WHERE id = :id")
+        ->execute([':id' => $row['id']]);
+    return ['ok' => false, 'reason' => 'Incorrect code.'];
+}
+
+/**
+ * Check whether a new phone number has already been verified for login
+ * purposes inside the current session (server-side, not client-declarable).
+ */
+function portal_new_phone_verified_for($db, $clientId, $newPhoneE164, $since) {
+    $stmt = $db->prepare(
+        "SELECT COUNT(*) c FROM otp_verifications v
+         JOIN clients cl ON UPPER(cl.cds_account) = v.cds_account
+         WHERE cl.id = :cid
+           AND v.purpose = 'change_phone_new'
+           AND v.consumed = 1
+           AND v.phone_e164 = :p
+           AND v.created_at > :since
+         LIMIT 1"
+    );
+    $stmt->execute([':cid' => $clientId, ':p' => $newPhoneE164, ':since' => $since]);
+    return (int)$stmt->fetch(PDO::FETCH_ASSOC)['c'] > 0;
+}
+
+/**
+ * Create a self-service session token (source='self') and return the raw token.
+ */
+function portal_create_self_token($db, $clientId, $ip) {
+    $security = new SecurityManager();
+    $raw = $security->generateSecureToken(32);
+    $stmt = $db->prepare(
+        "INSERT INTO client_access_tokens
+            (client_id, token_hash, expires_at, max_uses, created_by, ip_address, last_ip, `source`)
+         VALUES (:cid, :h, DATE_ADD(NOW(), INTERVAL " . (int)PORTAL_SESSION_SELF_HOURS . " HOUR), :uses, NULL, :ip, :ip, 'self')"
+    );
+    $stmt->execute([
+        ':cid'  => $clientId,
+        ':h'    => hash('sha256', $raw),
+        ':uses' => PORTAL_SESSION_SELF_USES,
+        ':ip'   => $ip
+    ]);
+    return [
+        'token'      => $raw,
+        'token_id'   => (int)$db->lastInsertId(),
+        'expires_at' => date('Y-m-d H:i:s', time() + PORTAL_SESSION_SELF_HOURS * 3600)
+    ];
+}
+
+/**
+ * Add a row to the staff verification queue (no duplicate open rows).
+ */
+function portal_enqueue_verification($db, $clientId, $kind, $reason, $ip) {
+    try {
+        $stmt = $db->prepare(
+            "SELECT id FROM client_verification_queue
+             WHERE client_id = :c AND kind = :k AND status = 'open' LIMIT 1"
+        );
+        $stmt->execute([':c' => $clientId, ':k' => $kind]);
+        if ($stmt->fetch()) {
+            return false;
+        }
+        $stmt = $db->prepare(
+            "INSERT INTO client_verification_queue (client_id, kind, reason, client_ip)
+             VALUES (:c, :k, :r, :ip)"
+        );
+        $stmt->execute([':c' => $clientId, ':k' => $kind, ':r' => $reason, ':ip' => $ip]);
+        return true;
+    } catch (Exception $e) {
+        error_log('verification queue error: ' . $e->getMessage());
+        return false;
+    }
 }

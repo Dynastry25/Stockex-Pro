@@ -21,17 +21,18 @@ Two kinds of actors use this API:
 
 | Actor | Auth | Used for |
 |---|---|---|
-| **Staff** (trader/officer/admin, logged into StockEx) | Server session + CSRF token | Creating/revoking client links |
+| **Staff** (trader/officer/admin, logged into StockEx) | Server session + CSRF token | Minting links, bulk actions |
 | **Client** | `Authorization: Bearer <token>` header | Viewing/updating their own profile |
 
 ### How the client token is delivered
 
-1. Staff calls `mint_link` → gets a **one-time** plaintext `token` + a ready-made `link`.
-2. Staff sends that link to the client by email/SMS: `https://clients.vfsl.co.tz/client-update.html?t=<TOKEN>`.
+1. **Staff-Minted Link:** Staff calls `mint_link` → gets a one-time link: `https://clients.vfsl.co.tz/client-update.html?t=<TOKEN>`.
+2. **Self-Service Claim:** Client visits `https://clients.vfsl.co.tz/` (public portal), enters CDS account, verifies via SMS OTP, and receives a short-lived bearer token.
 3. The page must, on load:
-   - read `t` from the URL query string,
+   - read `t` from the URL query string (if present),
+   - or receive a bearer token from the self-service flow,
    - move it into the header `Authorization: Bearer <TOKEN>`,
-   - **immediately strip it from the URL** via `history.replaceState(null, '', window.location.pathname)`.
+   - **immediately strip it from the URL** (if present) via `history.replaceState(null, '', window.location.pathname)`.
 
 > Never: log the token, keep it in the URL, store it in localStorage, or show it in the UI.
 > The token is shown only once at mint time; if lost, staff mints a new link.
@@ -204,6 +205,86 @@ Content-Type: application/json
 
 Body: `{ "csrf_token": "...", "cds_account": "885064" }`
 
+### 3.7 `POST ?action=lookup_cds` — Public
+
+Finds an account and returns masked hints and channel state.
+
+```
+POST /api/portal/index.php?action=lookup_cds
+Content-Type: application/json
+Body: {"cds_account": "885064"}
+```
+
+Response `data`:
+```json
+{
+  "cds_account": "885064",
+  "client_name": "CHRISTER JOACHIM MHINGO",
+  "name_hint": "CH*****GO",
+  "channel_state": "established",
+  "phone_masked": "+25****56",
+  "phone_verified": true
+}
+```
+`channel_state` is `"established"` if a phone was already verified (OTP will go to that number), or `"first_claim"` if no phone exists yet (OTP will go to the number the client provides).
+
+### 3.8 `POST ?action=send_otp` — Public
+
+Sends a 6-digit SMS verification code.
+
+```
+POST /api/portal/index.php?action=send_otp
+Content-Type: application/json
+Body: {"cds_account": "885064", "phone": "0755123456"}
+```
+- **First claim (`first_claim` state):** `phone` is required. The code is sent to this number to bind it.
+- **Established account:** `phone` is ignored. The code is sent ONLY to the number already bound (verified).
+
+Response `data`:
+```json
+{
+  "phone_masked": "255****56",
+  "purpose": "bind_phone",
+  "channel_state": "first_claim",
+  "cooldown_sec": 60
+}
+```
+
+### 3.9 `POST ?action=verify_otp` — Public
+
+Confirms the 6-digit code.
+
+```
+POST /api/portal/index.php?action=verify_otp
+Content-Type: application/json
+Body: {"cds_account": "885064", "phone": "0755123456", "code": "123456", "name": "CHRISTER JOACHIM MHINGO"}
+```
+- **First claim:** `phone`, `code`, and the full `name` (must match the account) are required.
+- **Established:** Only `code` is required. The system validates against the bound number.
+
+On success, returns a short-lived bearer token to use for editing:
+```json
+{
+  "token": "3d8a...",
+  "expires_at": "2026-08-31 09:00:00",
+  "channel_state": "first_claim"
+}
+```
+
+### 3.10 `POST ?action=change_phone` — Bearer
+
+Starts changing the verified phone (sends OTP to the NEW number).
+```json
+Body: {"phone": "0788888888"}
+```
+
+### 3.11 `POST ?action=confirm_change_phone` — Bearer
+
+Confirms the new phone by verifying the OTP.
+```json
+Body: {"phone": "0788888888", "code": "123456"}
+```
+
 ---
 
 ## 4. Field validation rules
@@ -243,6 +324,8 @@ Validation failures return `400` with `details.errors` (an array of messages to 
 - Reads (`get_profile`): 60/min
 - Writes (`update_profile`): 20/min, plus 5 updates per token per 5 min
 - Mints/revokes (staff): 10/min
+- Public lookups/OTP: Heavily limited (e.g., `lookup_cds`: 20/min, `send_otp`: 15/min, `verify_otp`: 10/min, `change_phone`: 6/min)
+- OTP cooldown: Number-specific cooldown between SMS sends (default 60 seconds).
 
 **UX note for 429:** disable the submit button and show “Too many attempts — please retry shortly.” Do not treat it as a permanent error.
 

@@ -1062,7 +1062,12 @@ include '../includes/header.php';
                 <div id="portalGenerateStatus" class="mb-2"></div>
 
                 <div id="portalLinkResult" class="d-none">
-                    <label class="form-label fw-semibold">Send this link to the client:</label>
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle me-2"></i>
+                        Clients can now self-serve using the public URL. Provide this to them: <strong>https://clients.vfsl.co.tz/</strong>
+                    </div>
+
+                    <label class="form-label fw-semibold">Or generate a one-off secure link:</label>
                     <div class="input-group mb-2">
                         <input type="text" class="form-control" id="portalLinkText" readonly>
                         <button class="btn btn-outline-success" type="button" id="portalCopyBtn" onclick="portalCopyLink()">
@@ -1072,8 +1077,7 @@ include '../includes/header.php';
                     <div class="form-text mb-2" id="portalLinkMeta"></div>
                     <div class="alert alert-warning py-2 mb-2">
                         <i class="bi bi-exclamation-triangle-fill me-1"></i>
-                        This link is only shown once. Store it in your message to the client now. Anyone with the link
-                        can update this client's details until it expires or is revoked.
+                        This link is only shown once. Store it in your message to the client now.
                     </div>
                     <button class="btn btn-outline-danger btn-sm" type="button" onclick="portalRevokeLinks(true)">
                         <i class="bi bi-slash-circle me-1"></i>Revoke active links for this client

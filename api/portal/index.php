@@ -16,6 +16,11 @@
  *   POST ?action=update_profile            (Bearer token)   -> update phone/email/bank details
  *   POST ?action=revoke_token              (Bearer token)   -> self-revoke current token
  *   POST ?action=revoke_link               (staff session)  -> revoke all links for a CDS account
+ *   POST ?action=lookup_cds                (public)         -> find account, channel state, masked name
+ *   POST ?action=send_otp                  (public)         -> SMS OTP to verified number or entered number
+ *   POST ?action=verify_otp                (public)         -> confirm OTP + name (first claim) -> issues session token
+ *   POST ?action=change_phone              (Bearer token)   -> SMS OTP to a NEW number the client wants to bind
+ *   POST ?action=confirm_change_phone      (Bearer token)   -> verify new-number OTP and rebind
  */
 
 require_once __DIR__ . '/helpers.php';
@@ -110,8 +115,8 @@ switch ($action) {
 
         $stmt = $db->prepare(
             "INSERT INTO client_access_tokens
-                (client_id, token_hash, expires_at, max_uses, created_by, ip_address, last_ip)
-             VALUES (:cid, :hash, :expires, :uses, :by, :ip, :ip)"
+                (client_id, token_hash, expires_at, max_uses, created_by, ip_address, last_ip, `source`)
+             VALUES (:cid, :hash, :expires, :uses, :by, :ip, :ip, 'staff')"
         );
         $stmt->execute([
             ':cid'     => $client['id'],
@@ -216,9 +221,26 @@ switch ($action) {
             ]);
         }
 
+        // Verified-channel rule (server-enforced, not client-declarable):
+        // a self-service session may not silently move the verified phone to
+        // an unverified number. The change_phone -> confirm_change_phone flow
+        // must have already OTP-verified the new number.
+        $fields = $validated['clean'];
+        $isSelfSession = ($token['source'] ?? 'staff') === 'self';
+        if ($isSelfSession && array_key_exists('phone', $fields)) {
+            $typedE164 = portal_normalize_phone($fields['phone']);
+            $boundPhone = portal_verified_phone($db, $client);
+            if ($typedE164 !== null && $boundPhone !== null && $typedE164 !== $boundPhone) {
+                if (!portal_new_phone_verified_for($db, $client['id'], $typedE164, $token['created_at'])) {
+                    portal_error('Verify your new phone number first (change_phone + confirm_change_phone).', 400, [
+                        'editable_fields' => ['email', 'bank_name', 'bank_account_number', 'bank_branch', 'currency']
+                    ]);
+                }
+            }
+        }
+
         // Capture masked before/after for the audit trail, but only for
         // fields that actually exist in the schema and were persisted.
-        $fields = $validated['clean'];
         $before = portal_read_contact($db, $client);
         $applied = portal_update_client($db, $client['id'], $fields);
 
@@ -232,6 +254,17 @@ switch ($action) {
             if ($normalizedNew !== $oldValue) {
                 $changed[$field] = ['from' => portal_mask($oldValue), 'to' => portal_mask($normalizedNew)];
             }
+        }
+
+        // Bank details changed through self-service -> flag for staff
+        // verification (bank_pending_verification + review queue).
+        if ($isSelfSession && !empty(array_intersect(['bank_name', 'bank_account_number', 'bank_branch'], $applied))) {
+            $columns = portal_table_columns($db, 'clients');
+            if (in_array('bank_pending_verification', $columns, true)) {
+                $db->prepare("UPDATE clients SET bank_pending_verification = 1 WHERE id = :id")
+                    ->execute([':id' => $client['id']]);
+            }
+            portal_enqueue_verification($db, $client['id'], 'bank_flag', 'Bank details changed via self-service', $ip);
         }
 
         portal_use_token($db, $token['id'], $ip);
@@ -298,6 +331,251 @@ switch ($action) {
 
         portal_json(['revoked_tokens' => $revoked], 200, 'Active access links revoked.');
 
+    // ---------------------------------------------------------------
+    // Public: find an account (masked hints only — the page stays inert)
+    // ---------------------------------------------------------------
+    case 'lookup_cds':
+        assertMethod($method, 'POST');
+        if (!$security->checkRateLimit($ip, 'portal_lookup', 20, 60)) {
+            portal_error('Too many requests. Please try again later.', 429);
+        }
+
+        $input = portal_read_input();
+        $cdsAccount = strtoupper(trim((string)($input['cds_account'] ?? '')));
+        if (!preg_match('/^[A-Z0-9]{5,20}$/', $cdsAccount)) {
+            portal_error('Valid CDS account is required (5-20 alphanumeric characters).', 400);
+        }
+
+        $client = portal_find_client_by_cds($db, $cdsAccount);
+        if (!$client) {
+            portal_error('We could not find this CDS account. Check the number and try again.', 404);
+        }
+        if (!portal_client_is_active($client)) {
+            portal_error('This account is inactive. Please contact the administrator.', 400);
+        }
+
+        $verifiedPhone = portal_verified_phone($db, $client);
+
+        portal_json([
+            'cds_account'     => $client['cds_account'],
+            'client_name'     => $client['client_name'],
+            'name_hint'       => portal_mask_name($client['client_name']),
+            'channel_state'   => $verifiedPhone !== null ? 'established' : 'first_claim',
+            'phone_masked'    => $verifiedPhone !== null ? portal_mask($verifiedPhone) : null,
+            'phone_verified'  => $verifiedPhone !== null
+        ], 200, 'Account found.');
+
+    // ---------------------------------------------------------------
+    // Public: send an SMS OTP. Established accounts -> only the bound
+    // number. First-claim accounts -> the number the client entered.
+    // ---------------------------------------------------------------
+    case 'send_otp':
+        assertMethod($method, 'POST');
+        if (!$security->checkRateLimit($ip, 'portal_otp_send', 15, 60)) {
+            portal_error('Too many requests. Please try again later.', 429);
+        }
+
+        $input = portal_read_input();
+        $cdsAccount = strtoupper(trim((string)($input['cds_account'] ?? '')));
+        if (!preg_match('/^[A-Z0-9]{5,20}$/', $cdsAccount)) {
+            portal_error('Valid CDS account is required.', 400);
+        }
+
+        $client = portal_find_client_by_cds($db, $cdsAccount);
+        if (!$client || !portal_client_is_active($client)) {
+            portal_error('Client not found or inactive.', 404);
+        }
+
+        $verifiedPhone = portal_verified_phone($db, $client);
+        if ($verifiedPhone !== null) {
+            // Verified-channel rule: the code goes ONLY to the bound number.
+            $phoneE164 = $verifiedPhone;
+            $purpose = 'session';
+        } else {
+            // First claim: the entered number is the binding target.
+            $phoneE164 = portal_normalize_phone((string)($input['phone'] ?? ''));
+            if ($phoneE164 === null || !sms_normalize_number($phoneE164)) {
+                portal_error('Enter a valid Tanzanian phone number (e.g. 0755123456).', 400);
+            }
+            $purpose = 'bind_phone';
+        }
+
+        $issued = portal_otp_issue($db, $cdsAccount, $phoneE164, $purpose, $ip);
+        if (isset($issued['error'])) {
+            portal_error($issued['error'], 429, ['cooldown_sec' => $issued['cooldown_sec'] ?? null]);
+        }
+
+        $sent = portal_send_sms($phoneE164, portal_otp_message($issued['code']));
+        if (empty($sent['success'])) {
+            portal_log($db, $client['id'], null, 'otp_sent', [
+                'purpose' => $purpose, 'number' => portal_mask($phoneE164), 'status' => 'sms_failure'
+            ], null);
+            portal_error('We could not deliver an SMS to that number. Check it and try again.', 502, [
+                'gateway' => $sent['error'] ?? 'unknown'
+            ]);
+        }
+
+        portal_log($db, $client['id'], null, 'otp_sent', [
+            'purpose' => $purpose, 'number' => portal_mask($phoneE164), 'msg_id' => $sent['msg_id'] ?? null
+        ], null);
+
+        portal_json([
+            'phone_masked'   => portal_mask($phoneE164),
+            'purpose'        => $purpose,
+            'channel_state'  => $verifiedPhone !== null ? 'established' : 'first_claim',
+            'cooldown_sec'   => PORTAL_SMS_COOLDOWN_SEC
+        ], 200, 'Enter the verification code we just sent you by SMS.');
+
+    // ---------------------------------------------------------------
+    // Public: confirm the OTP (+ name on first claim) and issue a
+    // short-lived self-service session token.
+    // ---------------------------------------------------------------
+    case 'verify_otp':
+        assertMethod($method, 'POST');
+        if (!$security->checkRateLimit($ip, 'portal_otp_verify', 10, 60)) {
+            portal_error('Too many requests. Please try again later.', 429);
+        }
+
+        $input = portal_read_input();
+        $cdsAccount = strtoupper(trim((string)($input['cds_account'] ?? '')));
+        $code = trim((string)($input['code'] ?? ''));
+        if (!preg_match('/^[A-Z0-9]{5,20}$/', $cdsAccount)) {
+            portal_error('Valid CDS account is required.', 400);
+        }
+        if (!preg_match('/^[0-9]{6}$/', $code)) {
+            portal_error('Enter the 6-digit verification code.', 400);
+        }
+
+        $client = portal_find_client_by_cds($db, $cdsAccount);
+        if (!$client || !portal_client_is_active($client)) {
+            portal_error('Client not found or inactive.', 404);
+        }
+
+        $verifiedPhone = portal_verified_phone($db, $client);
+        if ($verifiedPhone !== null) {
+            $phoneE164 = $verifiedPhone;
+        } else {
+            // First claim: must know the bound number AND the account name.
+            $phoneE164 = portal_normalize_phone((string)($input['phone'] ?? ''));
+            if ($phoneE164 === null) {
+                portal_error('Enter a valid Tanzanian phone number.', 400);
+            }
+            $typedName = trim((string)($input['name'] ?? ''));
+            if (!portal_name_matches($client['client_name'], $typedName)) {
+                portal_log($db, $client['id'], null, 'otp_verified', ['result' => 'name_mismatch'], null);
+                portal_error('The name you entered does not match this CDS account. Contact your broker if this is your account.', 403);
+            }
+        }
+
+        $verified = portal_otp_verify($db, $cdsAccount, $phoneE164, $code);
+        if (empty($verified['ok'])) {
+            portal_error($verified['reason'] ?? 'Verification failed.', 401);
+        }
+
+        if ($verifiedPhone === null) {
+            portal_mark_phone_verified($db, $client['id'], $phoneE164, $ip);
+            portal_log($db, $client['id'], null, 'first_claim', [
+                'cds_account' => $cdsAccount, 'phone' => portal_mask($phoneE164)
+            ], null);
+            portal_log($db, $client['id'], null, 'phone_verified', ['phone' => portal_mask($phoneE164)], null);
+            portal_enqueue_verification($db, $client['id'], 'first_claim', 'New self-service account claim', $ip);
+            $security->auditLog($ip, 'PORTAL_FIRST_CLAIM', $cdsAccount, true);
+        } else {
+            portal_log($db, $client['id'], null, 'otp_verified', ['purpose' => 'session'], null);
+            $security->auditLog($ip, 'PORTAL_OTP_SESSION', $cdsAccount, true);
+        }
+
+        $session = portal_create_self_token($db, $client['id'], $ip);
+        portal_log($db, $client['id'], $session['token_id'], 'code_redeemed', null);
+
+        portal_json([
+            'token'          => $session['token'],
+            'expires_at'     => $session['expires_at'],
+            'client_id'      => (int)$client['id'],
+            'client_name'    => $client['client_name'],
+            'cds_account'    => $client['cds_account'],
+            'channel_state'  => $verifiedPhone !== null ? 'established' : 'first_claim',
+            'phone_verified' => true
+        ], 200, 'Identity verified. You may now update your details.');
+
+    // ---------------------------------------------------------------
+    // Bearer: start changing the bound phone — OTP goes to the NEW number.
+    // ---------------------------------------------------------------
+    case 'change_phone':
+        assertMethod($method, 'POST');
+        if (!$security->checkRateLimit($ip, 'portal_change_phone', 6, 60)) {
+            portal_error('Too many requests. Please try again later.', 429);
+        }
+
+        $resolved = portal_resolve_token($db, portal_get_bearer_token());
+        if ($resolved['status'] !== 'ok') {
+            portal_error('Invalid or expired token.', 401, ['reason' => $resolved['status']]);
+        }
+        $token = $resolved['token'];
+        $client = $resolved['client'];
+
+        $input = portal_read_input();
+        $newPhone = portal_normalize_phone((string)($input['phone'] ?? ''));
+        if ($newPhone === null) {
+            portal_error('Enter a valid Tanzanian phone number.', 400);
+        }
+
+        $issued = portal_otp_issue($db, $client['cds_account'], $newPhone, 'change_phone_new', $ip);
+        if (isset($issued['error'])) {
+            portal_error($issued['error'], 429, ['cooldown_sec' => $issued['cooldown_sec'] ?? null]);
+        }
+
+        $sent = portal_send_sms($newPhone, portal_otp_message($issued['code']));
+        if (empty($sent['success'])) {
+            portal_error('We could not deliver an SMS to that number. Check it and try again.', 502, [
+                'gateway' => $sent['error'] ?? 'unknown'
+            ]);
+        }
+
+        portal_log($db, $client['id'], $token['id'], 'change_phone', ['new' => portal_mask($newPhone)], null);
+
+        portal_json([
+            'phone_masked'  => portal_mask($newPhone),
+            'cooldown_sec'  => PORTAL_SMS_COOLDOWN_SEC
+        ], 200, 'Enter the code sent to your new number.');
+
+    // ---------------------------------------------------------------
+    // Bearer: confirm the new number OTP and rebind the verified phone.
+    // ---------------------------------------------------------------
+    case 'confirm_change_phone':
+        assertMethod($method, 'POST');
+        if (!$security->checkRateLimit($ip, 'portal_phone_confirm', 6, 60)) {
+            portal_error('Too many requests. Please try again later.', 429);
+        }
+
+        $resolved = portal_resolve_token($db, portal_get_bearer_token());
+        if ($resolved['status'] !== 'ok') {
+            portal_error('Invalid or expired token.', 401, ['reason' => $resolved['status']]);
+        }
+        $token = $resolved['token'];
+        $client = $resolved['client'];
+
+        $input = portal_read_input();
+        $newPhone = portal_normalize_phone((string)($input['phone'] ?? ''));
+        $code = trim((string)($input['code'] ?? ''));
+        if ($newPhone === null) {
+            portal_error('Enter a valid Tanzanian phone number.', 400);
+        }
+        if (!preg_match('/^[0-9]{6}$/', $code)) {
+            portal_error('Enter the 6-digit verification code.', 400);
+        }
+
+        $verified = portal_otp_verify($db, $client['cds_account'], $newPhone, $code);
+        if (empty($verified['ok'])) {
+            portal_error($verified['reason'] ?? 'Verification failed.', 401);
+        }
+
+        portal_set_phone($db, $client['id'], $newPhone);
+        portal_log($db, $client['id'], $token['id'], 'phone_verified', ['new' => portal_mask($newPhone)], null);
+        $security->auditLog($ip, 'PORTAL_PHONE_CHANGE', $client['cds_account'], true);
+
+        portal_json(['phone_masked' => portal_mask($newPhone)], 200, 'Your phone number was updated and verified.');
+
     default:
         portal_error('Invalid action.', 400, [
             'available_actions' => [
@@ -306,7 +584,12 @@ switch ($action) {
                 'get_profile',
                 'update_profile',
                 'revoke_token',
-                'revoke_link'
+                'revoke_link',
+                'lookup_cds',
+                'send_otp',
+                'verify_otp',
+                'change_phone',
+                'confirm_change_phone'
             ]
         ]);
 }

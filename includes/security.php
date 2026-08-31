@@ -273,24 +273,15 @@ class SecurityManager {
      * Send SMS via gateway
      */
     public function sendSMS($phone, $message) {
-        // Implement actual SMS gateway integration
-        // Example with Africa's Talking
-        /*
-        $username = defined('SMS_USERNAME') ? SMS_USERNAME : '';
-        $api_key = defined('SMS_API_KEY') ? SMS_API_KEY : '';
-        
-        if (empty($username) || empty($api_key)) {
-            return false;
+        // Delegate to the shared JSON SMS gateway (includes/sms.php).
+        // Returns true/false; logs the delivery, never the credentials.
+        @require_once __DIR__ . '/sms.php';
+        if (!function_exists('sms_send')) {
+            error_log("SMS to $phone: $message");
+            return true;
         }
-        
-        $gateway = new AfricasTalkingGateway($username, $api_key);
-        $results = $gateway->sendMessage($phone, $message);
-        return $results->status === 'success';
-        */
-        
-        // For development, log the SMS
-        error_log("SMS to $phone: $message");
-        return true;
+        $result = sms_send((string)$phone, (string)$message);
+        return ($result['success'] ?? false) === true;
     }
     
     /**
