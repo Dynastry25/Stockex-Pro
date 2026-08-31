@@ -743,11 +743,11 @@ class ContractNotePDF extends TCPDF {
             $liberty_mode_display = '';
             if (isset($trade['liberty_mode'])) {
                 if ($trade['liberty_mode'] == 'replace_all') {
-                    $liberty_mode_display = ' [Liberty - Full Rate]';
+                    $liberty_mode_display = ' [Rebate - Full Rate]';
                 } elseif ($trade['liberty_mode'] == 'excess_only') {
-                    $liberty_mode_display = ' [Liberty - Excess Only]';
+                    $liberty_mode_display = ' [Rebate - Excess Only]';
                 } elseif ($trade['liberty_mode'] == 'tier_override') {
-                    $liberty_mode_display = ' [Liberty - Tier Override]';
+                    $liberty_mode_display = ' [Rebate - Tier Override]';
                 }
             }
             $contract_title .= $liberty_mode_display;
