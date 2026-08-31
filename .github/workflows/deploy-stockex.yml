@@ -23,4 +23,4 @@ jobs:
         run: |
           ssh -i ~/.ssh/oci_stockex_key \
             "${{ secrets.OCI_USER }}@${{ secrets.OCI_HOST }}" \
-            'BRANCH=master /opt/vfs/scripts/deploy_stockex.sh'
+            'cd /var/www/stockex && git stash 2>/dev/null; BRANCH=master /opt/vfs/scripts/deploy_stockex.sh'
