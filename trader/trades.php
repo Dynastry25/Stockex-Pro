@@ -479,7 +479,7 @@ function calculateEquityFeesForContract($db, $consideration, $effective_rate = n
                 'amount' => $consideration,
                 'rate' => $effective_rate,
                 'fee' => $fees['brokerage'],
-                'label' => 'Full Consideration @ ' . number_format($effective_rate, 4) . '% (Liberty)'
+                'label' => 'Full Consideration @ ' . number_format($effective_rate, 4) . '% (Rebate)'
             ];
         }
     } else {
