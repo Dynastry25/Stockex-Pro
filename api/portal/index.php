@@ -25,9 +25,22 @@
 
 require_once __DIR__ . '/helpers.php';
 
-header('Access-Control-Allow-Origin: ' . CLIENT_PORTAL_URL);
+$allowedOrigin = (string)CLIENT_PORTAL_URL;
+if (!empty($_SERVER['HTTP_ORIGIN'])) {
+    $origin = rtrim(trim((string)$_SERVER['HTTP_ORIGIN']), '/');
+    $known = array_filter(array_map('trim', explode(',', env('PORTAL_ALLOWED_ORIGINS', ''))));
+    foreach ($known as $o) {
+        if (rtrim($o, '/') === $origin) {
+            $allowedOrigin = $origin;
+            break;
+        }
+    }
+}
+
+header('Access-Control-Allow-Origin: ' . $allowedOrigin);
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Authorization');
+header('Access-Control-Allow-Credentials: false');
 header('Content-Type: application/json; charset=UTF-8');
 
 // Handle browser preflight (same-origin pages do not trigger this).
@@ -55,7 +68,8 @@ try {
 
 $security = new SecurityManager();
 
-switch ($action) {
+try {
+    switch ($action) {
 
     // ---------------------------------------------------------------
     // Staff: get CSRF token (required for mint_link / revoke_link)
@@ -592,6 +606,19 @@ switch ($action) {
                 'confirm_change_phone'
             ]
         ]);
+    }
+} catch (Throwable $e) {
+    error_log('Client portal fatal [' . date('Y-m-d H:i:s') . '] ' . get_class($e) . ': ' . $e->getMessage()
+        . ' @ ' . $e->getFile() . ':' . $e->getLine());
+    http_response_code(500);
+    header('Content-Type: application/json');
+    echo json_encode([
+        'success'     => false,
+        'status_code' => 500,
+        'error'       => 'An unexpected error occurred. Please try again.',
+        'timestamp'   => date('Y-m-d H:i:s')
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit();
 }
 
 /**
