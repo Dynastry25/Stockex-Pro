@@ -356,6 +356,9 @@ try {
     
     $db->exec("ALTER TABLE numeric_trade_receipts ADD COLUMN IF NOT EXISTS commission_receipt TEXT AFTER payment_receipt");
     $db->exec("ALTER TABLE numeric_trade_receipts ADD COLUMN IF NOT EXISTS comment TEXT AFTER commission_receipt");
+    $db->exec("ALTER TABLE numeric_trade_receipts ADD COLUMN IF NOT EXISTS approval_comment TEXT AFTER comment");
+    $db->exec("ALTER TABLE numeric_trade_receipts ADD COLUMN IF NOT EXISTS resubmitted TINYINT DEFAULT 0 AFTER approval_comment");
+    $db->exec("ALTER TABLE numeric_trade_receipts ADD COLUMN IF NOT EXISTS resubmit_comment TEXT AFTER resubmitted");
     $db->exec("ALTER TABLE trades ADD COLUMN IF NOT EXISTS approval_status ENUM('pending','approved','rejected') DEFAULT 'pending' AFTER status");
     $db->exec("ALTER TABLE trades ADD COLUMN IF NOT EXISTS counterparty_cds_account VARCHAR(50) AFTER counterparty_name");
     $db->exec("ALTER TABLE trades ADD COLUMN IF NOT EXISTS trader VARCHAR(100) AFTER additional_reference");
@@ -675,9 +678,47 @@ if (isset($_GET['delete_receipt'])) {
     exit;
 }
 
+// ============================================
+// HANDLE EDIT COMMENT (AJAX)
+// ============================================
+if (isset($_POST['edit_comment']) && isset($_SERVER['HTTP_X_REQUESTED_WITH']) && $_SERVER['HTTP_X_REQUESTED_WITH'] === 'XMLHttpRequest') {
+    header('Content-Type: application/json');
+    $trade_id = (int)$_POST['trade_id'];
+    $new_comment = trim($_POST['comment'] ?? '');
+
+    $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+    $stmt->execute([$trade_id]);
+    $record = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($record) {
+        $stmt = $db->prepare("UPDATE numeric_trade_receipts SET comment = ?, updated_at = NOW() WHERE trade_id = ? AND trade_type = 'trade'");
+        $stmt->execute([$new_comment, $trade_id]);
+    } else {
+        if (!empty($new_comment)) {
+            $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, comment, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, NOW(), NOW())");
+            $stmt->execute([$trade_id, $new_comment, $user_name]);
+        }
+    }
+
+    echo json_encode(['success' => true, 'comment' => $new_comment]);
+    exit;
+}
+
 if (isset($_POST['approve_trade'])) {
     $trade_id = (int)$_POST['trade_id'];
     $action = $_POST['approve_action'] ?? 'approve';
+    $approval_comment = trim($_POST['approval_comment'] ?? '');
+    
+    // For reject action, a comment is mandatory
+    if ($action === 'reject' && empty($approval_comment)) {
+        $_SESSION['alert'] = ['A comment is required when rejecting.', 'danger'];
+        header('Location: dealing_sheet.php?' . http_build_query(array_filter([
+            'filter' => $_GET['filter'] ?? 'pending',
+            'asset_class' => $_GET['asset_class'] ?? 'all',
+            'search' => $_GET['search'] ?? ''
+        ])));
+        exit;
+    }
     
     // Get the trade's group info (client_name, security_id, trade_date)
     $stmt = $db->prepare("SELECT client_name, security_id, trade_date FROM trades WHERE id = ?");
@@ -693,19 +734,20 @@ if (isset($_POST['approve_trade'])) {
         foreach ($group_trade_ids as $gid) {
             if ($action === 'disapprove') {
                 // Reset back to pending
-                $db->prepare("UPDATE numeric_trade_receipts SET is_approved = 0, approved_by = ?, approved_at = NOW() WHERE trade_id = ? AND trade_type = 'trade'")->execute([$user_name, $gid]);
+                $db->prepare("UPDATE numeric_trade_receipts SET is_approved = 0, approval_comment = ?, approved_by = ?, approved_at = NOW() WHERE trade_id = ? AND trade_type = 'trade'")->execute([$approval_comment, $user_name, $gid]);
                 $db->prepare("UPDATE trades SET approval_status = 'pending' WHERE id = ?")->execute([$gid]);
             } else {
                 $is_approved = ($action === 'approve') ? 1 : 2;
+                $resubmitted = ($action === 'approve' || $action === 'reject') ? 0 : 1;
                 $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
                 $stmt->execute([$gid]);
                 
                 if ($stmt->fetch()) {
-                    $stmt = $db->prepare("UPDATE numeric_trade_receipts SET is_approved = ?, approved_by = ?, approved_at = NOW() WHERE trade_id = ? AND trade_type = 'trade'");
-                    $stmt->execute([$is_approved, $user_name, $gid]);
+                    $stmt = $db->prepare("UPDATE numeric_trade_receipts SET is_approved = ?, approval_comment = ?, resubmitted = ?, approved_by = ?, approved_at = NOW() WHERE trade_id = ? AND trade_type = 'trade'");
+                    $stmt->execute([$is_approved, $approval_comment, $resubmitted, $user_name, $gid]);
                 } else {
-                    $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, is_approved, approved_by, approved_at) VALUES (?, 'trade', ?, ?, NOW())");
-                    $stmt->execute([$gid, $is_approved, $user_name]);
+                    $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, is_approved, approval_comment, resubmitted, approved_by, approved_at) VALUES (?, 'trade', ?, ?, ?, ?, NOW())");
+                    $stmt->execute([$gid, $is_approved, $approval_comment, $resubmitted, $user_name]);
                 }
                 
                 $status = ($action === 'approve') ? 'approved' : 'rejected';
@@ -714,7 +756,49 @@ if (isset($_POST['approve_trade'])) {
         }
         
         $msg = ($action === 'disapprove') ? 'Disapproved' : ucfirst($action) . 'd';
-        $_SESSION['alert'] = [$msg . ' ' . count($group_trade_ids) . ' trade(s) successfully!', 'success'];
+        $extra = !empty($approval_comment) ? ' with comment' : '';
+        $_SESSION['alert'] = [$msg . ' ' . count($group_trade_ids) . ' trade(s) successfully' . $extra . '!', 'success'];
+    } else {
+        $_SESSION['alert'] = ['Trade not found.', 'danger'];
+    }
+    
+    header('Location: dealing_sheet.php?' . http_build_query(array_filter([
+        'filter' => $_GET['filter'] ?? 'pending',
+        'asset_class' => $_GET['asset_class'] ?? 'all',
+        'search' => $_GET['search'] ?? ''
+    ])));
+    exit;
+}
+
+// ============================================
+// HANDLE RESUBMIT FOR APPROVAL (operation)
+// ============================================
+if (isset($_POST['resubmit_trade'])) {
+    $trade_id = (int)$_POST['trade_id'];
+    $resubmit_comment = trim($_POST['resubmit_comment'] ?? '');
+    
+    // Get the trade's group info (client_name, security_id, trade_date)
+    $stmt = $db->prepare("SELECT client_name, security_id, trade_date FROM trades WHERE id = ?");
+    $stmt->execute([$trade_id]);
+    $trade_info = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($trade_info) {
+        $stmt = $db->prepare("SELECT id FROM trades WHERE client_name = ? AND security_id = ? AND DATE(trade_date) = DATE(?)");
+        $stmt->execute([$trade_info['client_name'], $trade_info['security_id'], $trade_info['trade_date']]);
+        $group_trade_ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        
+        foreach ($group_trade_ids as $gid) {
+            $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+            $stmt->execute([$gid]);
+            if ($stmt->fetch()) {
+                $db->prepare("UPDATE numeric_trade_receipts SET is_approved = 0, resubmitted = 1, resubmit_comment = ?, approval_comment = NULL WHERE trade_id = ? AND trade_type = 'trade'")->execute([$resubmit_comment, $gid]);
+            } else {
+                $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, is_approved, resubmitted, resubmit_comment, uploaded_by, created_at, updated_at) VALUES (?, 'trade', 0, 1, ?, ?, NOW(), NOW())")->execute([$gid, $resubmit_comment, $user_name]);
+            }
+            $db->prepare("UPDATE trades SET approval_status = 'pending' WHERE id = ?")->execute([$gid]);
+        }
+        
+        $_SESSION['alert'] = ['Trade(s) submitted for approval. Status is now Pending.', 'success'];
     } else {
         $_SESSION['alert'] = ['Trade not found.', 'danger'];
     }
@@ -761,6 +845,9 @@ $sql = "
         tr.payment_receipt,
         tr.commission_receipt,
         tr.comment as receipt_comment,
+        tr.approval_comment,
+        tr.resubmitted,
+        tr.resubmit_comment,
         tr.is_approved,
         cl.fee_type as client_fee_type,
         cl.default_brokerage_fee,
@@ -833,6 +920,9 @@ foreach ($trades as $trade) {
             'payment_receipt' => $trade['payment_receipt'] ?? '',
             'commission_receipt' => $trade['commission_receipt'] ?? '',
             'receipt_comment' => $trade['receipt_comment'] ?? '',
+            'approval_comment' => $trade['approval_comment'] ?? '',
+            'resubmitted' => isset($trade['resubmitted']) ? (int)$trade['resubmitted'] : 0,
+            'resubmit_comment' => $trade['resubmit_comment'] ?? '',
             'is_approved' => $trade['is_approved'] ?? 0,
             'client_fee_type' => $trade['client_fee_type'] ?? 'normal',
             'client_default_brokerage_fee' => $trade['default_brokerage_fee'] ?? null,
@@ -873,6 +963,15 @@ foreach ($trades as $trade) {
     }
     if (($trade['is_approved'] ?? 0) > ($grouped_trades[$group_key]['is_approved'] ?? 0)) {
         $grouped_trades[$group_key]['is_approved'] = $trade['is_approved'];
+    }
+    if (!empty($trade['approval_comment'])) {
+        $grouped_trades[$group_key]['approval_comment'] = $trade['approval_comment'];
+    }
+    if (isset($grouped_trades[$group_key]['resubmitted'])) {
+        $grouped_trades[$group_key]['resubmitted'] = max($grouped_trades[$group_key]['resubmitted'], (int)($trade['resubmitted'] ?? 0));
+    }
+    if (!empty($trade['resubmit_comment'])) {
+        $grouped_trades[$group_key]['resubmit_comment'] = $trade['resubmit_comment'];
     }
     // Keep the latest counterparty info (if different)
     if (!empty($trade['counterparty_name'])) {
@@ -950,6 +1049,39 @@ try {
     $stats = $stmt->fetch(PDO::FETCH_ASSOC) ?: $stats;
 } catch (Exception $e) {
     error_log("Stats error: " . $e->getMessage());
+}
+
+// ============================================
+// REJECTED TRADE NOTIFICATION (operation/trader)
+// ============================================
+$unseen_rejected = 0;
+$session_key = 'last_seen_rejected_finance';
+if ($user_role !== 'finance_officer') {
+    // When viewing rejected filter, mark as seen
+    if ($filter === 'rejected') {
+        $_SESSION[$session_key] = date('Y-m-d H:i:s');
+    }
+    $last_seen = $_SESSION[$session_key] ?? '1970-01-01 00:00:00';
+    try {
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as cnt FROM (
+                SELECT CONCAT(t.client_name, '|', t.security_id, '|', DATE(t.trade_date)) as grp
+                FROM trades t
+                LEFT JOIN numeric_trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
+                WHERE t.additional_reference REGEXP '^[0-9]+$'
+                AND t.additional_reference IS NOT NULL
+                AND t.additional_reference != ''
+                AND ((t.asset_class = 'bond') OR (t.asset_class IN ('equity', 'Exchange Traded Funds') AND LOWER(t.trade_side) = 'buy'))
+                AND tr.is_approved = 2
+                AND COALESCE(tr.updated_at, tr.approved_at) > ?
+                GROUP BY grp
+            ) sub
+        ");
+        $stmt->execute([$last_seen]);
+        $unseen_rejected = (int)($stmt->fetchColumn() ?? 0);
+    } catch (Exception $e) {
+        error_log("Unseen rejected error: " . $e->getMessage());
+    }
 }
 
 // Helper function for safe htmlspecialchars
@@ -1192,6 +1324,52 @@ include '../includes/header.php';
     font-size: 11px;
     color: #666;
 }
+.stat-box.tab {
+    display: block;
+    text-decoration: none;
+    cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    position: relative;
+}
+.stat-box.tab:hover {
+    border-color: #3b82f6;
+    box-shadow: 0 1px 4px rgba(59,130,246,0.25);
+}
+.stat-box.tab.active {
+    border-color: #3b82f6;
+    background: #eff6ff;
+    box-shadow: inset 0 -2px 0 #3b82f6;
+}
+.stat-box.tab .tab-icon {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    font-size: 13px;
+    opacity: 0.6;
+}
+.stat-badge {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    background: #dc3545;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 600;
+    min-width: 20px;
+    height: 20px;
+    line-height: 20px;
+    padding: 0 5px;
+    border-radius: 10px;
+    text-align: center;
+    border: 2px solid #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    animation: pulse-badge 1.5s infinite;
+}
+@keyframes pulse-badge {
+    0% { box-shadow: 0 0 0 0 rgba(220,53,69,0.5); }
+    70% { box-shadow: 0 0 0 6px rgba(220,53,69,0); }
+    100% { box-shadow: 0 0 0 0 rgba(220,53,69,0); }
+}
 .comment-display {
     background: #f8f9fa;
     border-left: 2px solid #6c757d;
@@ -1297,30 +1475,44 @@ include '../includes/header.php';
     <?php endif; ?>
 
     <!-- Stats -->
+    <?php 
+        $qs_total = http_build_query(['filter' => 'all', 'asset_class' => $asset_class_filter, 'search' => $search]);
+        $qs_pending = http_build_query(['filter' => 'pending', 'asset_class' => $asset_class_filter, 'search' => $search]);
+        $qs_approved = http_build_query(['filter' => 'approved', 'asset_class' => $asset_class_filter, 'search' => $search]);
+        $qs_rejected = http_build_query(['filter' => 'rejected', 'asset_class' => $asset_class_filter, 'search' => $search]);
+        $notifyRejected = ($user_role !== 'finance_officer' && $unseen_rejected > 0);
+    ?>
     <div class="row g-2 mb-3">
         <div class="col-3 col-md-2">
-            <div class="stat-box">
+            <a class="stat-box tab <?php echo $filter === 'all' ? 'active' : ''; ?>" href="dealing_sheet.php?<?php echo $qs_total; ?>">
+                <span class="tab-icon"><i class="bi bi-layers"></i></span>
                 <div class="stat-number"><?php echo (int)($stats['total'] ?? 0); ?></div>
                 <div class="stat-label">Total</div>
-            </div>
+            </a>
         </div>
         <div class="col-3 col-md-2">
-            <div class="stat-box">
+            <a class="stat-box tab <?php echo $filter === 'pending' ? 'active' : ''; ?>" href="dealing_sheet.php?<?php echo $qs_pending; ?>">
+                <span class="tab-icon"><i class="bi bi-hourglass-split"></i></span>
                 <div class="stat-number" style="color:#856404;"><?php echo (int)($stats['pending'] ?? 0); ?></div>
                 <div class="stat-label">Pending</div>
-            </div>
+            </a>
         </div>
         <div class="col-3 col-md-2">
-            <div class="stat-box">
+            <a class="stat-box tab <?php echo $filter === 'approved' ? 'active' : ''; ?>" href="dealing_sheet.php?<?php echo $qs_approved; ?>">
+                <span class="tab-icon"><i class="bi bi-check-circle"></i></span>
                 <div class="stat-number" style="color:#155724;"><?php echo (int)($stats['approved'] ?? 0); ?></div>
                 <div class="stat-label">Approved</div>
-            </div>
+            </a>
         </div>
         <div class="col-3 col-md-2">
-            <div class="stat-box">
+            <a class="stat-box tab <?php echo $filter === 'rejected' ? 'active' : ''; ?>" href="dealing_sheet.php?<?php echo $qs_rejected; ?>" title="Rejected by Finance - click to view">
+                <span class="tab-icon"><i class="bi bi-x-octagon"></i></span>
                 <div class="stat-number" style="color:#721c24;"><?php echo (int)($stats['rejected'] ?? 0); ?></div>
                 <div class="stat-label">Rejected</div>
-            </div>
+                <?php if ($notifyRejected): ?>
+                    <span class="stat-badge"><?php echo $unseen_rejected; ?></span>
+                <?php endif; ?>
+            </a>
         </div>
     </div>
 
@@ -1596,13 +1788,52 @@ include '../includes/header.php';
                                         
                                         <!-- Comment -->
                                         <?php if (!empty($trade['receipt_comment'])): ?>
-                                            <div class="comment-display">
-                                                <div class="comment-text"><?php echo nl2br(safeHtml($trade['receipt_comment'])); ?></div>
+                                            <div class="comment-display" id="comment-display-<?php echo $trade['id']; ?>">
+                                                <div class="d-flex align-items-start gap-1">
+                                                    <div class="comment-text flex-grow-1"><?php echo nl2br(safeHtml($trade['receipt_comment'])); ?></div>
+                                                    <?php if ($isApproved !== 1): ?>
+                                                        <button type="button" class="btn btn-sm btn-outline-primary py-0 px-1" onclick="editComment(<?php echo $trade['id']; ?>, this)" title="Edit Comment">
+                                                            <i class="bi bi-pencil-square"></i>
+                                                        </button>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </div>
+                                        <?php elseif ($isApproved !== 1): ?>
+                                            <div class="comment-display" id="comment-display-<?php echo $trade['id']; ?>">
+                                                <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1" onclick="editComment(<?php echo $trade['id']; ?>, this)" title="Add Comment">
+                                                    <i class="bi bi-chat-dots"></i>
+                                                </button>
                                             </div>
                                         <?php endif; ?>
                                     </td>
                                     <td>
                                         <span class="badge-status <?php echo $statusClass; ?>"><?php echo $statusText; ?></span>
+                                        <?php if ($isApproved !== 1 && !empty($trade['resubmitted'])): ?>
+                                            <div class="mt-1">
+                                                <small class="text-primary fw-semibold">Resubmitted for approval</small>
+                                            </div>
+                                            <?php if (!empty($trade['resubmit_comment'])): ?>
+                                                <div class="approval-comment mt-1" title="Operation resubmit comment">
+                                                    <small class="text-primary fw-semibold">Correction note:</small>
+                                                    <div class="text-muted small"><?php echo nl2br(safeHtml($trade['resubmit_comment'])); ?></div>
+                                                </div>
+                                            <?php endif; ?>
+                                        <?php endif; ?>
+                                        <?php if ($isApproved === 2 && !empty($trade['approval_comment'])): ?>
+                                            <div class="approval-comment mt-1" title="Finance Comment">
+                                                <small class="text-danger fw-semibold">Reject reason:</small>
+                                                <div class="text-muted small"><?php echo nl2br(safeHtml($trade['approval_comment'])); ?></div>
+                                            </div>
+                                        <?php elseif ($isApproved === 1 && !empty($trade['approval_comment'])): ?>
+                                            <div class="approval-comment mt-1" title="Finance Comment">
+                                                <small class="text-success fw-semibold">Approval note:</small>
+                                                <div class="text-muted small"><?php echo nl2br(safeHtml($trade['approval_comment'])); ?></div>
+                                            </div>
+                                        <?php elseif ($isApproved !== 1 && !empty($trade['resubmitted']) && !empty($trade['approval_comment'])): ?>
+                                            <div class="approval-comment mt-1" title="Finance Comment">
+                                                <div class="text-muted small"><?php echo nl2br(safeHtml($trade['approval_comment'])); ?></div>
+                                            </div>
+                                        <?php endif; ?>
                                     </td>
                                     <td class="text-end">
                                         <div class="btn-group btn-group-sm">
@@ -1633,6 +1864,9 @@ include '../includes/header.php';
                                                 data-status="<?php echo $statusText; ?>"
                                                 data-receipts="<?php echo htmlspecialchars(json_encode($receipt_data)); ?>"
                                                 data-comment="<?php echo htmlspecialchars($trade['receipt_comment'] ?? ''); ?>"
+                                                data-approval-comment="<?php echo htmlspecialchars($trade['approval_comment'] ?? ''); ?>"
+                                                data-resubmit-comment="<?php echo htmlspecialchars($trade['resubmit_comment'] ?? ''); ?>"
+                                                data-resubmitted="<?php echo (int)($trade['resubmitted'] ?? 0); ?>"
                                                 data-trader="<?php echo htmlspecialchars($trade['trader'] ?? ''); ?>"
                                                 data-counterparty="<?php echo htmlspecialchars($counterpartyDisplayText); ?>"
                                                 title="View Trade Details">
@@ -1649,32 +1883,22 @@ include '../includes/header.php';
                                                 <?php endif; ?>
                                             <?php endif; ?>
                                             <?php if ($user_role === 'finance_officer' && $isApproved !== 1): ?>
-                                                <form method="POST" style="display:inline" onsubmit="return confirm('Approve?')">
-                                                    <input type="hidden" name="trade_id" value="<?php echo $trade['id']; ?>">
-                                                    <input type="hidden" name="approve_trade" value="1">
-                                                    <input type="hidden" name="approve_action" value="approve">
-                                                    <button type="submit" class="btn btn-outline-success" title="Approve">
-                                                        <i class="bi bi-check-lg"></i>
-                                                    </button>
-                                                </form>
-                                                <form method="POST" style="display:inline" onsubmit="return confirm('Reject?')">
-                                                    <input type="hidden" name="trade_id" value="<?php echo $trade['id']; ?>">
-                                                    <input type="hidden" name="approve_trade" value="1">
-                                                    <input type="hidden" name="approve_action" value="reject">
-                                                    <button type="submit" class="btn btn-outline-danger" title="Reject">
-                                                        <i class="bi bi-x-lg"></i>
-                                                    </button>
-                                                </form>
+                                                <button type="button" class="btn btn-outline-success" title="Approve" onclick="openApproval('<?php echo $trade['id']; ?>', 'approve')">
+                                                    <i class="bi bi-check-lg"></i>
+                                                </button>
+                                                <button type="button" class="btn btn-outline-danger" title="Reject" onclick="openApproval('<?php echo $trade['id']; ?>', 'reject')">
+                                                    <i class="bi bi-x-lg"></i>
+                                                </button>
                                             <?php endif; ?>
                                             <?php if ($user_role === 'finance_officer' && $isApproved === 1): ?>
-                                                <form method="POST" style="display:inline" onsubmit="return confirm('Disapprove and revert to pending?')">
-                                                    <input type="hidden" name="trade_id" value="<?php echo $trade['id']; ?>">
-                                                    <input type="hidden" name="approve_trade" value="1">
-                                                    <input type="hidden" name="approve_action" value="disapprove">
-                                                    <button type="submit" class="btn btn-outline-warning" title="Disapprove">
-                                                        <i class="bi bi-arrow-counterclockwise"></i>
-                                                    </button>
-                                                </form>
+                                                <button type="button" class="btn btn-outline-warning" title="Disapprove (revert to Pending)" onclick="openApproval('<?php echo $trade['id']; ?>', 'disapprove')">
+                                                    <i class="bi bi-arrow-counterclockwise"></i>
+                                                </button>
+                                            <?php endif; ?>
+                                            <?php if ($user_role !== 'finance_officer' && $isApproved === 2): ?>
+                                                <button type="button" class="btn btn-outline-primary" onclick="openResubmit(<?php echo $trade['id']; ?>)" title="Resubmit for Approval">
+                                                    <i class="bi bi-send"></i>
+                                                </button>
                                             <?php endif; ?>
                                         </div>
                                     </td>
@@ -1750,9 +1974,28 @@ include '../includes/header.php';
                         <label class="text-muted small d-block">Attached Files</label>
                         <div id="vt_receipts" class="d-flex flex-wrap gap-2"></div>
                     </div>
+                    <div class="col-12" id="vt_resubmit_comment_row" style="display:none;">
+                        <label class="text-muted small d-block">Resubmit Note (from Operation)</label>
+                        <div id="vt_resubmit_comment" class="bg-light p-2 rounded"></div>
+                    </div>
+                    <div class="col-12" id="vt_approval_comment_row" style="display:none;">
+                        <label class="text-muted small d-block">Finance Comment</label>
+                        <div id="vt_approval_comment" class="bg-light p-2 rounded"></div>
+                    </div>
                     <div class="col-12" id="vt_comment_row" style="display:none;">
-                        <label class="text-muted small d-block">Comment</label>
+                        <label class="text-muted small d-block">Comment
+                            <button type="button" class="btn btn-sm btn-outline-primary py-0 px-1 ms-2" id="vt_comment_edit_btn" onclick="editModalComment()" title="Edit Comment">
+                                <i class="bi bi-pencil-square"></i>
+                            </button>
+                        </label>
                         <div id="vt_comment" class="bg-light p-2 rounded"></div>
+                        <div id="vt_comment_edit" style="display:none;">
+                            <textarea class="form-control form-control-sm" rows="3" id="vt_comment_input"></textarea>
+                            <div class="d-flex gap-1 mt-1">
+                                <button type="button" class="btn btn-sm btn-success" onclick="saveModalComment()"><i class="bi bi-check-lg"></i> Save</button>
+                                <button type="button" class="btn btn-sm btn-secondary" onclick="cancelModalComment()"><i class="bi bi-x-lg"></i> Cancel</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1820,7 +2063,146 @@ include '../includes/header.php';
     </div>
 </div>
 
+<!-- Approval Confirmation Modal -->
+<div class="modal fade" id="approvalModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header" id="approval_modal_header">
+                <h5 class="modal-title" id="approval_modal_title"><i class="bi bi-check-lg"></i> Confirm</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST">
+                <div class="modal-body">
+                    <input type="hidden" name="trade_id" id="approval_trade_id" value="">
+                    <input type="hidden" name="approve_trade" value="1">
+                    <input type="hidden" name="approve_action" id="approval_action" value="approve">
+                    <input type="hidden" name="filter" value="<?php echo safeHtml($filter); ?>">
+                    <input type="hidden" name="asset_class" value="<?php echo safeHtml($asset_class_filter); ?>">
+                    <input type="hidden" name="search" value="<?php echo safeHtml($search); ?>">
+                    
+                    <div class="alert alert-warning d-flex align-items-center" id="approval_confirm_text">
+                        <i class="bi bi-question-circle me-2"></i>
+                        <span id="approval_question">Are you sure you want to approve this trade?</span>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Comment <span class="text-muted" id="approval_comment_optional">(Optional)</span><span class="text-danger" id="approval_comment_required" style="display:none;">(Required)</span></label>
+                        <textarea class="form-control" name="approval_comment" id="approval_comment" rows="3" placeholder="Add a comment..."></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn" id="approval_submit_btn">Confirm</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Resubmit for Approval Modal -->
+<div class="modal fade" id="resubmitModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title"><i class="bi bi-send me-2"></i>Resubmit for Approval</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST">
+                <div class="modal-body">
+                    <input type="hidden" name="trade_id" id="resubmit_trade_id" value="">
+                    <input type="hidden" name="resubmit_trade" value="1">
+                    <input type="hidden" name="filter" value="<?php echo safeHtml($filter); ?>">
+                    <input type="hidden" name="asset_class" value="<?php echo safeHtml($asset_class_filter); ?>">
+                    <input type="hidden" name="search" value="<?php echo safeHtml($search); ?>">
+                    
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle me-1"></i>
+                        This will send the trade back to Finance for approval. Status will become <strong>Pending</strong>.
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Comment <span class="text-muted">(Optional)</span></label>
+                        <textarea class="form-control" name="resubmit_comment" id="resubmit_comment" rows="3" placeholder="Explain the correction made (visible to Finance)..."></textarea>
+                        <div class="form-text">This comment will be visible to the Finance officer when they review.</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary"><i class="bi bi-send me-1"></i>Resubmit</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <script>
+// Edit comment inline in table
+function editComment(tradeId, btn) {
+    var container = document.getElementById('comment-display-' + tradeId);
+    if (!container) return;
+
+    var textEl = container.querySelector('.comment-text');
+    var currentText = textEl ? textEl.textContent.trim() : '';
+    container.setAttribute('data-orig-comment', currentText);
+
+    container.innerHTML = '<div class="d-flex flex-column gap-1">' +
+        '<textarea class="form-control form-control-sm" rows="2" id="comment-input-' + tradeId + '">' + currentText.replace(/</g, '&lt;') + '</textarea>' +
+        '<div class="d-flex gap-1">' +
+            '<button type="button" class="btn btn-sm btn-success py-0 px-2" onclick="saveComment(' + tradeId + ')"><i class="bi bi-check-lg"></i></button>' +
+            '<button type="button" class="btn btn-sm btn-secondary py-0 px-2" onclick="cancelEdit(' + tradeId + ')"><i class="bi bi-x-lg"></i></button>' +
+        '</div>' +
+    '</div>';
+
+    document.getElementById('comment-input-' + tradeId).focus();
+}
+
+function saveComment(tradeId) {
+    var input = document.getElementById('comment-input-' + tradeId);
+    var newComment = input.value.trim();
+
+    var formData = new FormData();
+    formData.append('edit_comment', '1');
+    formData.append('trade_id', tradeId);
+    formData.append('comment', newComment);
+
+    fetch('dealing_sheet.php', {
+        method: 'POST',
+        body: formData,
+        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        var container = document.getElementById('comment-display-' + tradeId);
+        if (data.success) {
+            if (newComment) {
+                container.innerHTML = '<div class="d-flex align-items-start gap-1">' +
+                    '<div class="comment-text flex-grow-1">' + newComment.replace(/</g, '&lt;').replace(/\n/g, '<br>') + '</div>' +
+                    '<button type="button" class="btn btn-sm btn-outline-primary py-0 px-1" onclick="editComment(' + tradeId + ', this)" title="Edit Comment"><i class="bi bi-pencil-square"></i></button>' +
+                '</div>';
+            } else {
+                container.innerHTML = '<button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1" onclick="editComment(' + tradeId + ', this)" title="Add Comment"><i class="bi bi-chat-dots"></i></button>';
+            }
+        }
+    })
+    .catch(function() {
+        alert('Failed to save comment.');
+    });
+}
+
+function cancelEdit(tradeId) {
+    var container = document.getElementById('comment-display-' + tradeId);
+    if (!container) return;
+    var originalText = container.getAttribute('data-orig-comment') || '';
+    if (originalText) {
+        container.innerHTML = '<div class="d-flex align-items-start gap-1">' +
+            '<div class="comment-text flex-grow-1">' + originalText.replace(/</g, '&lt;').replace(/\n/g, '<br>') + '</div>' +
+            '<button type="button" class="btn btn-sm btn-outline-primary py-0 px-1" onclick="editComment(' + tradeId + ', this)" title="Edit Comment"><i class="bi bi-pencil-square"></i></button>' +
+        '</div>';
+    } else {
+        container.innerHTML = '<button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1" onclick="editComment(' + tradeId + ', this)" title="Add Comment"><i class="bi bi-chat-dots"></i></button>';
+    }
+}
+
 // View receipt
 function viewReceipt(url) {
     const content = document.getElementById('viewerContent');
@@ -1842,8 +2224,10 @@ function viewReceipt(url) {
 }
 
 // View trade details
+var currentModalTradeId = null;
 function viewTrade(btn) {
     const d = btn.dataset;
+    currentModalTradeId = d.id;
     document.getElementById('vt_client').textContent = d.client;
     document.getElementById('vt_security').textContent = d.security;
     
@@ -1906,14 +2290,107 @@ function viewTrade(btn) {
     // Comment
     const commentEl = document.getElementById('vt_comment');
     const commentRow = document.getElementById('vt_comment_row');
+    const commentEditBtn = document.getElementById('vt_comment_edit_btn');
+    const commentEditWrap = document.getElementById('vt_comment_edit');
     if (d.comment && d.comment.trim()) {
         commentEl.textContent = d.comment;
+        commentEl.style.display = '';
+        commentEditWrap.style.display = 'none';
+        commentEditBtn.style.display = '';
         commentRow.style.display = '';
     } else {
-        commentRow.style.display = 'none';
+        commentEl.style.display = '';
+        commentEditWrap.style.display = 'none';
+        commentEditBtn.style.display = '';
+        commentRow.style.display = '';
+    }
+    // Hide edit button if approved
+    if (d.status === 'Approved') {
+        commentEditBtn.style.display = 'none';
+        if (!(d.comment && d.comment.trim())) {
+            commentRow.style.display = 'none';
+        }
+    }
+    
+    // Approval / finance comment
+    const apprCommentEl = document.getElementById('vt_approval_comment');
+    const apprCommentRow = document.getElementById('vt_approval_comment_row');
+    if (d.approvalComment && d.approvalComment.trim()) {
+        apprCommentEl.textContent = d.approvalComment;
+        apprCommentRow.style.display = '';
+    } else {
+        apprCommentRow.style.display = 'none';
+    }
+    
+    // Resubmit comment
+    const resubCommentEl = document.getElementById('vt_resubmit_comment');
+    const resubCommentRow = document.getElementById('vt_resubmit_comment_row');
+    if (d.resubmitComment && d.resubmitComment.trim()) {
+        resubCommentEl.textContent = d.resubmitComment;
+        resubCommentRow.style.display = '';
+    } else {
+        resubCommentRow.style.display = 'none';
     }
     
     new bootstrap.Modal(document.getElementById('viewTradeModal')).show();
+}
+
+// Edit comment in view trade modal
+function editModalComment() {
+    var commentEl = document.getElementById('vt_comment');
+    var input = document.getElementById('vt_comment_input');
+    var wrap = document.getElementById('vt_comment_edit');
+    var btn = document.getElementById('vt_comment_edit_btn');
+    input.value = commentEl.textContent;
+    commentEl.style.display = 'none';
+    btn.style.display = 'none';
+    wrap.style.display = '';
+    input.focus();
+}
+
+function saveModalComment() {
+    var tradeId = currentModalTradeId;
+    var newComment = document.getElementById('vt_comment_input').value.trim();
+
+    var formData = new FormData();
+    formData.append('edit_comment', '1');
+    formData.append('trade_id', tradeId);
+    formData.append('comment', newComment);
+
+    fetch('dealing_sheet.php', {
+        method: 'POST',
+        body: formData,
+        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.success) {
+            var commentEl = document.getElementById('vt_comment');
+            var wrap = document.getElementById('vt_comment_edit');
+            var btn = document.getElementById('vt_comment_edit_btn');
+            commentEl.textContent = newComment;
+            commentEl.style.display = '';
+            wrap.style.display = 'none';
+            btn.style.display = '';
+            // Update table display if present
+            var tableEl = document.getElementById('comment-display-' + tradeId);
+            if (tableEl) {
+                var text = tableEl.querySelector('.comment-text');
+                if (text) {
+                    text.innerHTML = newComment.replace(/</g, '&lt;').replace(/\n/g, '<br>');
+                }
+            }
+        }
+    })
+    .catch(function() {
+        alert('Failed to save comment.');
+    });
+}
+
+function cancelModalComment() {
+    document.getElementById('vt_comment').style.display = '';
+    document.getElementById('vt_comment_edit').style.display = 'none';
+    document.getElementById('vt_comment_edit_btn').style.display = '';
 }
 
 // Open upload modal
@@ -1933,6 +2410,65 @@ function openUpload(tradeId, type) {
 
     // Reuse a single persistent instance (Bootstrap handles hide/show internally)
     var modalEl = document.getElementById('uploadModal');
+    if (modalEl) bootstrap.Modal.getOrCreateInstance(modalEl).show();
+}
+
+// Open approval confirmation modal
+function openApproval(tradeId, action) {
+    var el = function(id) { return document.getElementById(id); };
+
+    var tradeIdEl = el('approval_trade_id');
+    var actionEl = el('approval_action');
+    var commentEl = el('approval_comment');
+    if (tradeIdEl) tradeIdEl.value = tradeId;
+    if (actionEl) actionEl.value = action;
+    if (commentEl) commentEl.value = '';
+
+    var title = el('approval_modal_title');
+    var header = el('approval_modal_header');
+    var question = el('approval_question');
+    var submitBtn = el('approval_submit_btn');
+    var optLbl = el('approval_comment_optional');
+    var reqLbl = el('approval_comment_required');
+    var commentField = el('approval_comment');
+
+    if (action === 'reject') {
+        if (title) title.innerHTML = '<i class="bi bi-x-lg"></i> Reject Trade';
+        if (header) { header.classList.remove('bg-success', 'bg-warning'); header.classList.add('bg-danger', 'text-white'); }
+        if (question) question.textContent = 'Are you sure you want to reject this trade?';
+        if (submitBtn) { submitBtn.className = 'btn btn-danger'; submitBtn.textContent = 'Reject'; }
+        if (optLbl) optLbl.style.display = 'none';
+        if (reqLbl) reqLbl.style.display = '';
+        if (commentField) commentField.required = true;
+    } else if (action === 'disapprove') {
+        if (title) title.innerHTML = '<i class="bi bi-arrow-counterclockwise"></i> Disapprove Trade';
+        if (header) { header.classList.remove('bg-success', 'bg-danger'); header.classList.add('bg-warning', 'text-white'); }
+        if (question) question.textContent = 'Are you sure you want to disapprove this trade and revert it to Pending?';
+        if (submitBtn) { submitBtn.className = 'btn btn-warning'; submitBtn.textContent = 'Disapprove'; }
+        if (optLbl) { optLbl.style.display = ''; optLbl.textContent = '(Optional)'; }
+        if (reqLbl) reqLbl.style.display = 'none';
+        if (commentField) commentField.required = false;
+    } else {
+        if (title) title.innerHTML = '<i class="bi bi-check-lg"></i> Approve Trade';
+        if (header) { header.classList.remove('bg-danger', 'bg-warning'); header.classList.add('bg-success', 'text-white'); }
+        if (question) question.textContent = 'Are you sure you want to approve this trade?';
+        if (submitBtn) { submitBtn.className = 'btn btn-success'; submitBtn.textContent = 'Approve'; }
+        if (optLbl) { optLbl.style.display = ''; optLbl.textContent = '(Optional)'; }
+        if (reqLbl) reqLbl.style.display = 'none';
+        if (commentField) commentField.required = false;
+    }
+
+    var modalEl = el('approvalModal');
+    if (modalEl) bootstrap.Modal.getOrCreateInstance(modalEl).show();
+}
+
+// Open resubmit modal
+function openResubmit(tradeId) {
+    var tradeIdEl = document.getElementById('resubmit_trade_id');
+    var commentEl = document.getElementById('resubmit_comment');
+    if (tradeIdEl) tradeIdEl.value = tradeId;
+    if (commentEl) commentEl.value = '';
+    var modalEl = document.getElementById('resubmitModal');
     if (modalEl) bootstrap.Modal.getOrCreateInstance(modalEl).show();
 }
 
