@@ -2235,7 +2235,7 @@ function loadSaleTradeDetails(tradeId) {
     var container = document.getElementById('currentSaleDetails');
     container.innerHTML = '<div class="text-center"><div class="spinner-border spinner-border-sm text-primary"></div> Loading...</div>';
     
-    fetch('settlement.php?ajax=get_trade_details&trade_id=' + tradeId)
+    fetch(window.location.pathname + '?ajax=get_trade_details&trade_id=' + tradeId)
         .then(response => response.json())
         .then(data => {
             if (data && data.id) {
@@ -2264,9 +2264,9 @@ function loadAvailableBuyTrades(tradeId) {
     var container = document.getElementById('buyTradesContainer');
     var warning = document.getElementById('noBuyTradesWarning');
     container.innerHTML = '<div class="text-center"><div class="spinner-border spinner-border-sm text-primary"></div> Loading available buy trades...</div>';
-    warning.style.display = 'none';
+    if (warning) { warning.style.display = 'none'; }
     
-    fetch('settlement.php?ajax=get_grouped_buy_trades&trade_id=' + tradeId)
+    fetch(window.location.pathname + '?ajax=get_grouped_buy_trades&trade_id=' + tradeId)
         .then(response => response.json())
         .then(data => {
             if (data && data.length > 0) {
@@ -2301,7 +2301,7 @@ function loadAvailableBuyTrades(tradeId) {
                 container.innerHTML = html;
             } else {
                 container.innerHTML = '';
-                warning.style.display = 'block';
+                if (warning) { warning.style.display = 'block'; }
             }
             updateLinkSubmitButton();
         })
@@ -2327,7 +2327,7 @@ function showGroupedTrades(tradeId) {
     container.innerHTML = '<div class="text-center"><div class="spinner-border spinner-border-sm text-primary"></div> Loading trade details...</div>';
     new bootstrap.Modal(document.getElementById('groupedTradesModal')).show();
     
-    fetch('settlement.php?ajax=get_grouped_trade_details&trade_id=' + tradeId)
+    fetch(window.location.pathname + '?ajax=get_grouped_trade_details&trade_id=' + tradeId)
         .then(response => response.json())
         .then(data => {
             if (data && data.length > 0) {
