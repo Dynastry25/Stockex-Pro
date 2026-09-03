@@ -1,26 +1,18 @@
 <?php
 /**
- * StockEx Client Portal - Secure Client Self-Service API
+ * StockEx Client Portal - Open Form Submission API
  *
- * Allows clients (via an admin-minted, expiring token link) to update
- * their own contact and bank/payment details. The page never touches the
- * database directly; everything flows through this API.
- *
- * NO file uploads are accepted. Read-only access to other clients is
- * impossible: every token is bound to exactly one client.
+ * Clients submit their details via a public form. No OTP or authentication.
+ * Name matching (≥60%) gates the submission. Staff reviews submissions
+ * before applying changes to the clients table.
  *
  * Actions:
- *   GET  ?action=csrf_token                (staff session)  -> CSRF token for mint/revoke
- *   POST ?action=mint_link                 (staff session)  -> mint expiring token link
- *   GET  ?action=get_profile               (Bearer token)   -> current profile (owner only)
- *   POST ?action=update_profile            (Bearer token)   -> update phone/email/bank details
- *   POST ?action=revoke_token              (Bearer token)   -> self-revoke current token
- *   POST ?action=revoke_link               (staff session)  -> revoke all links for a CDS account
- *   POST ?action=lookup_cds                (public)         -> find account, channel state, masked name
- *   POST ?action=send_otp                  (public)         -> SMS OTP to verified number or entered number
- *   POST ?action=verify_otp                (public)         -> confirm OTP + name (first claim) -> issues session token
- *   POST ?action=change_phone              (Bearer token)   -> SMS OTP to a NEW number the client wants to bind
- *   POST ?action=confirm_change_phone      (Bearer token)   -> verify new-number OTP and rebind
+ *   POST ?action=lookup_cds         (public) -> check name match, return client
+ *   POST ?action=submit_details     (public) -> store submission in queue
+ *   POST ?action=approve_submission (staff)  -> approve submission, copy to client
+ *   POST ?action=reject_submission  (staff)  -> reject with notes
+ *   POST ?action=list_submissions   (staff)  -> list pending/approved/rejected
+ *   GET  ?action=csrf_token         (staff)  -> CSRF token for forms
  */
 
 require_once __DIR__ . '/helpers.php';
@@ -41,9 +33,7 @@ header('Access-Control-Allow-Origin: ' . $allowedOrigin);
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Authorization');
 header('Access-Control-Allow-Credentials: false');
-header('Content-Type: application/json; charset=UTF-8');
 
-// Handle browser preflight (same-origin pages do not trigger this).
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204);
     exit();
@@ -71,541 +61,459 @@ $security = new SecurityManager();
 try {
     switch ($action) {
 
-    // ---------------------------------------------------------------
-    // Staff: get CSRF token (required for mint_link / revoke_link)
-    // ---------------------------------------------------------------
-    case 'csrf_token':
-        assertMethod($method, 'GET');
-        portal_require_staff('trader');
-        if (!$security->checkRateLimit($ip, 'portal_csrf', 30, 60)) {
-            portal_error('Too many requests. Please try again later.', 429);
-        }
-        $token = $security->generateCSRFToken();
-        portal_json(['csrf_token' => $token], 200, 'CSRF token generated.');
+        // ---------------------------------------------------------------
+        // Staff: get CSRF token
+        // ---------------------------------------------------------------
+        case 'csrf_token':
+            assertMethod($method, 'GET');
+            portal_require_staff('trader');
+            $token = $security->generateCSRFToken();
+            portal_json(['csrf_token' => $token], 200, 'CSRF token generated.');
 
-    // ---------------------------------------------------------------
-    // Staff: mint an expiring client self-service link
-    // ---------------------------------------------------------------
-    case 'mint_link':
-        assertMethod($method, 'POST');
-        portal_require_staff('trader');
-        if (!$security->checkRateLimit($ip, 'portal_mint', 10, 60)) {
-            portal_error('Too many requests. Please try again later.', 429);
-        }
+        // ---------------------------------------------------------------
+        // Public: lookup CDS, check name match percentage
+        // ---------------------------------------------------------------
+        case 'lookup_cds':
+            assertMethod($method, 'POST');
+            if (!$security->checkRateLimit($ip, 'portal_lookup', 20, 60)) {
+                portal_error('Too many requests. Please try again later.', 429);
+            }
 
-        $input = portal_read_input();
+            $input = portal_read_input();
+            $cdsAccount = strtoupper(trim((string)($input['cds_account'] ?? '')));
+            if (!preg_match('/^[A-Z0-9]{5,20}$/', $cdsAccount)) {
+                portal_error('Valid CDS account is required (5-20 alphanumeric characters).', 400);
+            }
 
-        if (!isset($input['csrf_token']) || !$security->verifyCSRFToken($input['csrf_token'])) {
-            portal_error('Invalid security token. Fetch a fresh one via ?action=csrf_token.', 403);
-        }
+            $client = portal_find_client_by_cds($db, $cdsAccount);
+            if (!$client) {
+                portal_error('We could not find this CDS account. Check the number and try again.', 404);
+            }
+            if (!portal_client_is_active($client)) {
+                portal_error('This account is inactive. Please contact the administrator.', 400);
+            }
 
-        $cdsAccount = strtoupper(trim((string)($input['cds_account'] ?? '')));
-        if (!preg_match('/^[A-Z0-9]{5,20}$/', $cdsAccount)) {
-            portal_error('Valid CDS account is required (5-20 alphanumeric characters).', 400, [
-                'hint' => '/api/portal/index.php?action=csrf_token first, then send csrf_token + cds_account'
-            ]);
-        }
+            // Check name match if name provided
+            $submittedName = trim((string)($input['name'] ?? ''));
+            $matchPct = 0;
+            if ($submittedName !== '') {
+                $matchPct = portal_name_match_pct($client['client_name'], $submittedName);
+            }
 
-        $expiresHours = isset($input['expires_hours']) ? (int)$input['expires_hours'] : PORTAL_DEFAULT_EXPIRY_HOURS;
-        $expiresHours = max(1, min($expiresHours, PORTAL_MAX_EXPIRY_HOURS));
+            portal_json([
+                'cds_account'   => $client['cds_account'],
+                'client_name'   => $client['client_name'],
+                'name_hint'     => portal_mask_name($client['client_name']),
+                'match_pct'     => $matchPct,
+                'requires_name' => $submittedName === '' || $matchPct < (int)env('PORTAL_NAME_MATCH_MIN', 60),
+                'bank_current'  => portal_read_contact($db, $client)
+            ], 200, 'Account found.');
 
-        $maxUses = isset($input['max_uses']) ? (int)$input['max_uses'] : PORTAL_DEFAULT_MAX_USES;
-        $maxUses = max(1, min($maxUses, PORTAL_MAX_MAX_USES));
+        // ---------------------------------------------------------------
+        // Public: submit details (open form)
+        // ---------------------------------------------------------------
+        case 'submit_details':
+            assertMethod($method, 'POST');
+            if (!$security->checkRateLimit($ip, 'portal_submit', 10, 60)) {
+                portal_error('Too many requests. Please try again later.', 429);
+            }
 
-        $client = portal_find_client_by_cds($db, $cdsAccount);
-        if (!$client) {
-            portal_error('Client not found with this CDS account.', 404);
-        }
-        if (!portal_client_is_active($client)) {
-            portal_error('This client account is inactive. Please contact the administrator.', 400);
-        }
+            $input = portal_read_input();
+            $cdsAccount = strtoupper(trim((string)($input['cds_account'] ?? '')));
+            $submittedName = trim((string)($input['name'] ?? ''));
 
-        // One active token per client: revoke any previous active links.
-        portal_revoke_active_tokens($db, $client['id']);
+            if (!preg_match('/^[A-Z0-9]{5,20}$/', $cdsAccount)) {
+                portal_error('Valid CDS account is required.', 400);
+            }
 
-        $rawToken = $security->generateSecureToken(32);
-        $tokenHash = hash('sha256', $rawToken);
-        $expiresAt = date('Y-m-d H:i:s', time() + ($expiresHours * 3600));
+            $client = portal_find_client_by_cds($db, $cdsAccount);
+            if (!$client) {
+                portal_error('Client not found.', 404);
+            }
+            if (!portal_client_is_active($client)) {
+                portal_error('This account is inactive.', 400);
+            }
 
-        $stmt = $db->prepare(
-            "INSERT INTO client_access_tokens
-                (client_id, token_hash, expires_at, max_uses, created_by, ip_address, last_ip, `source`)
-             VALUES (:cid, :hash, :expires, :uses, :by, :ip, :ip, 'staff')"
-        );
-        $stmt->execute([
-            ':cid'     => $client['id'],
-            ':hash'    => $tokenHash,
-            ':expires' => $expiresAt,
-            ':uses'    => $maxUses,
-            ':by'      => (int)get_logged_in_user()['id'],
-            ':ip'      => $ip
-        ]);
-        $tokenId = (int)$db->lastInsertId();
+            // Name match check
+            if ($submittedName === '') {
+                portal_error('Please enter your full name for verification.', 400);
+            }
+            $matchPct = portal_name_match_pct($client['client_name'], $submittedName);
+            $minMatch = (int)env('PORTAL_NAME_MATCH_MIN', 60);
+            if ($matchPct < $minMatch) {
+                portal_error(
+                    'The name you entered does not match our records sufficiently. ' .
+                    "Match: {$matchPct}%. Minimum required: {$minMatch}%.",
+                    403
+                );
+            }
 
-        portal_log($db, $client['id'], $tokenId, 'link_minted', [
-            'cds_account'    => $client['cds_account'],
-            'expires_at'     => $expiresAt,
-            'max_uses'       => $maxUses
-        ], (int)get_logged_in_user()['id']);
+            // Sanitize inputs
+            $phone = isset($input['phone']) ? portal_normalize_phone($input['phone']) : null;
+            $email = isset($input['email']) ? filter_var(trim($input['email']), FILTER_SANITIZE_EMAIL) : null;
+            $bankName = isset($input['bank_name']) ? trim($input['bank_name']) : null;
+            $bankAccount = isset($input['bank_account_number']) ? trim($input['bank_account_number']) : null;
+            $bankBranch = isset($input['bank_branch']) ? trim($input['bank_branch']) : null;
+            $currency = isset($input['currency']) ? strtoupper(trim($input['currency'])) : 'TZS';
+            if (!in_array($currency, ['TZS', 'USD', 'EUR', 'GBP'], true)) {
+                $currency = 'TZS';
+            }
 
-        $security->auditLog($ip, 'PORTAL_LINK_MINT', $client['cds_account'], true);
+            // Insert into submission queue
+            try {
+                $stmt = $db->prepare(
+                    "INSERT INTO client_submission_queue
+                        (client_id, cds_account, submitted_name, match_pct, phone, email, bank_name,
+                         bank_account_number, bank_branch, currency, client_ip)
+                     VALUES (:cid, :cds, :name, :pct, :phone, :email, :bn, :ba, :bb, :curr, :ip)"
+                );
+                $stmt->execute([
+                    ':cid' => $client['id'],
+                    ':cds' => $cdsAccount,
+                    ':name' => $submittedName,
+                    ':pct' => $matchPct,
+                    ':phone' => $phone,
+                    ':email' => $email,
+                    ':bn' => $bankName,
+                    ':ba' => $bankAccount,
+                    ':bb' => $bankBranch,
+                    ':curr' => $currency,
+                    ':ip' => $ip
+                ]);
 
-        portal_json([
-            'client_id'   => (int)$client['id'],
-            'client_name' => $client['client_name'],
-            'cds_account' => $client['cds_account'],
-            'token'       => $rawToken,
-            'expires_at'  => $expiresAt,
-            'max_uses'    => $maxUses,
-            'link'        => PORTAL_PAGE_URL . urlencode($rawToken)
-        ], 200, 'Self-service link generated. Send it to the client now — it is shown only once.');
+                portal_log($db, $client['id'], null, 'form_submission', [
+                    'match_pct' => $matchPct,
+                    'phone' => $phone,
+                    'email' => $email,
+                    'bank_name' => $bankName,
+                    'bank_account' => $bankAccount,
+                    'bank_branch' => $bankBranch
+                ], null);
 
-    // ---------------------------------------------------------------
-    // Client (Bearer token): read own profile
-    // ---------------------------------------------------------------
-    case 'get_profile':
-        assertMethod($method, 'GET');
-        if (!$security->checkRateLimit($ip, 'portal_read', 60, 60)) {
-            portal_error('Too many requests. Please try again later.', 429);
-        }
+                $security->auditLog($ip, 'PORTAL_SUBMISSION', $cdsAccount, true, [
+                    'match_pct' => $matchPct, 'submitted' => true
+                ]);
 
-        $resolved = portal_resolve_token($db, portal_get_bearer_token());
-        if ($resolved['status'] !== 'ok') {
-            portal_error('Invalid or expired token.', 401, ['reason' => $resolved['status']]);
-        }
-        $token = $resolved['token'];
-        $client = $resolved['client'];
+                portal_json([
+                    'client_id' => (int)$client['id'],
+                    'cds_account' => $cdsAccount,
+                    'match_pct' => $matchPct,
+                    'submission_id' => (int)$db->lastInsertId()
+                ], 201, 'Submission received. We will review your details shortly.');
+            } catch (Exception $e) {
+                error_log('Submission queue error: ' . $e->getMessage());
+                portal_error('Could not save your submission. Please try again.', 500);
+            }
 
-        portal_use_token($db, $token['id'], $ip);
-        portal_log($db, $client['id'], $token['id'], 'profile_read', null);
+        // ---------------------------------------------------------------
+        // Staff: approve submission, copy to client record
+        // ---------------------------------------------------------------
+        case 'approve_submission':
+            assertMethod($method, 'POST');
+            portal_require_staff('trader');
+            if (!$security->checkRateLimit($ip, 'portal_approve', 20, 60)) {
+                portal_error('Too many requests. Please try again later.', 429);
+            }
 
-        $contact = portal_read_contact($db, $client);
+            $input = portal_read_input();
+            $submissionId = (int)($input['submission_id'] ?? 0);
 
-        portal_json([
-            'client_id'           => (int)$client['id'],
-            'client_name'         => $client['client_name'],
-            'cds_account'         => $client['cds_account'],
-            'client_type'         => $client['client_type'] ?? null,
-            'phone'               => $contact['phone'],
-            'email'               => $contact['email'],
-            'phone_masked'        => portal_mask($contact['phone']),
-            'bank_name'           => $client['bank_name'] ?? null,
-            'bank_account_number' => $contact['bank_account_number'],
-            'bank_account_masked' => portal_mask($contact['bank_account_number']),
-            'bank_branch'         => $client['bank_branch'] ?? null,
-            'currency'            => $client['currency'] ?? 'TZS',
-            'token'               => [
-                'expires_at' => $token['expires_at'],
-                'times_used' => (int)$token['times_used'],
-                'max_uses'   => (int)$token['max_uses']
-            ]
-        ], 200, 'Profile retrieved successfully.');
+            if ($submissionId <= 0) {
+                portal_error('Invalid submission ID.', 400);
+            }
 
-    // ---------------------------------------------------------------
-    // Client (Bearer token): update contact and bank/payment details
-    // ---------------------------------------------------------------
-    case 'update_profile':
-        assertMethod($method, 'POST');
-        if (!$security->checkRateLimit($ip, 'portal_write', 20, 60)) {
-            portal_error('Too many requests. Please try again later.', 429);
-        }
+            $stmt = $db->prepare(
+                "SELECT s.*, c.client_name FROM client_submission_queue s
+                 JOIN clients c ON s.client_id = c.id WHERE s.id = :id"
+            );
+            $stmt->execute([':id' => $submissionId]);
+            $submission = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        $resolved = portal_resolve_token($db, portal_get_bearer_token());
-        if ($resolved['status'] !== 'ok') {
-            portal_error('Invalid or expired token.', 401, ['reason' => $resolved['status']]);
-        }
-        $token = $resolved['token'];
-        $client = $resolved['client'];
+            if (!$submission) {
+                portal_error('Submission not found.', 404);
+            }
+            if ($submission['status'] !== 'pending') {
+                portal_error('This submission has already been reviewed.', 400);
+            }
 
-        $input = portal_read_input();
+            $staff = get_logged_in_user();
 
-        // Per-token attempt throttle for writes.
-        if (!$security->checkRateLimit($ip . ':' . $token['id'], 'portal_update_confirm', 5, 300)) {
-            portal_error('Too many attempts. Please wait a few minutes and try again.', 429);
-        }
+            try {
+                $set = [];
+                $params = [':sid' => $submissionId, ':by' => (int)$staff['id'], ':ip' => $ip];
 
-        $validated = portal_validate_profile($input);
+                if ($submission['bank_name'] !== null) $set[] = "bank_name = :bn";
+                if ($submission['bank_account_number'] !== null) $set[] = "bank_account_number = :ba";
+                if ($submission['bank_branch'] !== null) $set[] = "bank_branch = :bb";
+                if ($submission['currency'] !== null) $set[] = "currency = :curr";
 
-        if (!empty($validated['errors'])) {
-            portal_error('Validation failed.', 400, ['errors' => $validated['errors']]);
-        }
-        if (empty($validated['clean'])) {
-            portal_error('No editable fields were provided.', 400, [
-                'editable_fields' => ['phone', 'email', 'bank_name', 'bank_account_number', 'bank_branch', 'currency']
-            ]);
-        }
+                if (!empty($set)) {
+                    $params[':bn'] = $submission['bank_name'];
+                    $params[':ba'] = $submission['bank_account_number'];
+                    $params[':bb'] = $submission['bank_branch'];
+                    $params[':curr'] = $submission['currency'];
 
-        // Verified-channel rule (server-enforced, not client-declarable):
-        // a self-service session may not silently move the verified phone to
-        // an unverified number. The change_phone -> confirm_change_phone flow
-        // must have already OTP-verified the new number.
-        $fields = $validated['clean'];
-        $isSelfSession = ($token['source'] ?? 'staff') === 'self';
-        if ($isSelfSession && array_key_exists('phone', $fields)) {
-            $typedE164 = portal_normalize_phone($fields['phone']);
-            $boundPhone = portal_verified_phone($db, $client);
-            if ($typedE164 !== null && $boundPhone !== null && $typedE164 !== $boundPhone) {
-                if (!portal_new_phone_verified_for($db, $client['id'], $typedE164, $token['created_at'])) {
-                    portal_error('Verify your new phone number first (change_phone + confirm_change_phone).', 400, [
-                        'editable_fields' => ['email', 'bank_name', 'bank_account_number', 'bank_branch', 'currency']
-                    ]);
+                    $db->prepare("UPDATE clients SET " . implode(', ', $set) . " WHERE id = :cid")
+                        ->execute([':cid' => $submission['client_id']]);
                 }
+
+                $db->prepare(
+                    "UPDATE client_submission_queue SET status = 'approved', reviewed_by = :by,
+                     reviewed_at = NOW(), ip_address = :ip WHERE id = :sid"
+                )->execute($params);
+
+                portal_log($db, $submission['client_id'], null, 'form_submission_approved', [
+                    'submission_id' => $submissionId, 'staff_id' => $staff['id'], 'staff_name' => $staff['name']
+                ], $staff['id']);
+
+                portal_json([
+                    'submission_id' => $submissionId,
+                    'status' => 'approved',
+                    'client_id' => (int)$submission['client_id']
+                ], 200, 'Submission approved and client record updated.');
+
+            } catch (Exception $e) {
+                error_log('Approve submission error: ' . $e->getMessage());
+                portal_error('Could not approve submission.', 500);
             }
-        }
 
-        // Capture masked before/after for the audit trail, but only for
-        // fields that actually exist in the schema and were persisted.
-        $before = portal_read_contact($db, $client);
-        $applied = portal_update_client($db, $client['id'], $fields);
-
-        $changed = [];
-        foreach ($applied as $field) {
-            $newValue = $fields[$field];
-            $oldValue = $before[$field] ?? ($client[$field] ?? null);
-            $normalizedNew = $field === 'phone' && is_string($newValue)
-                ? preg_replace('/[\s\-\(\)]/', '', $newValue)
-                : $newValue;
-            if ($normalizedNew !== $oldValue) {
-                $changed[$field] = ['from' => portal_mask($oldValue), 'to' => portal_mask($normalizedNew)];
+        // ---------------------------------------------------------------
+        // Staff: reject submission
+        // ---------------------------------------------------------------
+        case 'reject_submission':
+            assertMethod($method, 'POST');
+            portal_require_staff('trader');
+            if (!$security->checkRateLimit($ip, 'portal_reject', 20, 60)) {
+                portal_error('Too many requests. Please try again later.', 429);
             }
-        }
 
-        // Bank details changed through self-service -> flag for staff
-        // verification (bank_pending_verification + review queue).
-        if ($isSelfSession && !empty(array_intersect(['bank_name', 'bank_account_number', 'bank_branch'], $applied))) {
-            $columns = portal_table_columns($db, 'clients');
-            if (in_array('bank_pending_verification', $columns, true)) {
-                $db->prepare("UPDATE clients SET bank_pending_verification = 1 WHERE id = :id")
-                    ->execute([':id' => $client['id']]);
+            $input = portal_read_input();
+            $submissionId = (int)($input['submission_id'] ?? 0);
+            $reason = trim((string)($input['reason'] ?? ''));
+
+            if ($submissionId <= 0) {
+                portal_error('Invalid submission ID.', 400);
             }
-            portal_enqueue_verification($db, $client['id'], 'bank_flag', 'Bank details changed via self-service', $ip);
-        }
-
-        portal_use_token($db, $token['id'], $ip);
-
-        portal_log($db, $client['id'], $token['id'], 'profile_updated', empty($changed) ? null : $changed);
-        $security->auditLog($ip, 'PORTAL_PROFILE_UPDATE', $client['cds_account'], true);
-
-        $changedFields = array_keys($changed);
-        portal_json([
-            'client_id'   => (int)$client['id'],
-            'cds_account' => $client['cds_account'],
-            'updated'     => $changedFields,
-            'remaining_uses' => (int)$token['max_uses'] - (int)$token['times_used'] - 1
-        ], 200, empty($changedFields) ? 'No changes were necessary.' : 'Profile updated successfully.');
-
-    // ---------------------------------------------------------------
-    // Client (Bearer token): revoke own token (self-service logout)
-    // ---------------------------------------------------------------
-    case 'revoke_token':
-        assertMethod($method, 'POST');
-        if (!$security->checkRateLimit($ip, 'portal_revoke', 10, 60)) {
-            portal_error('Too many requests. Please try again later.', 429);
-        }
-
-        $resolved = portal_resolve_token($db, portal_get_bearer_token());
-        if ($resolved['status'] !== 'ok') {
-            portal_error('Invalid or expired token.', 401, ['reason' => $resolved['status']]);
-        }
-        $token = $resolved['token'];
-        $client = $resolved['client'];
-
-        $stmt = $db->prepare("UPDATE client_access_tokens SET revoked = 1 WHERE id = :id");
-        $stmt->execute([':id' => $token['id']]);
-
-        portal_log($db, $client['id'], $token['id'], 'link_revoked', null);
-        $security->auditLog($ip, 'PORTAL_LINK_REVOKED', $client['cds_account'], true);
-
-        portal_json(null, 200, 'Access link revoked.');
-
-    // ---------------------------------------------------------------
-    // Staff: revoke all active links for a CDS account
-    // ---------------------------------------------------------------
-    case 'revoke_link':
-        assertMethod($method, 'POST');
-        portal_require_staff('trader');
-        if (!$security->checkRateLimit($ip, 'portal_revoke', 10, 60)) {
-            portal_error('Too many requests. Please try again later.', 429);
-        }
-
-        $input = portal_read_input();
-        if (!isset($input['csrf_token']) || !$security->verifyCSRFToken($input['csrf_token'])) {
-            portal_error('Invalid security token. Fetch a fresh one via ?action=csrf_token.', 403);
-        }
-
-        $cdsAccount = strtoupper(trim((string)($input['cds_account'] ?? '')));
-        $client = portal_find_client_by_cds($db, $cdsAccount);
-        if (!$client) {
-            portal_error('Client not found with this CDS account.', 404);
-        }
-
-        $revoked = portal_revoke_active_tokens($db, $client['id']);
-        portal_log($db, $client['id'], null, 'link_revoked', ['cds_account' => $client['cds_account']], (int)get_logged_in_user()['id']);
-        $security->auditLog($ip, 'PORTAL_LINK_REVOKE_ADMIN', $client['cds_account'], true);
-
-        portal_json(['revoked_tokens' => $revoked], 200, 'Active access links revoked.');
-
-    // ---------------------------------------------------------------
-    // Public: find an account (masked hints only — the page stays inert)
-    // ---------------------------------------------------------------
-    case 'lookup_cds':
-        assertMethod($method, 'POST');
-        if (!$security->checkRateLimit($ip, 'portal_lookup', 20, 60)) {
-            portal_error('Too many requests. Please try again later.', 429);
-        }
-
-        $input = portal_read_input();
-        $cdsAccount = strtoupper(trim((string)($input['cds_account'] ?? '')));
-        if (!preg_match('/^[A-Z0-9]{5,20}$/', $cdsAccount)) {
-            portal_error('Valid CDS account is required (5-20 alphanumeric characters).', 400);
-        }
-
-        $client = portal_find_client_by_cds($db, $cdsAccount);
-        if (!$client) {
-            portal_error('We could not find this CDS account. Check the number and try again.', 404);
-        }
-        if (!portal_client_is_active($client)) {
-            portal_error('This account is inactive. Please contact the administrator.', 400);
-        }
-
-        $verifiedPhone = portal_verified_phone($db, $client);
-
-        portal_json([
-            'cds_account'     => $client['cds_account'],
-            'client_name'     => $client['client_name'],
-            'name_hint'       => portal_mask_name($client['client_name']),
-            'channel_state'   => $verifiedPhone !== null ? 'established' : 'first_claim',
-            'phone_masked'    => $verifiedPhone !== null ? portal_mask($verifiedPhone) : null,
-            'phone_verified'  => $verifiedPhone !== null
-        ], 200, 'Account found.');
-
-    // ---------------------------------------------------------------
-    // Public: send an SMS OTP. Established accounts -> only the bound
-    // number. First-claim accounts -> the number the client entered.
-    // ---------------------------------------------------------------
-    case 'send_otp':
-        assertMethod($method, 'POST');
-        if (!$security->checkRateLimit($ip, 'portal_otp_send', 15, 60)) {
-            portal_error('Too many requests. Please try again later.', 429);
-        }
-
-        $input = portal_read_input();
-        $cdsAccount = strtoupper(trim((string)($input['cds_account'] ?? '')));
-        if (!preg_match('/^[A-Z0-9]{5,20}$/', $cdsAccount)) {
-            portal_error('Valid CDS account is required.', 400);
-        }
-
-        $client = portal_find_client_by_cds($db, $cdsAccount);
-        if (!$client || !portal_client_is_active($client)) {
-            portal_error('Client not found or inactive.', 404);
-        }
-
-        $verifiedPhone = portal_verified_phone($db, $client);
-        if ($verifiedPhone !== null) {
-            // Verified-channel rule: the code goes ONLY to the bound number.
-            $phoneE164 = $verifiedPhone;
-            $purpose = 'session';
-        } else {
-            // First claim: the entered number is the binding target.
-            $phoneE164 = portal_normalize_phone((string)($input['phone'] ?? ''));
-            if ($phoneE164 === null || !sms_normalize_number($phoneE164)) {
-                portal_error('Enter a valid Tanzanian phone number (e.g. 0755123456).', 400);
+            if ($reason === '') {
+                portal_error('Please provide a rejection reason.', 400);
             }
-            $purpose = 'bind_phone';
-        }
 
-        $issued = portal_otp_issue($db, $cdsAccount, $phoneE164, $purpose, $ip);
-        if (isset($issued['error'])) {
-            portal_error($issued['error'], 429, ['cooldown_sec' => $issued['cooldown_sec'] ?? null]);
-        }
+            $stmt = $db->prepare("SELECT * FROM client_submission_queue WHERE id = :id");
+            $stmt->execute([':id' => $submissionId]);
+            $submission = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        $sent = portal_send_sms($phoneE164, portal_otp_message($issued['code']));
-        if (empty($sent['success'])) {
-            portal_log($db, $client['id'], null, 'otp_sent', [
-                'purpose' => $purpose, 'number' => portal_mask($phoneE164), 'status' => 'sms_failure'
-            ], null);
-            portal_error('We could not deliver an SMS to that number. Check it and try again.', 502, [
-                'gateway' => $sent['error'] ?? 'unknown'
+            if (!$submission) {
+                portal_error('Submission not found.', 404);
+            }
+            if ($submission['status'] !== 'pending') {
+                portal_error('This submission has already been reviewed.', 400);
+            }
+
+            $staff = get_logged_in_user();
+
+            try {
+                $db->prepare(
+                    "UPDATE client_submission_queue SET status = 'rejected', review_notes = :notes,
+                     reviewed_by = :by, reviewed_at = NOW(), ip_address = :ip WHERE id = :sid"
+                )->execute([
+                    ':sid' => $submissionId,
+                    ':notes' => $reason,
+                    ':by' => (int)$staff['id'],
+                    ':ip' => $ip
+                ]);
+
+                portal_log($db, $submission['client_id'], null, 'form_submission_rejected', [
+                    'submission_id' => $submissionId, 'reason' => $reason
+                ], $staff['id']);
+
+                portal_json(['submission_id' => $submissionId, 'status' => 'rejected'], 200, 'Submission rejected.');
+
+            } catch (Exception $e) {
+                error_log('Reject submission error: ' . $e->getMessage());
+                portal_error('Could not reject submission.', 500);
+            }
+
+        // ---------------------------------------------------------------
+        // Staff: list submissions
+        // ---------------------------------------------------------------
+        case 'list_submissions':
+            assertMethod($method, 'POST');
+            portal_require_staff('trader');
+            if (!$security->checkRateLimit($ip, 'portal_list', 30, 60)) {
+                portal_error('Too many requests. Please try again later.', 429);
+            }
+
+            $input = portal_read_input();
+            $status = trim((string)($input['status'] ?? 'pending'));
+            $limit = min(100, max(10, (int)($input['limit'] ?? 50)));
+            $offset = max(0, (int)($input['offset'] ?? 0));
+
+            if (!in_array($status, ['pending', 'approved', 'rejected', 'all'], true)) {
+                $status = 'pending';
+            }
+
+            $where = $status === 'all' ? '1=1' : 's.status = :status';
+            $params = $status === 'all' ? [] : [':status' => $status];
+
+            $stmt = $db->prepare(
+                "SELECT s.*, c.client_name, c.cds_account, u.name as reviewer_name
+                 FROM client_submission_queue s
+                 JOIN clients c ON s.client_id = c.id
+                 LEFT JOIN users u ON s.reviewed_by = u.id
+                 WHERE $where
+                 ORDER BY s.created_at DESC
+                 LIMIT :limit OFFSET :offset"
+            );
+            if ($status !== 'all') $params[':limit'] = $limit;
+            $params[':offset'] = $offset;
+            $stmt->execute($params);
+            $submissions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $totalStmt = $db->prepare(
+                "SELECT COUNT(*) FROM client_submission_queue WHERE $where"
+            );
+            if ($status !== 'all') $totalStmt->execute([':status' => $status]);
+            else $totalStmt->execute();
+            $total = (int)$totalStmt->fetchColumn();
+
+            portal_json([
+                'submissions' => $submissions,
+                'total' => $total,
+                'limit' => $limit,
+                'offset' => $offset
+            ], 200, 'Submissions retrieved.');
+
+        // ---------------------------------------------------------------
+        // Staff: get submission details
+        // ---------------------------------------------------------------
+        case 'get_submission':
+            assertMethod($method, 'POST');
+            portal_require_staff('trader');
+
+            $input = portal_read_input();
+            $submissionId = (int)($input['submission_id'] ?? 0);
+
+            if ($submissionId <= 0) {
+                portal_error('Invalid submission ID.', 400);
+            }
+
+            $stmt = $db->prepare(
+                "SELECT s.*, c.client_name, c.cds_account, u.name as reviewer_name
+                 FROM client_submission_queue s
+                 JOIN clients c ON s.client_id = c.id
+                 LEFT JOIN users u ON s.reviewed_by = u.id
+                 WHERE s.id = :id"
+            );
+            $stmt->execute([':id' => $submissionId]);
+            $submission = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$submission) {
+                portal_error('Submission not found.', 404);
+            }
+
+            portal_json(['submission' => $submission], 200, 'Submission details.');
+
+        // ---------------------------------------------------------------
+        // Staff: mint a secure link (legacy, for staff-initiated)
+        // ---------------------------------------------------------------
+        case 'mint_link':
+            assertMethod($method, 'POST');
+            portal_require_staff('trader');
+
+            $input = portal_read_input();
+            $cdsAccount = strtoupper(trim((string)($input['cds_account'] ?? '')));
+            $ttlHours = min(72, max(1, (int)($input['ttl_hours'] ?? 24)));
+            $maxUses = min(20, max(1, (int)($input['max_uses'] ?? 10)));
+
+            if (!preg_match('/^[A-Z0-9]{5,20}$/', $cdsAccount)) {
+                portal_error('Valid CDS account is required.', 400);
+            }
+
+            $client = portal_find_client_by_cds($db, $cdsAccount);
+            if (!$client) {
+                portal_error('Client not found.', 404);
+            }
+
+            $staff = get_logged_in_user();
+            $security = new SecurityManager();
+            $raw = $security->generateSecureToken(32);
+
+            try {
+                $stmt = $db->prepare(
+                    "INSERT INTO client_access_tokens
+                        (client_id, token_hash, expires_at, max_uses, created_by, ip_address, last_ip, source)
+                     VALUES (:cid, :hash, DATE_ADD(NOW(), INTERVAL :hrs HOUR), :uses, :by, :ip, :ip, 'staff')"
+                );
+                $stmt->execute([
+                    ':cid' => $client['id'],
+                    ':hash' => hash('sha256', $raw),
+                    ':hrs' => $ttlHours,
+                    ':uses' => $maxUses,
+                    ':by' => (int)$staff['id'],
+                    ':ip' => $ip
+                ]);
+
+                portal_log($db, $client['id'], null, 'link_minted', [
+                    'staff_id' => $staff['id'], 'staff_name' => $staff['name']
+                ], $staff['id']);
+
+                $link = CLIENT_PORTAL_URL . '?t=' . $raw;
+
+                portal_json([
+                    'token' => $raw,
+                    'link' => $link,
+                    'expires_at' => date('Y-m-d H:i:s', time() + $ttlHours * 3600),
+                    'max_uses' => $maxUses
+                ], 201, 'Secure link generated. Send this to the client:');
+
+            } catch (Exception $e) {
+                error_log('Mint link error: ' . $e->getMessage());
+                portal_error('Could not generate link.', 500);
+            }
+
+        // ---------------------------------------------------------------
+        // Staff: revoke links for a CDS
+        // ---------------------------------------------------------------
+        case 'revoke_link':
+            assertMethod($method, 'POST');
+            portal_require_staff('trader');
+
+            $input = portal_read_input();
+            $cdsAccount = strtoupper(trim((string)($input['cds_account'] ?? '')));
+
+            if (!preg_match('/^[A-Z0-9]{5,20}$/', $cdsAccount)) {
+                portal_error('Valid CDS account is required.', 400);
+            }
+
+            $client = portal_find_client_by_cds($db, $cdsAccount);
+            if (!$client) {
+                portal_error('Client not found.', 404);
+            }
+
+            $staff = get_logged_in_user();
+            $stmt = $db->prepare("UPDATE client_access_tokens SET revoked = 1 WHERE client_id = :cid");
+            $stmt->execute([':cid' => $client['id']]);
+
+            portal_log($db, $client['id'], null, 'link_revoked', [
+                'staff_id' => $staff['id'], 'staff_name' => $staff['name']
+            ], $staff['id']);
+
+            portal_json(['revoked' => $stmt->rowCount()], 200, 'Active access links revoked.');
+
+        default:
+            portal_error('Invalid action.', 400, [
+                'available_actions' => [
+                    'csrf_token',
+                    'mint_link',
+                    'revoke_link',
+                    'lookup_cds',
+                    'submit_details',
+                    'approve_submission',
+                    'reject_submission',
+                    'list_submissions',
+                    'get_submission'
+                ]
             ]);
-        }
-
-        portal_log($db, $client['id'], null, 'otp_sent', [
-            'purpose' => $purpose, 'number' => portal_mask($phoneE164), 'msg_id' => $sent['msg_id'] ?? null
-        ], null);
-
-        portal_json([
-            'phone_masked'   => portal_mask($phoneE164),
-            'purpose'        => $purpose,
-            'channel_state'  => $verifiedPhone !== null ? 'established' : 'first_claim',
-            'cooldown_sec'   => PORTAL_SMS_COOLDOWN_SEC
-        ], 200, 'Enter the verification code we just sent you by SMS.');
-
-    // ---------------------------------------------------------------
-    // Public: confirm the OTP (+ name on first claim) and issue a
-    // short-lived self-service session token.
-    // ---------------------------------------------------------------
-    case 'verify_otp':
-        assertMethod($method, 'POST');
-        if (!$security->checkRateLimit($ip, 'portal_otp_verify', 10, 60)) {
-            portal_error('Too many requests. Please try again later.', 429);
-        }
-
-        $input = portal_read_input();
-        $cdsAccount = strtoupper(trim((string)($input['cds_account'] ?? '')));
-        $code = trim((string)($input['code'] ?? ''));
-        if (!preg_match('/^[A-Z0-9]{5,20}$/', $cdsAccount)) {
-            portal_error('Valid CDS account is required.', 400);
-        }
-        if (!preg_match('/^[0-9]{6}$/', $code)) {
-            portal_error('Enter the 6-digit verification code.', 400);
-        }
-
-        $client = portal_find_client_by_cds($db, $cdsAccount);
-        if (!$client || !portal_client_is_active($client)) {
-            portal_error('Client not found or inactive.', 404);
-        }
-
-        $verifiedPhone = portal_verified_phone($db, $client);
-        if ($verifiedPhone !== null) {
-            $phoneE164 = $verifiedPhone;
-        } else {
-            // First claim: must know the bound number AND the account name.
-            $phoneE164 = portal_normalize_phone((string)($input['phone'] ?? ''));
-            if ($phoneE164 === null) {
-                portal_error('Enter a valid Tanzanian phone number.', 400);
-            }
-            $typedName = trim((string)($input['name'] ?? ''));
-            if (!portal_name_matches($client['client_name'], $typedName)) {
-                portal_log($db, $client['id'], null, 'otp_verified', ['result' => 'name_mismatch'], null);
-                portal_error('The name you entered does not match this CDS account. Contact your broker if this is your account.', 403);
-            }
-        }
-
-        $verified = portal_otp_verify($db, $cdsAccount, $phoneE164, $code);
-        if (empty($verified['ok'])) {
-            portal_error($verified['reason'] ?? 'Verification failed.', 401);
-        }
-
-        if ($verifiedPhone === null) {
-            portal_mark_phone_verified($db, $client['id'], $phoneE164, $ip);
-            portal_log($db, $client['id'], null, 'first_claim', [
-                'cds_account' => $cdsAccount, 'phone' => portal_mask($phoneE164)
-            ], null);
-            portal_log($db, $client['id'], null, 'phone_verified', ['phone' => portal_mask($phoneE164)], null);
-            portal_enqueue_verification($db, $client['id'], 'first_claim', 'New self-service account claim', $ip);
-            $security->auditLog($ip, 'PORTAL_FIRST_CLAIM', $cdsAccount, true);
-        } else {
-            portal_log($db, $client['id'], null, 'otp_verified', ['purpose' => 'session'], null);
-            $security->auditLog($ip, 'PORTAL_OTP_SESSION', $cdsAccount, true);
-        }
-
-        $session = portal_create_self_token($db, $client['id'], $ip);
-        portal_log($db, $client['id'], $session['token_id'], 'code_redeemed', null);
-
-        portal_json([
-            'token'          => $session['token'],
-            'expires_at'     => $session['expires_at'],
-            'client_id'      => (int)$client['id'],
-            'client_name'    => $client['client_name'],
-            'cds_account'    => $client['cds_account'],
-            'channel_state'  => $verifiedPhone !== null ? 'established' : 'first_claim',
-            'phone_verified' => true
-        ], 200, 'Identity verified. You may now update your details.');
-
-    // ---------------------------------------------------------------
-    // Bearer: start changing the bound phone — OTP goes to the NEW number.
-    // ---------------------------------------------------------------
-    case 'change_phone':
-        assertMethod($method, 'POST');
-        if (!$security->checkRateLimit($ip, 'portal_change_phone', 6, 60)) {
-            portal_error('Too many requests. Please try again later.', 429);
-        }
-
-        $resolved = portal_resolve_token($db, portal_get_bearer_token());
-        if ($resolved['status'] !== 'ok') {
-            portal_error('Invalid or expired token.', 401, ['reason' => $resolved['status']]);
-        }
-        $token = $resolved['token'];
-        $client = $resolved['client'];
-
-        $input = portal_read_input();
-        $newPhone = portal_normalize_phone((string)($input['phone'] ?? ''));
-        if ($newPhone === null) {
-            portal_error('Enter a valid Tanzanian phone number.', 400);
-        }
-
-        $issued = portal_otp_issue($db, $client['cds_account'], $newPhone, 'change_phone_new', $ip);
-        if (isset($issued['error'])) {
-            portal_error($issued['error'], 429, ['cooldown_sec' => $issued['cooldown_sec'] ?? null]);
-        }
-
-        $sent = portal_send_sms($newPhone, portal_otp_message($issued['code']));
-        if (empty($sent['success'])) {
-            portal_error('We could not deliver an SMS to that number. Check it and try again.', 502, [
-                'gateway' => $sent['error'] ?? 'unknown'
-            ]);
-        }
-
-        portal_log($db, $client['id'], $token['id'], 'change_phone', ['new' => portal_mask($newPhone)], null);
-
-        portal_json([
-            'phone_masked'  => portal_mask($newPhone),
-            'cooldown_sec'  => PORTAL_SMS_COOLDOWN_SEC
-        ], 200, 'Enter the code sent to your new number.');
-
-    // ---------------------------------------------------------------
-    // Bearer: confirm the new number OTP and rebind the verified phone.
-    // ---------------------------------------------------------------
-    case 'confirm_change_phone':
-        assertMethod($method, 'POST');
-        if (!$security->checkRateLimit($ip, 'portal_phone_confirm', 6, 60)) {
-            portal_error('Too many requests. Please try again later.', 429);
-        }
-
-        $resolved = portal_resolve_token($db, portal_get_bearer_token());
-        if ($resolved['status'] !== 'ok') {
-            portal_error('Invalid or expired token.', 401, ['reason' => $resolved['status']]);
-        }
-        $token = $resolved['token'];
-        $client = $resolved['client'];
-
-        $input = portal_read_input();
-        $newPhone = portal_normalize_phone((string)($input['phone'] ?? ''));
-        $code = trim((string)($input['code'] ?? ''));
-        if ($newPhone === null) {
-            portal_error('Enter a valid Tanzanian phone number.', 400);
-        }
-        if (!preg_match('/^[0-9]{6}$/', $code)) {
-            portal_error('Enter the 6-digit verification code.', 400);
-        }
-
-        $verified = portal_otp_verify($db, $client['cds_account'], $newPhone, $code);
-        if (empty($verified['ok'])) {
-            portal_error($verified['reason'] ?? 'Verification failed.', 401);
-        }
-
-        portal_set_phone($db, $client['id'], $newPhone);
-        portal_log($db, $client['id'], $token['id'], 'phone_verified', ['new' => portal_mask($newPhone)], null);
-        $security->auditLog($ip, 'PORTAL_PHONE_CHANGE', $client['cds_account'], true);
-
-        portal_json(['phone_masked' => portal_mask($newPhone)], 200, 'Your phone number was updated and verified.');
-
-    default:
-        portal_error('Invalid action.', 400, [
-            'available_actions' => [
-                'csrf_token',
-                'mint_link',
-                'get_profile',
-                'update_profile',
-                'revoke_token',
-                'revoke_link',
-                'lookup_cds',
-                'send_otp',
-                'verify_otp',
-                'change_phone',
-                'confirm_change_phone'
-            ]
-        ]);
     }
 } catch (Throwable $e) {
     error_log('Client portal fatal [' . date('Y-m-d H:i:s') . '] ' . get_class($e) . ': ' . $e->getMessage()
@@ -613,10 +521,10 @@ try {
     http_response_code(500);
     header('Content-Type: application/json');
     echo json_encode([
-        'success'     => false,
+        'success' => false,
         'status_code' => 500,
-        'error'       => 'An unexpected error occurred. Please try again.',
-        'timestamp'   => date('Y-m-d H:i:s')
+        'error' => 'An unexpected error occurred. Please try again.',
+        'timestamp' => date('Y-m-d H:i:s')
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit();
 }
