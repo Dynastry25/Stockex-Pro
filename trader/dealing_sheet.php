@@ -1216,7 +1216,7 @@ if (isset($_GET['export_excel'])) {
             echo "<td class='right'>" . number_format($trade['consideration'] ?? 0, 2) . "</td>";
             echo "<td class='right'>" . number_format($fees['total'] ?? 0, 2) . "</td>";
             echo "<td class='right'>" . number_format($net, 2) . "</td>";
-            echo "<td>" . htmlspecialchars($trade['trader'] ?? '') . "</td>";
+            echo "<td>" . htmlspecialchars(traderDisplayName($trade['trader'] ?? '')) . "</td>";
             echo "<td>" . htmlspecialchars($cpDisplay) . "</td>";
             echo "<td class='center'>" . $statusText . "</td>";
             echo "</tr>";
@@ -1756,7 +1756,7 @@ include '../includes/header.php';
                                         <?php endif; ?>
                                     </td>
                                     <td>
-                                        <?php echo !empty($trade['trader']) ? safeHtml($trade['trader']) : '<span class="text-muted" style="font-size:10px;">-</span>'; ?>
+                                        <?php $displayTrader = traderDisplayName($trade['trader'] ?? ''); echo !empty($displayTrader) ? safeHtml($displayTrader) : '<span class="text-muted" style="font-size:10px;">-</span>'; ?>
                                     </td>
                                     <td>
                                         <?php echo $cpHtml; ?>
@@ -1911,7 +1911,7 @@ include '../includes/header.php';
                                                 data-approval-comment="<?php echo htmlspecialchars($trade['approval_comment'] ?? ''); ?>"
                                                 data-resubmit-comment="<?php echo htmlspecialchars($trade['resubmit_comment'] ?? ''); ?>"
                                                 data-resubmitted="<?php echo (int)($trade['resubmitted'] ?? 0); ?>"
-                                                data-trader="<?php echo htmlspecialchars($trade['trader'] ?? ''); ?>"
+                                                data-trader="<?php echo htmlspecialchars(traderDisplayName($trade['trader'] ?? '')); ?>"
                                                 data-counterparty="<?php echo htmlspecialchars($counterpartyDisplayText); ?>"
                                                 title="View Trade Details">
                                                 <i class="bi bi-eye"></i>

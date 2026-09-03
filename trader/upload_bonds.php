@@ -1486,7 +1486,7 @@ include '../includes/header.php';
                                 <td><?php echo htmlspecialchars($mapped_data['settlement_date']); ?></td>
                                 <td><code class="small"><?php echo htmlspecialchars($mapped_data['exchange_reference'] ?: 'N/A'); ?></code></td>
                                 <td><code class="small"><?php echo htmlspecialchars($mapped_data['additional_reference'] ?: 'N/A'); ?></code></td>
-                                <td><?php echo htmlspecialchars($mapped_data['trader'] ?: 'N/A'); ?></td>
+                                <td><?php echo htmlspecialchars(traderDisplayName($mapped_data['trader'] ?? '') ?: 'N/A'); ?></td>
                                 <td>
                                     <?php if ($preview_row['is_company_trade']): ?>
                                         <span class="badge bg-warning">Exempted</span>
