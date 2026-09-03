@@ -6,6 +6,7 @@
 
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
+ob_start();
 
 // Start session
 if (session_status() === PHP_SESSION_NONE) {
@@ -590,12 +591,7 @@ if (isset($_POST['upload_receipt'])) {
         }
     }
     
-    $full_comment = $existing_comment;
-    if (!empty($comment)) {
-        $timestamp = date('Y-m-d H:i:s');
-        $new_entry = "[" . $timestamp . "] " . $user_name . ": " . $comment;
-        $full_comment = $existing_comment ? $existing_comment . "\n---\n" . $new_entry : $new_entry;
-    }
+    $full_comment = $comment;
     
     if (!empty($uploaded)) {
         if ($receipt_type === 'commission') {
@@ -691,25 +687,31 @@ if (isset($_GET['delete_receipt'])) {
 // HANDLE EDIT COMMENT (AJAX)
 // ============================================
 if (isset($_POST['edit_comment']) && isset($_SERVER['HTTP_X_REQUESTED_WITH']) && $_SERVER['HTTP_X_REQUESTED_WITH'] === 'XMLHttpRequest') {
+    ob_clean();
     header('Content-Type: application/json');
     $trade_id = (int)$_POST['trade_id'];
     $new_comment = trim($_POST['comment'] ?? '');
 
-    $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
-    $stmt->execute([$trade_id]);
-    $record = $stmt->fetch(PDO::FETCH_ASSOC);
+    try {
+        $stmt = $db->prepare("SELECT id FROM numeric_trade_receipts WHERE trade_id = ? AND trade_type = 'trade'");
+        $stmt->execute([$trade_id]);
+        $record = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    if ($record) {
-        $stmt = $db->prepare("UPDATE numeric_trade_receipts SET comment = ?, updated_at = NOW() WHERE trade_id = ? AND trade_type = 'trade'");
-        $stmt->execute([$new_comment, $trade_id]);
-    } else {
-        if (!empty($new_comment)) {
-            $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, comment, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, NOW(), NOW())");
-            $stmt->execute([$trade_id, $new_comment, $user_name]);
+        if ($record) {
+            $stmt = $db->prepare("UPDATE numeric_trade_receipts SET comment = ?, updated_at = NOW() WHERE trade_id = ? AND trade_type = 'trade'");
+            $stmt->execute([$new_comment, $trade_id]);
+        } else {
+            if (!empty($new_comment)) {
+                $stmt = $db->prepare("INSERT INTO numeric_trade_receipts (trade_id, trade_type, comment, uploaded_by, created_at, updated_at) VALUES (?, 'trade', ?, ?, NOW(), NOW())");
+                $stmt->execute([$trade_id, $new_comment, $user_name]);
+            }
         }
-    }
 
-    echo json_encode(['success' => true, 'comment' => $new_comment]);
+        echo json_encode(['success' => true, 'comment' => $new_comment]);
+    } catch (Exception $e) {
+        error_log("Edit comment error: " . $e->getMessage());
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    }
     exit;
 }
 
