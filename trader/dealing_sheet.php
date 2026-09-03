@@ -324,6 +324,15 @@ function calculateFullFees($trade, $effective_rate, $liberty_mode = 'replace_all
 // ============================================
 // TABLE SETUP
 // ============================================
+// Portable "ADD COLUMN IF NOT EXISTS" helper that works on both MySQL and MariaDB
+function ensureColumn($db, $table, $column, $definition) {
+    $stmt = $db->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?");
+    $stmt->execute([$table, $column]);
+    if ((int)$stmt->fetchColumn() === 0) {
+        $db->exec("ALTER TABLE `$table` ADD COLUMN `$column` $definition");
+    }
+}
+
 try {
     $db->exec("CREATE TABLE IF NOT EXISTS numeric_trade_receipts (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -354,14 +363,14 @@ try {
         KEY trade_id (trade_id)
     )");
     
-    $db->exec("ALTER TABLE numeric_trade_receipts ADD COLUMN IF NOT EXISTS commission_receipt TEXT AFTER payment_receipt");
-    $db->exec("ALTER TABLE numeric_trade_receipts ADD COLUMN IF NOT EXISTS comment TEXT AFTER commission_receipt");
-    $db->exec("ALTER TABLE numeric_trade_receipts ADD COLUMN IF NOT EXISTS approval_comment TEXT AFTER comment");
-    $db->exec("ALTER TABLE numeric_trade_receipts ADD COLUMN IF NOT EXISTS resubmitted TINYINT DEFAULT 0 AFTER approval_comment");
-    $db->exec("ALTER TABLE numeric_trade_receipts ADD COLUMN IF NOT EXISTS resubmit_comment TEXT AFTER resubmitted");
-    $db->exec("ALTER TABLE trades ADD COLUMN IF NOT EXISTS approval_status ENUM('pending','approved','rejected') DEFAULT 'pending' AFTER status");
-    $db->exec("ALTER TABLE trades ADD COLUMN IF NOT EXISTS counterparty_cds_account VARCHAR(50) AFTER counterparty_name");
-    $db->exec("ALTER TABLE trades ADD COLUMN IF NOT EXISTS trader VARCHAR(100) AFTER additional_reference");
+    ensureColumn($db, 'numeric_trade_receipts', 'commission_receipt', 'TEXT AFTER payment_receipt');
+    ensureColumn($db, 'numeric_trade_receipts', 'comment', 'TEXT AFTER commission_receipt');
+    ensureColumn($db, 'numeric_trade_receipts', 'approval_comment', 'TEXT AFTER comment');
+    ensureColumn($db, 'numeric_trade_receipts', 'resubmitted', "TINYINT DEFAULT 0 AFTER approval_comment");
+    ensureColumn($db, 'numeric_trade_receipts', 'resubmit_comment', 'TEXT AFTER resubmitted');
+    ensureColumn($db, 'trades', 'approval_status', "ENUM('pending','approved','rejected') DEFAULT 'pending' AFTER status");
+    ensureColumn($db, 'trades', 'counterparty_cds_account', 'VARCHAR(50) AFTER counterparty_name');
+    ensureColumn($db, 'trades', 'trader', 'VARCHAR(100) AFTER additional_reference');
     
 } catch (Exception $e) {
     error_log("Table setup error: " . $e->getMessage());
