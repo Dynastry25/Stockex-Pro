@@ -970,6 +970,13 @@ $filter_date_to = isset($_GET['filter_date_to']) ? $_GET['filter_date_to'] : '';
 $filter_amount_min = isset($_GET['filter_amount_min']) ? (float)$_GET['filter_amount_min'] : 0;
 $filter_amount_max = isset($_GET['filter_amount_max']) ? (float)$_GET['filter_amount_max'] : 0;
 
+// If no explicit status filter is set, use the active tab as the status filter
+// so the "Linked", "Paid", "Failed", "Today" and "Overdue" tabs actually filter
+// the trade list instead of showing every trade.
+if (empty($filter_status) && in_array($filter_tab, ['linked', 'paid', 'failed', 'today', 'overdue', 'pending'])) {
+    $filter_status = $filter_tab;
+}
+
 $records_per_page = 50;
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 if ($page < 1) $page = 1;
