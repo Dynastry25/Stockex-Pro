@@ -32,6 +32,16 @@ if ($user_role !== 'system_admin') {
 $db = getDBConnection();
 $current_user = get_logged_in_user() ?: get_session_user();
 $user_name = $current_user['username'] ?? 'System';
+
+// Ensure dealing_sheets table exists (used for the "linked to trade reference" indicator)
+require_once '../includes/dealing_sheet_helpers.php';
+if (function_exists('dealingSheetEnsureSchema')) {
+    try {
+        dealingSheetEnsureSchema($db);
+    } catch (Exception $e) {
+        error_log("dealing_sheet ensureSchema error: " . $e->getMessage());
+    }
+}
 $user_id = $current_user['id'] ?? null;
 
 // ============================================
@@ -863,11 +873,14 @@ $sql = "
         cl.fee_type as client_fee_type,
         cl.default_brokerage_fee,
         cl.liberty_mode as client_liberty_mode,
-        c.company_code
+        c.company_code,
+        dsl.trade_reference as ds_trade_reference,
+        dsl.sheet_reference as ds_sheet_reference
     FROM trades t
     LEFT JOIN numeric_trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
     LEFT JOIN clients cl ON t.client_cds_account = cl.cds_account
     LEFT JOIN companies c ON c.is_active = 1
+    LEFT JOIN dealing_sheets dsl ON dsl.trade_id = t.id
     WHERE t.additional_reference REGEXP '^[0-9]+$'
     AND t.additional_reference IS NOT NULL
     AND t.additional_reference != ''
@@ -948,7 +961,9 @@ foreach ($trades as $trade) {
             'sca_code' => $trade['sca_code'] ?? '',
             'company_code' => $trade['company_code'] ?? '',
             'trader' => $trade['trader'] ?? '',
-            'origin' => $trade['origin'] ?? ''
+            'origin' => $trade['origin'] ?? '',
+            'ds_trade_reference' => $trade['ds_trade_reference'] ?? '',
+            'ds_sheet_reference' => $trade['ds_sheet_reference'] ?? ''
         ];
     }
     
@@ -999,6 +1014,13 @@ foreach ($trades as $trade) {
     }
     if (!empty($trade['trader'])) {
         $grouped_trades[$group_key]['trader'] = $trade['trader'];
+    }
+    // Track dealing sheet linkage (any trade in the group linked to a dealing sheet)
+    if (!empty($trade['ds_trade_reference']) && empty($grouped_trades[$group_key]['ds_trade_reference'])) {
+        $grouped_trades[$group_key]['ds_trade_reference'] = $trade['ds_trade_reference'];
+    }
+    if (!empty($trade['ds_sheet_reference']) && empty($grouped_trades[$group_key]['ds_sheet_reference'])) {
+        $grouped_trades[$group_key]['ds_sheet_reference'] = $trade['ds_sheet_reference'];
     }
 }
 
@@ -1313,6 +1335,10 @@ include '../includes/header.php';
 .badge-status.rejected {
     background: #f8d7da;
     color: #721c24;
+}
+.badge-status.linked {
+    background: #cce5ff;
+    color: #004085;
 }
 .badge-asset {
     font-size: 10px;
@@ -1667,7 +1693,14 @@ include '../includes/header.php';
                                 }
                             ?>
                                 <tr>
-                                    <td><?php echo safeHtml($trade['client_name'] ?? ''); ?></td>
+                                    <td>
+                                        <?php echo safeHtml($trade['client_name'] ?? ''); ?>
+                                        <?php if (!empty($trade['ds_trade_reference'])): ?>
+                                            <div class="mt-1">
+                                                <span class="badge-status linked"><i class="bi bi-link-45deg"></i> Linked to trade reference: <?php echo safeHtml($trade['ds_trade_reference']); ?></span>
+                                            </div>
+                                        <?php endif; ?>
+                                    </td>
                                     <td>
                                         <?php echo safeHtml($trade['security_id'] ?? ''); ?>
                                         <span class="badge-asset"><?php echo $isBond ? 'Bond' : ucfirst($trade['asset_class'] ?? ''); ?></span>
