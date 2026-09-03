@@ -2176,7 +2176,8 @@ function saveComment(tradeId) {
     formData.append('trade_id', tradeId);
     formData.append('comment', newComment);
 
-    fetch('dealing_sheet.php', {
+    var postUrl = window.location.pathname;
+    fetch(postUrl, {
         method: 'POST',
         body: formData,
         headers: { 'X-Requested-With': 'XMLHttpRequest' }
@@ -2379,7 +2380,8 @@ function saveModalComment() {
     formData.append('trade_id', tradeId);
     formData.append('comment', newComment);
 
-    fetch('dealing_sheet.php', {
+    var postUrl = window.location.pathname;
+    fetch(postUrl, {
         method: 'POST',
         body: formData,
         headers: { 'X-Requested-With': 'XMLHttpRequest' }
