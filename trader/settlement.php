@@ -471,6 +471,29 @@ if (isset($_GET['ajax'])) {
         }
     }
     
+    if ($_GET['ajax'] == 'get_linked_details') {
+        $trade_id = (int)$_GET['trade_id'];
+        try {
+            $stmt = $db->prepare("SELECT * FROM trades WHERE id = ?");
+            $stmt->execute([$trade_id]);
+            $sale = $stmt->fetch();
+
+            $stmt = $db->prepare("SELECT * FROM trades WHERE linked_trade_id = ? AND status = 'active'");
+            $stmt->execute([$trade_id]);
+            $linked_buys = $stmt->fetchAll();
+
+            echo json_encode([
+                'sale' => $sale ?: null,
+                'linked_buys' => $linked_buys
+            ]);
+            exit;
+        } catch (Exception $e) {
+            error_log("get_linked_details error: " . $e->getMessage());
+            echo json_encode(['error' => $e->getMessage()]);
+            exit;
+        }
+    }
+    
    
     if ($_GET['ajax'] == 'get_grouped_trade_details') {
         $trade_id = (int)$_GET['trade_id'];
@@ -2361,8 +2384,51 @@ function showGroupedTrades(tradeId) {
 
 // Show linked details
 function showLinkedDetails(tradeId) {
-    // Implementation for showing linked details
-    alert('Linked details functionality - implement as needed');
+    var saleEl = document.getElementById('linkedSaleDetails');
+    var buyEl = document.getElementById('linkedBuyDetails');
+    saleEl.innerHTML = '<span class="text-muted">Loading...</span>';
+    buyEl.innerHTML = '';
+    new bootstrap.Modal(document.getElementById('linkedDetailsModal')).show();
+
+    fetch(window.location.pathname + '?ajax=get_linked_details&trade_id=' + tradeId)
+        .then(response => response.json())
+        .then(data => {
+            if (!data || data.error || !data.sale) {
+                saleEl.innerHTML = '<span class="text-danger">Could not load linked details</span>';
+                return;
+            }
+            var s = data.sale;
+            saleEl.innerHTML = `
+                <div class="row">
+                    <div class="col-6"><strong>Client:</strong> ${s.client_name || 'N/A'}</div>
+                    <div class="col-6"><strong>Security:</strong> ${s.security_id || 'N/A'}</div>
+                    <div class="col-6"><strong>Ref:</strong> ${s.trade_reference || 'N/A'}</div>
+                    <div class="col-6"><strong>Date:</strong> ${s.trade_date || 'N/A'}</div>
+                    <div class="col-6"><strong>Qty:</strong> ${s.quantity || 0}</div>
+                    <div class="col-6"><strong>Amount:</strong> TZS ${Number(s.consideration || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                </div>`;
+
+            var buys = data.linked_buys || [];
+            if (buys.length === 0) {
+                buyEl.innerHTML = '<span class="text-muted">No linked buy trade found.</span>';
+            } else {
+                var html = '<div class="list-group">';
+                buys.forEach(function(b) {
+                    html += `
+                        <div class="list-group-item">
+                            <div class="fw-semibold">${b.security_id} (${b.security_name || ''})</div>
+                            <div class="small">Ref: ${b.trade_reference || 'N/A'} | ${b.quantity || 0} @ ${Number(b.price || 0).toFixed(2)} = TZS ${Number(b.consideration || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                            <div class="small text-muted">Date: ${b.trade_date || 'N/A'}</div>
+                        </div>`;
+                });
+                html += '</div>';
+                buyEl.innerHTML = html;
+            }
+        })
+        .catch(error => {
+            console.error('Error loading linked details:', error);
+            saleEl.innerHTML = '<span class="text-danger">Error loading linked details</span>';
+        });
 }
 
 // Mark as unpaid

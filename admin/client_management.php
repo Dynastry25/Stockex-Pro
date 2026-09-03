@@ -280,6 +280,10 @@ include '../includes/header.php';
             </div>
             <div class="col-md-4 text-end">
                 <div class="d-flex gap-2 justify-content-end">
+                    <button type="button" class="btn btn-info text-white" onclick="loadSubmissions()">
+                        <i class="bi bi-inbox me-2"></i>
+                        Submissions
+                    </button>
                     <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#addClientModal">
                         <i class="bi bi-person-plus me-2"></i>
                         Add Client
@@ -797,6 +801,46 @@ include '../includes/header.php';
     </div>
 </div>
 
+<!-- Submissions Queue Modal -->
+<div class="modal fade" id="submissionsModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-inbox me-2"></i>Client Submissions</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="d-flex gap-2 mb-3">
+                    <button class="btn btn-sm btn-outline-primary active" onclick="loadSubmissions('pending', this)">Pending</button>
+                    <button class="btn btn-sm btn-outline-success" onclick="loadSubmissions('approved', this)">Approved</button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="loadSubmissions('rejected', this)">Rejected</button>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="loadSubmissions('all', this)">All</button>
+                </div>
+                <div id="submissionsStatus"></div>
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>CDS</th>
+                                <th>Submitted Name</th>
+                                <th>Match%</th>
+                                <th>Bank</th>
+                                <th>Account</th>
+                                <th>Status</th>
+                                <th>Date</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="submissionsBody">
+                            <tr><td colspan="8" class="text-center text-muted">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Verification Queue Modal -->
 <div class="modal fade" id="verificationQueueModal" tabindex="-1">
     <div class="modal-dialog modal-lg">
@@ -1035,6 +1079,76 @@ function portalRevokeLinks(showConfirmation) {
             portalShowStatus('Revoked ' + body.data.revoked_tokens + ' active link(s) for this client.', 'success');
         })
         .catch(err => portalShowStatus(err.message, 'danger'));
+}
+
+// ===== Client Submissions Queue =====
+function loadSubmissions(status, btn) {
+    status = status || 'pending';
+    if (btn) {
+        document.querySelectorAll('#submissionsModal .btn-sm').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+    }
+    document.getElementById('submissionsBody').innerHTML = '<tr><td colspan="8" class="text-center text-muted">Loading…</td></tr>';
+
+    fetch(PORTAL_API_URL + '?action=list_submissions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: status, limit: 50 })
+    })
+    .then(r => r.json())
+    .then(body => {
+        if (!body.success) throw new Error(body.error);
+        const subs = body.data.submissions || [];
+        if (subs.length === 0) {
+            document.getElementById('submissionsBody').innerHTML = '<tr><td colspan="8" class="text-center text-muted">No submissions.</td></tr>';
+            return;
+        }
+        const statusBadges = { pending: 'warning', approved: 'success', rejected: 'danger' };
+        document.getElementById('submissionsBody').innerHTML = subs.map(s => `
+            <tr>
+                <td>${s.cds_account || '-'}</td>
+                <td>${s.submitted_name || '-'}</td>
+                <td><span class="badge bg-${s.match_pct >= 60 ? 'success' : 'danger'}">${s.match_pct}%</span></td>
+                <td>${s.bank_name || '-'}</td>
+                <td>${s.bank_account_number || '-'}</td>
+                <td><span class="badge bg-${statusBadges[s.status] || 'secondary'}">${s.status}</span></td>
+                <td>${s.created_at || '-'}</td>
+                <td>${s.status === 'pending' ?
+                    `<button class="btn btn-sm btn-success me-1" onclick="reviewSubmission(${s.id}, 'approve')"><i class="bi bi-check-lg"></i></button><button class="btn btn-sm btn-danger" onclick="reviewSubmission(${s.id}, 'reject')"><i class="bi bi-x-lg"></i></button>` :
+                    (s.status === 'approved' ? `<small class="text-muted">${s.reviewer_name || ''}</small>` : `<small class="text-muted" title="${(s.review_notes || '').replace(/"/g, '&quot;')}">${s.reviewer_name || ''}</small>`)
+                }</td>
+            </tr>
+        `).join('');
+        new bootstrap.Modal(document.getElementById('submissionsModal')).show();
+    })
+    .catch(err => {
+        document.getElementById('submissionsBody').innerHTML = `<tr><td colspan="8" class="text-danger">${err.message}</td></tr>`;
+        new bootstrap.Modal(document.getElementById('submissionsModal')).show();
+    });
+}
+
+function reviewSubmission(id, action) {
+    const isApprove = action === 'approve';
+    let reason = '';
+    if (!isApprove) {
+        reason = prompt('Rejection reason:');
+        if (reason === null || reason.trim() === '') return;
+    }
+    if (!isApprove && !confirm('Reject submission #' + id + '?')) return;
+    if (isApprove && !confirm('Approve submission #' + id + '? This will update the client record.')) return;
+
+    fetch(PORTAL_API_URL + '?action=' + (isApprove ? 'approve_submission' : 'reject_submission'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ submission_id: id, reason: reason })
+    })
+    .then(r => r.json())
+    .then(body => {
+        if (!body.success) throw new Error(body.error);
+        alert('Done: ' + body.message);
+        loadSubmissions(document.querySelector('#submissionsModal .btn-sm.active')?.textContent?.toLowerCase() || 'pending');
+    })
+    .catch(err => alert('Error: ' + err.message));
 }
 
 // Auto-hide alerts after 5 seconds
