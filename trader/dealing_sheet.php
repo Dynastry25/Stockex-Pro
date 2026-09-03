@@ -686,7 +686,7 @@ if (isset($_GET['delete_receipt'])) {
 // ============================================
 // HANDLE EDIT COMMENT (AJAX)
 // ============================================
-if (isset($_POST['edit_comment']) && isset($_SERVER['HTTP_X_REQUESTED_WITH']) && $_SERVER['HTTP_X_REQUESTED_WITH'] === 'XMLHttpRequest') {
+if (isset($_POST['edit_comment'])) {
     ob_clean();
     header('Content-Type: application/json');
     $trade_id = (int)$_POST['trade_id'];
@@ -2181,10 +2181,19 @@ function saveComment(tradeId) {
         body: formData,
         headers: { 'X-Requested-With': 'XMLHttpRequest' }
     })
-    .then(function(r) { return r.json(); })
+    .then(function(r) {
+        return r.text().then(function(text) {
+            try {
+                return JSON.parse(text);
+            } catch (e) {
+                console.error('Non-JSON comment save response:', text.substring(0, 500));
+                throw new Error('Invalid server response');
+            }
+        });
+    })
     .then(function(data) {
         var container = document.getElementById('comment-display-' + tradeId);
-        if (data.success) {
+        if (data && data.success) {
             if (newComment) {
                 container.innerHTML = '<div class="d-flex align-items-start gap-1">' +
                     '<div class="comment-text flex-grow-1">' + newComment.replace(/</g, '&lt;').replace(/\n/g, '<br>') + '</div>' +
@@ -2193,6 +2202,8 @@ function saveComment(tradeId) {
             } else {
                 container.innerHTML = '<button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1" onclick="editComment(' + tradeId + ', this)" title="Add Comment"><i class="bi bi-chat-dots"></i></button>';
             }
+        } else {
+            alert((data && data.error) ? ('Save failed: ' + data.error) : 'Failed to save comment.');
         }
     })
     .catch(function() {
@@ -2373,9 +2384,18 @@ function saveModalComment() {
         body: formData,
         headers: { 'X-Requested-With': 'XMLHttpRequest' }
     })
-    .then(function(r) { return r.json(); })
+    .then(function(r) {
+        return r.text().then(function(text) {
+            try {
+                return JSON.parse(text);
+            } catch (e) {
+                console.error('Non-JSON comment save response:', text.substring(0, 500));
+                throw new Error('Invalid server response');
+            }
+        });
+    })
     .then(function(data) {
-        if (data.success) {
+        if (data && data.success) {
             var commentEl = document.getElementById('vt_comment');
             var wrap = document.getElementById('vt_comment_edit');
             var btn = document.getElementById('vt_comment_edit_btn');
@@ -2391,6 +2411,8 @@ function saveModalComment() {
                     text.innerHTML = newComment.replace(/</g, '&lt;').replace(/\n/g, '<br>');
                 }
             }
+        } else {
+            alert((data && data.error) ? ('Save failed: ' + data.error) : 'Failed to save comment.');
         }
     })
     .catch(function() {
