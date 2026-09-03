@@ -20,14 +20,15 @@ require_once '../auth/auth_middleware.php';
 // Security
 require_login();
 $user_role = $_SESSION['role'] ?? '';
-$allowed_roles = ['finance_officer', 'system_admin', 'trader'];
+$allowed_roles = ['finance_officer', 'system_admin', 'trader', 'ceo'];
 if (!in_array($user_role, $allowed_roles)) {
     redirect('auth/login.php');
     exit;
 }
-if ($user_role !== 'system_admin') {
+if (!in_array($user_role, ['system_admin', 'ceo'])) {
     require_mandate();
 }
+$show_actions = ($user_role !== 'ceo');
 
 $db = getDBConnection();
 $current_user = get_logged_in_user() ?: get_session_user();
@@ -875,7 +876,9 @@ $sql = "
         cl.liberty_mode as client_liberty_mode,
         c.company_code,
         dsl.trade_reference as ds_trade_reference,
-        dsl.sheet_reference as ds_sheet_reference
+        dsl.sheet_reference as ds_sheet_reference,
+        t.linked_trade_id,
+        t.linked_trade_ref
     FROM trades t
     LEFT JOIN numeric_trade_receipts tr ON t.id = tr.trade_id AND tr.trade_type = 'trade'
     LEFT JOIN clients cl ON t.client_cds_account = cl.cds_account
@@ -963,7 +966,9 @@ foreach ($trades as $trade) {
             'trader' => $trade['trader'] ?? '',
             'origin' => $trade['origin'] ?? '',
             'ds_trade_reference' => $trade['ds_trade_reference'] ?? '',
-            'ds_sheet_reference' => $trade['ds_sheet_reference'] ?? ''
+            'ds_sheet_reference' => $trade['ds_sheet_reference'] ?? '',
+            'linked_trade_id' => $trade['linked_trade_id'] ?? '',
+            'linked_trade_ref' => $trade['linked_trade_ref'] ?? ''
         ];
     }
     
@@ -1021,6 +1026,13 @@ foreach ($trades as $trade) {
     }
     if (!empty($trade['ds_sheet_reference']) && empty($grouped_trades[$group_key]['ds_sheet_reference'])) {
         $grouped_trades[$group_key]['ds_sheet_reference'] = $trade['ds_sheet_reference'];
+    }
+    // Track settlement linkage (any trade in the group linked via settlement)
+    if (!empty($trade['linked_trade_ref']) && empty($grouped_trades[$group_key]['linked_trade_ref'])) {
+        $grouped_trades[$group_key]['linked_trade_ref'] = $trade['linked_trade_ref'];
+    }
+    if (!empty($trade['linked_trade_id']) && empty($grouped_trades[$group_key]['linked_trade_id'])) {
+        $grouped_trades[$group_key]['linked_trade_id'] = $trade['linked_trade_id'];
     }
 }
 
@@ -1612,7 +1624,9 @@ include '../includes/header.php';
                                 <th>Counterparty</th>
                                 <th>Receipts</th>
                                 <th>Status</th>
+                                <?php if ($show_actions): ?>
                                 <th class="text-end">Actions</th>
+                                <?php endif; ?>
                             </tr>
                         </thead>
                         <tbody>
@@ -1695,9 +1709,18 @@ include '../includes/header.php';
                                 <tr>
                                     <td>
                                         <?php echo safeHtml($trade['client_name'] ?? ''); ?>
-                                        <?php if (!empty($trade['ds_trade_reference'])): ?>
+                                        <?php if (!empty($trade['ds_trade_reference']) || !empty($trade['linked_trade_ref']) || !empty($trade['linked_trade_id'])): ?>
                                             <div class="mt-1">
-                                                <span class="badge-status linked"><i class="bi bi-link-45deg"></i> Linked to trade reference: <?php echo safeHtml($trade['ds_trade_reference']); ?></span>
+                                                <?php
+                                                $linkedRefText = $trade['ds_trade_reference'] ?? '';
+                                                if (empty($linkedRefText)) {
+                                                    $linkedRefText = $trade['linked_trade_ref'] ?? '';
+                                                }
+                                                if (empty($linkedRefText)) {
+                                                    $linkedRefText = '#' . ($trade['linked_trade_id'] ?? '');
+                                                }
+                                                ?>
+                                                <span class="badge-status linked"><i class="bi bi-link-45deg"></i> Linked to trade reference: <?php echo safeHtml($linkedRefText); ?></span>
                                             </div>
                                         <?php endif; ?>
                                     </td>
@@ -1879,6 +1902,7 @@ include '../includes/header.php';
                                             </div>
                                         <?php endif; ?>
                                     </td>
+                                    <?php if ($show_actions): ?>
                                     <td class="text-end">
                                         <div class="btn-group btn-group-sm">
                                             <?php 
@@ -1946,6 +1970,7 @@ include '../includes/header.php';
                                             <?php endif; ?>
                                         </div>
                                     </td>
+                                    <?php endif; ?>
                                 </tr>
                             <?php endforeach; ?>
                         </tbody>

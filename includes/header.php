@@ -170,6 +170,16 @@
                     </li>
                     <?php endif; ?>
                     
+                    <?php if ($current_user['role'] == 'ceo'): ?>
+                    <!-- CEO Dealing Sheets (read-only view, no actions) -->
+                    <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/dealing_sheet.php">
+                            <i class="bi bi-journal-check"></i>
+                            <span>Dealing Sheets</span>
+                        </a>
+                    </li>
+                    <?php endif; ?>
+                    
                     <?php if ($current_user['role'] == 'trader' || $current_user['role'] == 'system_admin'): ?>
                     <!-- Trading Features -->
                     <li class="nav-section">

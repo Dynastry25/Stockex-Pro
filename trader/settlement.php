@@ -272,7 +272,9 @@ function updateOrderSheetStatus($db, $trade_id, $status, $notes = '', $linked_tr
                     SET settlement_status = ?, 
                         settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?),
                         settled_at = NOW(),
-                        settled_by = ?
+                        settled_by = ?,
+                        linked_trade_id = NULL,
+                        linked_trade_ref = NULL
                     WHERE trade_id = ?
                 ");
                 $update_stmt->execute([$status, "\n" . $notes, $_SESSION['username'] ?? 'system', $trade_id]);
@@ -320,7 +322,9 @@ function getGroupedTrades($db, $date_from, $date_to, $hide_buy_orders = true, $t
             MAX(t.action_needed) as action_needed,
             MAX(t.settlement_notes) as settlement_notes,
             MAX(t.linked_trade_id) as linked_trade_id,
-            MAX(t.linked_trade_ref) as linked_trade_ref
+            MAX(t.linked_trade_ref) as linked_trade_ref,
+            MAX((SELECT dsl.trade_reference FROM dealing_sheets dsl WHERE dsl.trade_id = t.id)) as ds_trade_reference,
+            MAX((SELECT dsl.sheet_reference FROM dealing_sheets dsl WHERE dsl.trade_id = t.id)) as ds_sheet_reference
         FROM trades t
         WHERE t.status = 'active'
         AND t.settlement_date IS NOT NULL 
@@ -820,6 +824,78 @@ if (isset($_POST['link_trade']) && isset($_POST['trade_id']) && isset($_POST['li
         $db->rollBack();
         $error_message = "Error linking trades: " . $e->getMessage();
         error_log("Link trade error: " . $e->getMessage());
+    }
+    
+    header('Location: settlement.php?message=' . urlencode($success_message ?: $error_message) . '&type=' . ($success_message ? 'success' : 'danger'));
+    exit;
+}
+
+// ============================================
+// HANDLE UNLINK TRADE
+// ============================================
+if (isset($_POST['unlink_trade']) && isset($_POST['trade_id'])) {
+    $sale_id = (int)$_POST['trade_id'];
+    $user_id = $_SESSION['user_id'];
+    $username = $_SESSION['username'] ?? 'system';
+    
+    try {
+        $db->beginTransaction();
+        
+        $trade_stmt = $db->prepare("SELECT id, client_name, trade_reference FROM trades WHERE id = ?");
+        $trade_stmt->execute([$sale_id]);
+        $sale_trade = $trade_stmt->fetch();
+        
+        if (!$sale_trade) {
+            throw new Exception("Sale trade not found.");
+        }
+        
+        $buy_stmt = $db->prepare("SELECT id FROM trades WHERE linked_trade_id = ?");
+        $buy_stmt->execute([$sale_id]);
+        $buy_trades = $buy_stmt->fetchAll();
+        
+        $buy_note = "\nUnlinked from sale trade ID: $sale_id (Ref: " . $sale_trade['trade_reference'] . ") by user $username on " . date('Y-m-d H:i:s');
+        
+        foreach ($buy_trades as $bt) {
+            $buy_id = (int)$bt['id'];
+            $update_buy = $db->prepare("
+                UPDATE trades 
+                SET settlement_status = NULL,
+                    linked_trade_id = NULL,
+                    linked_trade_ref = NULL,
+                    settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?)
+                WHERE id = ?
+            ");
+            $update_buy->execute([$buy_note, $buy_id]);
+            updateOrderSheetStatus($db, $buy_id, 'pending', "Unlinked from sale trade ID: $sale_id by user $username");
+            syncSettlementTradeToDealingSheetSafely($db, $buy_id, $current_user);
+        }
+        
+        $sale_note = "\nUnlinked from buy trade(s) by user $username on " . date('Y-m-d H:i:s');
+        $update_sale = $db->prepare("
+            UPDATE trades 
+            SET settlement_status = NULL,
+                linked_trade_id = NULL,
+                linked_trade_ref = NULL,
+                settlement_notes = CONCAT(COALESCE(settlement_notes, ''), ?)
+            WHERE id = ?
+        ");
+        $update_sale->execute([$sale_note, $sale_id]);
+        
+        updateOrderSheetStatus($db, $sale_id, 'pending', "Unlinked by user $username");
+        syncSettlementTradeToDealingSheetSafely($db, $sale_id, $current_user);
+        
+        $delete_junction = $db->prepare("DELETE FROM linked_trades WHERE trade_id = ? AND linked_trade_id = ?");
+        foreach ($buy_trades as $bt) {
+            $delete_junction->execute([$sale_id, (int)$bt['id']]);
+        }
+        
+        $db->commit();
+        $success_message = "Trade #$sale_id unlinked from " . count($buy_trades) . " buy trade(s).";
+        
+    } catch (Exception $e) {
+        $db->rollBack();
+        $error_message = "Error unlinking trades: " . $e->getMessage();
+        error_log("Unlink trade error: " . $e->getMessage());
     }
     
     header('Location: settlement.php?message=' . urlencode($success_message ?: $error_message) . '&type=' . ($success_message ? 'success' : 'danger'));
@@ -1576,7 +1652,8 @@ include '../includes/header.php';
                                         $status_icon = '';
                                         $status_text = '';
                                         $trade_count = (int)($trade['trade_count'] ?? 1);
-                                        $isLinked = ($trade['settlement_status'] === 'linked' && !empty($trade['linked_trade_id']));
+                                        $isLinked = (($trade['settlement_status'] === 'linked' && !empty($trade['linked_trade_id'])) || !empty($trade['ds_trade_reference']));
+$linkRef = (!empty($trade['ds_trade_reference'])) ? $trade['ds_trade_reference'] : ($trade['linked_trade_ref'] ?? ('#' . ($trade['linked_trade_id'] ?? '')));
                                         
                                         if ($trade['settlement_status'] === 'paid') {
                                             $status_color = 'success';
@@ -1637,7 +1714,7 @@ include '../includes/header.php';
                                                 <?php if ($isLinked): ?>
                                                     <div class="mt-1">
                                                         <span class="linked-badge"><i class="bi bi-link-45deg"></i> LINKED</span>
-                                                        <small class="text-muted d-block">To: <?php echo htmlspecialchars($trade['linked_trade_ref'] ?? '#' . $trade['linked_trade_id']); ?></small>
+                                                        <small class="text-muted d-block">To: <?php echo htmlspecialchars($linkRef); ?></small>
                                                     </div>
                                                 <?php endif; ?>
                                             </td>
@@ -2058,6 +2135,13 @@ include '../includes/header.php';
                 </div>
             </div>
             <div class="modal-footer">
+                <form id="unlinkForm" method="POST" action="" style="display:inline;">
+                    <input type="hidden" name="unlink_trade" value="1">
+                    <input type="hidden" name="trade_id" id="unlinkTradeId" value="">
+                    <button type="button" class="btn btn-danger" onclick="confirmUnlink()">
+                        <i class="bi bi-unlink"></i> Unlink
+                    </button>
+                </form>
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
             </div>
         </div>
@@ -2391,6 +2475,8 @@ function showGroupedTrades(tradeId) {
 
 // Show linked details
 function showLinkedDetails(tradeId) {
+    document.getElementById('unlinkTradeId').value = tradeId;
+    document.getElementById('unlinkForm').action = window.location.pathname;
     var saleEl = document.getElementById('linkedSaleDetails');
     var buyEl = document.getElementById('linkedBuyDetails');
     saleEl.innerHTML = '<span class="text-muted">Loading...</span>';
@@ -2436,6 +2522,19 @@ function showLinkedDetails(tradeId) {
             console.error('Error loading linked details:', error);
             saleEl.innerHTML = '<span class="text-danger">Error loading linked details</span>';
         });
+}
+
+function confirmUnlink() {
+    var tradeId = document.getElementById('unlinkTradeId').value;
+    if (!tradeId) {
+        alert('No sale trade selected.');
+        return;
+    }
+    if (confirm('Unlink this sale trade from its linked buy trade(s)? This will clear the link and settlement linkage data.')) {
+        let unlinkForm = document.getElementById('unlinkForm');
+        unlinkForm.action = window.location.pathname;
+        unlinkForm.submit();
+    }
 }
 
 // Mark as unpaid
