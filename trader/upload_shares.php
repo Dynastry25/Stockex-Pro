@@ -38,6 +38,19 @@ try {
     die("Database connection failed: " . $e->getMessage());
 }
 
+// Ensure etf_trades.trader column exists (portable, MySQL + MariaDB)
+// The ETF insert in recordETFTrade() writes to this column; without it uploads fail with
+// "SQLSTATE[42S22]: Unknown column 'trader' in 'field list'".
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'etf_trades' AND COLUMN_NAME = 'trader'");
+    $stmt->execute();
+    if ((int)$stmt->fetchColumn() === 0) {
+        $db->exec("ALTER TABLE etf_trades ADD COLUMN trader VARCHAR(100) AFTER additional_reference");
+    }
+} catch (Exception $e) {
+    error_log("ensure etf_trades.trader error: " . $e->getMessage());
+}
+
 $success_message = '';
 $error_message = '';
 $preview_data = [];
