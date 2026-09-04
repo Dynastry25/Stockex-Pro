@@ -212,9 +212,12 @@ function portal_read_contact($db, $client) {
 // ===========================================================================
 
 /**
- * Fuzzy name match percentage.
- * Splits both names into words, counts overlapping words (order-insensitive),
- * returns the percentage of matched words relative to the larger set.
+ * Fuzzy name match percentage using Levenshtein distance.
+ * Normalizes both names, then computes similarity based on
+ * word-level matching combined with Levenshtein string distance.
+ *
+ * Weighted: 60% word overlap + 40% Levenshtein ratio.
+ * This handles typos, missing middle names, and reversed order.
  */
 function portal_name_match_pct($stored, $input) {
     $norm = function ($s) {
@@ -225,11 +228,33 @@ function portal_name_match_pct($stored, $input) {
     $b = $norm($input);
     if ($a === '' || $b === '') return 0;
     if ($a === $b) return 100;
+
+    // Word overlap (order-insensitive)
     $wa = array_unique(explode(' ', $a));
     $wb = array_unique(explode(' ', $b));
-    $matched = count(array_intersect($wa, $wb));
-    $total = max(count($wa), count($wb));
-    return (int)round(($matched / $total) * 100);
+    $wordScore = count($wa) > 0 && count($wb) > 0
+        ? count(array_intersect($wa, $wb)) / max(count($wa), count($wb))
+        : 0;
+
+    // Levenshtein string similarity
+    $lev = levenshtein($a, $b);
+    $maxLen = max(mb_strlen($a), mb_strlen($b));
+    $levScore = $maxLen > 0 ? 1 - ($lev / $maxLen) : 0;
+
+    // Weighted combination
+    $pct = (int)round(($wordScore * 0.6 + $levScore * 0.4) * 100);
+
+    // Also check if any single input word is a substring of a stored word
+    // (handles Swahili name variations: e.g., "MBARAKA" vs "MBARAKA SAIDI")
+    foreach ($wb as $iw) {
+        foreach ($wa as $sw) {
+            if (mb_strlen($iw) >= 3 && mb_strpos($sw, $iw) !== false) {
+                $pct = max($pct, (int)round(($wordScore * 0.6 + $levScore * 0.4 + 0.15) * 100));
+            }
+        }
+    }
+
+    return min(100, $pct);
 }
 
 /**
@@ -249,4 +274,46 @@ function portal_mask_name($name) {
  */
 function portal_normalize_phone($phone) {
     return sms_normalize_number((string)$phone);
+}
+
+/**
+ * Verify a Cloudflare Turnstile CAPTCHA token.
+ * Requires TURNSTILE_SECRET_KEY in .env. If not configured, returns true (skip).
+ */
+function portal_verify_turnstile($token, $ip) {
+    $secret = (string)env('TURNSTILE_SECRET_KEY', '');
+    if ($secret === '') {
+        // CAPTCHA not configured server-side — just require a non-empty token to
+        // keep the UI flow working, but log so it can be turned on.
+        error_log('Turnstile secret key not set; skipping server-side verification.');
+        return $token !== '';
+    }
+
+    if ($token === '') {
+        return false;
+    }
+
+    $ch = curl_init('https://challenges.cloudflare.com/turnstile/v0/siteverify');
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POSTFIELDS => http_build_query([
+            'secret'   => $secret,
+            'response' => $token,
+            'remoteip' => $ip
+        ]),
+        CURLOPT_TIMEOUT => 5
+    ]);
+
+    $resp = curl_exec($ch);
+    $err = curl_error($ch);
+    curl_close($ch);
+
+    if ($err) {
+        error_log('Turnstile verification error: ' . $err);
+        return false;
+    }
+
+    $data = json_decode($resp, true);
+    return !empty($data['success']);
 }

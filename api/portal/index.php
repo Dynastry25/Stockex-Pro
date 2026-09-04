@@ -78,11 +78,20 @@ try {
             if (!$security->checkRateLimit($ip, 'portal_lookup', 20, 60)) {
                 portal_error('Too many requests. Please try again later.', 429);
             }
+            // Daily IP cap
+            if (!$security->checkRateLimit($ip, 'portal_lookup_daily', 200, 86400)) {
+                portal_error('Daily request limit reached. Try again tomorrow.', 429);
+            }
 
             $input = portal_read_input();
             $cdsAccount = strtoupper(trim((string)($input['cds_account'] ?? '')));
             if (!preg_match('/^[A-Z0-9]{5,20}$/', $cdsAccount)) {
                 portal_error('Valid CDS account is required (5-20 alphanumeric characters).', 400);
+            }
+
+            // Per-CDS rate limiting (10 per hour)
+            if (!$security->checkRateLimit('cds_' . $cdsAccount, 'portal_lookup_cds', 10, 3600)) {
+                portal_error('This account has been looked up too many times. Please try again later.', 429);
             }
 
             $client = portal_find_client_by_cds($db, $cdsAccount);
@@ -100,14 +109,23 @@ try {
                 $matchPct = portal_name_match_pct($client['client_name'], $submittedName);
             }
 
-            portal_json([
+            $minMatch = (int)env('PORTAL_NAME_MATCH_MIN', 60);
+            $requiresName = $submittedName === '' || $matchPct < $minMatch;
+
+            $response = [
                 'cds_account'   => $client['cds_account'],
-                'client_name'   => $client['client_name'],
                 'name_hint'     => portal_mask_name($client['client_name']),
                 'match_pct'     => $matchPct,
-                'requires_name' => $submittedName === '' || $matchPct < (int)env('PORTAL_NAME_MATCH_MIN', 60),
-                'bank_current'  => portal_read_contact($db, $client)
-            ], 200, 'Account found.');
+                'requires_name' => $requiresName
+            ];
+
+            // Only expose full name + bank data when name matches
+            if (!$requiresName) {
+                $response['client_name'] = $client['client_name'];
+                $response['bank_current'] = portal_read_contact($db, $client);
+            }
+
+            portal_json($response, 200, 'Account found.');
 
         // ---------------------------------------------------------------
         // Public: submit details (open form)
@@ -121,6 +139,12 @@ try {
             $input = portal_read_input();
             $cdsAccount = strtoupper(trim((string)($input['cds_account'] ?? '')));
             $submittedName = trim((string)($input['name'] ?? ''));
+
+            // Verify Cloudflare Turnstile CAPTCHA
+            $cfToken = trim((string)($input['cf_token'] ?? ''));
+            if (!portal_verify_turnstile($cfToken, $ip)) {
+                portal_error('CAPTCHA verification failed. Please try again.', 400);
+            }
 
             if (!preg_match('/^[A-Z0-9]{5,20}$/', $cdsAccount)) {
                 portal_error('Valid CDS account is required.', 400);
@@ -157,6 +181,20 @@ try {
             $currency = isset($input['currency']) ? strtoupper(trim($input['currency'])) : 'TZS';
             if (!in_array($currency, ['TZS', 'USD', 'EUR', 'GBP'], true)) {
                 $currency = 'TZS';
+            }
+
+            // Check for existing pending submission for this CDS
+            $stmt = $db->prepare(
+                "SELECT id FROM client_submission_queue WHERE cds_account = :cds AND status = 'pending' LIMIT 1"
+            );
+            $stmt->execute([':cds' => $cdsAccount]);
+            $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($existing) {
+                portal_error(
+                    'You already have a pending submission (ID #' . $existing['id'] . '). ' .
+                    'Wait for it to be reviewed, or contact support.',
+                    409
+                );
             }
 
             // Insert into submission queue

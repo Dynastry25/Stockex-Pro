@@ -15,7 +15,7 @@ Look up a CDS account and check name match.
 {"cds_account": "123456", "name": "JINA LA KATI"}
 ```
 
-Response:
+Response — **name matches (≥60%)**:
 ```json
 {
   "success": true,
@@ -30,16 +30,31 @@ Response:
 }
 ```
 
-If `requires_name` is `true`, the name did not match ≥60%.
+Response — **name does NOT match** (no full name or bank data leaked, only masked hint):
+```json
+{
+  "success": true,
+  "data": {
+    "cds_account": "123456",
+    "name_hint": "JA*****TI",
+    "match_pct": 15,
+    "requires_name": true
+  }
+}
+```
+
+- Name matching is **Levenshtein-based** (handles typos, missing middle names, reversed order). Minimum match: 60% (configurable via `PORTAL_NAME_MATCH_MIN`).
+- **Rate limits:** 20 lookups/IP/min, 200/IP/day, 10 lookups per CDS account per hour.
 
 ### `POST ?action=submit_details` — Public
 
-Submit client details (phone, email, bank info). Name must match ≥60%.
+Submit client details (phone, email, bank info). Name must match ≥60%. Requires a valid Cloudflare Turnstile CAPTCHA token (`cf_token`).
 
 ```json
 {
   "cds_account": "123456",
   "name": "JINA LA KATI",
+  "cf_token": "0.HK...",
   "phone": "0755123456",
   "email": "jina@mfano.com",
   "bank_name": "CRDB Bank PLC",
@@ -57,6 +72,9 @@ Response (201):
   "message": "Submission received. We will review your details shortly."
 }
 ```
+
+- **Duplicate guard:** returns `409` if there is already a pending submission for this CDS.
+- **CAPTCHA:** token verified server-side against Cloudflare Turnstile (`TURNSTILE_SECRET_KEY`). If secret is not configured, verification is skipped but a non-empty token is still required.
 
 ### `POST ?action=list_submissions` — Staff
 
