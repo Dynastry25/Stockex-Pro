@@ -15,6 +15,11 @@
  *   GET  ?action=csrf_token         (staff)  -> CSRF token for forms
  */
 
+// Guarantee clean JSON: never let PHP notices/warnings pollute the response.
+error_reporting(E_ERROR | E_PARSE);
+ini_set('display_errors', '0');
+ob_start();
+
 require_once __DIR__ . '/helpers.php';
 
 $allowedOrigin = (string)CLIENT_PORTAL_URL;
@@ -78,11 +83,20 @@ try {
             if (!$security->checkRateLimit($ip, 'portal_lookup', 20, 60)) {
                 portal_error('Too many requests. Please try again later.', 429);
             }
+            // Daily IP cap
+            if (!$security->checkRateLimit($ip, 'portal_lookup_daily', 200, 86400)) {
+                portal_error('Daily request limit reached. Try again tomorrow.', 429);
+            }
 
             $input = portal_read_input();
             $cdsAccount = strtoupper(trim((string)($input['cds_account'] ?? '')));
             if (!preg_match('/^[A-Z0-9]{5,20}$/', $cdsAccount)) {
                 portal_error('Valid CDS account is required (5-20 alphanumeric characters).', 400);
+            }
+
+            // Per-CDS rate limiting (10 per hour)
+            if (!$security->checkRateLimit('cds_' . $cdsAccount, 'portal_lookup_cds', 10, 3600)) {
+                portal_error('This account has been looked up too many times. Please try again later.', 429);
             }
 
             $client = portal_find_client_by_cds($db, $cdsAccount);
@@ -100,14 +114,23 @@ try {
                 $matchPct = portal_name_match_pct($client['client_name'], $submittedName);
             }
 
-            portal_json([
+            $minMatch = (int)env('PORTAL_NAME_MATCH_MIN', 60);
+            $requiresName = $submittedName === '' || $matchPct < $minMatch;
+
+            $response = [
                 'cds_account'   => $client['cds_account'],
-                'client_name'   => $client['client_name'],
                 'name_hint'     => portal_mask_name($client['client_name']),
                 'match_pct'     => $matchPct,
-                'requires_name' => $submittedName === '' || $matchPct < (int)env('PORTAL_NAME_MATCH_MIN', 60),
-                'bank_current'  => portal_read_contact($db, $client)
-            ], 200, 'Account found.');
+                'requires_name' => $requiresName
+            ];
+
+            // Only expose full name + bank data when name matches
+            if (!$requiresName) {
+                $response['client_name'] = $client['client_name'];
+                $response['bank_current'] = portal_read_contact($db, $client);
+            }
+
+            portal_json($response, 200, 'Account found.');
 
         // ---------------------------------------------------------------
         // Public: submit details (open form)
@@ -157,6 +180,20 @@ try {
             $currency = isset($input['currency']) ? strtoupper(trim($input['currency'])) : 'TZS';
             if (!in_array($currency, ['TZS', 'USD', 'EUR', 'GBP'], true)) {
                 $currency = 'TZS';
+            }
+
+            // Check for existing pending submission for this CDS
+            $stmt = $db->prepare(
+                "SELECT id FROM client_submission_queue WHERE cds_account = :cds AND status = 'pending' LIMIT 1"
+            );
+            $stmt->execute([':cds' => $cdsAccount]);
+            $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($existing) {
+                portal_error(
+                    'You already have a pending submission (ID #' . $existing['id'] . '). ' .
+                    'Wait for it to be reviewed, or contact support.',
+                    409
+                );
             }
 
             // Insert into submission queue
@@ -239,31 +276,45 @@ try {
             $staff = get_logged_in_user();
 
             try {
+                // 1) Update the client record with any provided bank fields
                 $set = [];
-                $params = [':sid' => $submissionId, ':by' => (int)$staff['id'], ':ip' => $ip];
-
-                if ($submission['bank_name'] !== null) $set[] = "bank_name = :bn";
-                if ($submission['bank_account_number'] !== null) $set[] = "bank_account_number = :ba";
-                if ($submission['bank_branch'] !== null) $set[] = "bank_branch = :bb";
-                if ($submission['currency'] !== null) $set[] = "currency = :curr";
-
-                if (!empty($set)) {
-                    $params[':bn'] = $submission['bank_name'];
-                    $params[':ba'] = $submission['bank_account_number'];
-                    $params[':bb'] = $submission['bank_branch'];
-                    $params[':curr'] = $submission['currency'];
-
-                    $db->prepare("UPDATE clients SET " . implode(', ', $set) . " WHERE id = :cid")
-                        ->execute([':cid' => $submission['client_id']]);
+                $cParams = [];
+                if ($submission['bank_name'] !== null && $submission['bank_name'] !== '') {
+                    $set[] = "bank_name = :bn";
+                    $cParams[':bn'] = $submission['bank_name'];
+                }
+                if ($submission['bank_account_number'] !== null && $submission['bank_account_number'] !== '') {
+                    $set[] = "bank_account_number = :ba";
+                    $cParams[':ba'] = $submission['bank_account_number'];
+                }
+                if ($submission['bank_branch'] !== null && $submission['bank_branch'] !== '') {
+                    $set[] = "bank_branch = :bb";
+                    $cParams[':bb'] = $submission['bank_branch'];
+                }
+                if ($submission['currency'] !== null && $submission['currency'] !== '') {
+                    $set[] = "currency = :curr";
+                    $cParams[':curr'] = $submission['currency'];
                 }
 
+                if (!empty($set)) {
+                    $cParams[':cid'] = $submission['client_id'];
+                    $db->prepare("UPDATE clients SET " . implode(', ', $set) . " WHERE id = :cid")
+                        ->execute($cParams);
+                }
+
+                // 2) Mark the submission approved (separate bound params)
+                $sParams = [
+                    ':sid' => $submissionId,
+                    ':by' => (int)$staff['id'],
+                    ':ip' => $ip
+                ];
                 $db->prepare(
                     "UPDATE client_submission_queue SET status = 'approved', reviewed_by = :by,
-                     reviewed_at = NOW(), ip_address = :ip WHERE id = :sid"
-                )->execute($params);
+                     reviewed_at = NOW(), client_ip = :ip WHERE id = :sid"
+                )->execute($sParams);
 
                 portal_log($db, $submission['client_id'], null, 'form_submission_approved', [
-                    'submission_id' => $submissionId, 'staff_id' => $staff['id'], 'staff_name' => $staff['name']
+                    'submission_id' => $submissionId, 'staff_id' => $staff['id'], 'staff_name' => $staff['full_name'] ?? $staff['username']
                 ], $staff['id']);
 
                 portal_json([
@@ -314,7 +365,7 @@ try {
             try {
                 $db->prepare(
                     "UPDATE client_submission_queue SET status = 'rejected', review_notes = :notes,
-                     reviewed_by = :by, reviewed_at = NOW(), ip_address = :ip WHERE id = :sid"
+                     reviewed_by = :by, reviewed_at = NOW(), client_ip = :ip WHERE id = :sid"
                 )->execute([
                     ':sid' => $submissionId,
                     ':notes' => $reason,
@@ -355,27 +406,27 @@ try {
             $where = $status === 'all' ? '1=1' : 's.status = :status';
             $params = $status === 'all' ? [] : [':status' => $status];
 
+            // LIMIT/OFFSET are integers (already cast + clamped); interpolate them
+            // directly because PDO binds placeholders as strings, which MariaDB
+            // rejects in LIMIT clauses.
             $stmt = $db->prepare(
-                "SELECT s.*, c.client_name, c.cds_account, u.name as reviewer_name
+                "SELECT s.*, c.client_name, c.cds_account, u.full_name as reviewer_name
                  FROM client_submission_queue s
                  JOIN clients c ON s.client_id = c.id
                  LEFT JOIN users u ON s.reviewed_by = u.id
                  WHERE $where
                  ORDER BY s.created_at DESC
-                 LIMIT :limit OFFSET :offset"
+                 LIMIT $limit OFFSET $offset"
             );
-            if ($status !== 'all') $params[':limit'] = $limit;
-            $params[':offset'] = $offset;
             $stmt->execute($params);
             $submissions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
             $totalStmt = $db->prepare(
-                "SELECT COUNT(*) FROM client_submission_queue WHERE $where"
+                "SELECT COUNT(*) FROM client_submission_queue s WHERE $where"
             );
             if ($status !== 'all') $totalStmt->execute([':status' => $status]);
             else $totalStmt->execute();
             $total = (int)$totalStmt->fetchColumn();
-
             portal_json([
                 'submissions' => $submissions,
                 'total' => $total,
@@ -398,7 +449,7 @@ try {
             }
 
             $stmt = $db->prepare(
-                "SELECT s.*, c.client_name, c.cds_account, u.name as reviewer_name
+                "SELECT s.*, c.client_name, c.cds_account, u.full_name as reviewer_name
                  FROM client_submission_queue s
                  JOIN clients c ON s.client_id = c.id
                  LEFT JOIN users u ON s.reviewed_by = u.id
@@ -454,7 +505,7 @@ try {
                 ]);
 
                 portal_log($db, $client['id'], null, 'link_minted', [
-                    'staff_id' => $staff['id'], 'staff_name' => $staff['name']
+                    'staff_id' => $staff['id'], 'staff_name' => $staff['full_name'] ?? $staff['username']
                 ], $staff['id']);
 
                 $link = CLIENT_PORTAL_URL . '?t=' . $raw;
@@ -495,7 +546,7 @@ try {
             $stmt->execute([':cid' => $client['id']]);
 
             portal_log($db, $client['id'], null, 'link_revoked', [
-                'staff_id' => $staff['id'], 'staff_name' => $staff['name']
+                'staff_id' => $staff['id'], 'staff_name' => $staff['full_name'] ?? $staff['username']
             ], $staff['id']);
 
             portal_json(['revoked' => $stmt->rowCount()], 200, 'Active access links revoked.');

@@ -35,6 +35,8 @@ if (!defined('PORTAL_ENFORCE_HTTPS')) {
 // --- Core helpers (unchanged) ---
 
 function portal_json($data, $statusCode = 200, $message = null) {
+    // Discard any stray output (PHP notices/warnings) so the response is pure JSON.
+    while (ob_get_level() > 0) { ob_end_clean(); }
     http_response_code($statusCode);
     $response = [
         'success' => true,
@@ -49,6 +51,8 @@ function portal_json($data, $statusCode = 200, $message = null) {
 }
 
 function portal_error($message, $statusCode = 400, $details = null) {
+    // Discard any stray output (PHP notices/warnings) so the response is pure JSON.
+    while (ob_get_level() > 0) { ob_end_clean(); }
     http_response_code($statusCode);
     $response = [
         'success' => false,
@@ -212,9 +216,12 @@ function portal_read_contact($db, $client) {
 // ===========================================================================
 
 /**
- * Fuzzy name match percentage.
- * Splits both names into words, counts overlapping words (order-insensitive),
- * returns the percentage of matched words relative to the larger set.
+ * Fuzzy name match percentage using Levenshtein distance.
+ * Normalizes both names, then computes similarity based on
+ * word-level matching combined with Levenshtein string distance.
+ *
+ * Weighted: 60% word overlap + 40% Levenshtein ratio.
+ * This handles typos, missing middle names, and reversed order.
  */
 function portal_name_match_pct($stored, $input) {
     $norm = function ($s) {
@@ -225,11 +232,33 @@ function portal_name_match_pct($stored, $input) {
     $b = $norm($input);
     if ($a === '' || $b === '') return 0;
     if ($a === $b) return 100;
+
+    // Word overlap (order-insensitive)
     $wa = array_unique(explode(' ', $a));
     $wb = array_unique(explode(' ', $b));
-    $matched = count(array_intersect($wa, $wb));
-    $total = max(count($wa), count($wb));
-    return (int)round(($matched / $total) * 100);
+    $wordScore = count($wa) > 0 && count($wb) > 0
+        ? count(array_intersect($wa, $wb)) / max(count($wa), count($wb))
+        : 0;
+
+    // Levenshtein string similarity
+    $lev = levenshtein($a, $b);
+    $maxLen = max(mb_strlen($a), mb_strlen($b));
+    $levScore = $maxLen > 0 ? 1 - ($lev / $maxLen) : 0;
+
+    // Weighted combination
+    $pct = (int)round(($wordScore * 0.6 + $levScore * 0.4) * 100);
+
+    // Also check if any single input word is a substring of a stored word
+    // (handles Swahili name variations: e.g., "MBARAKA" vs "MBARAKA SAIDI")
+    foreach ($wb as $iw) {
+        foreach ($wa as $sw) {
+            if (mb_strlen($iw) >= 3 && mb_strpos($sw, $iw) !== false) {
+                $pct = max($pct, (int)round(($wordScore * 0.6 + $levScore * 0.4 + 0.15) * 100));
+            }
+        }
+    }
+
+    return min(100, $pct);
 }
 
 /**
