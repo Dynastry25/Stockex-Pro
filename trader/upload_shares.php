@@ -1410,6 +1410,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 
                                 $db->commit();
                                 
+                                error_log("EQUITY/ETF UPLOAD SUCCESS: Processed {$processed} trades, {$etf_trades_recorded} ETF, {$duplicates_skipped} duplicates skipped, {$client_trades_skipped} client trades skipped, {$financial_entries_created} financial entries, {$company_investments_recorded} company investments, {$regulatory_assignments_created} regulatory assignments");
+                                
                                 if ($processed > 0 || $duplicates_skipped > 0 || $client_trades_skipped > 0) {
                                     $success_message = "Successfully processed {$processed} trades";
                                     if ($etf_trades_recorded > 0) $success_message .= " ({$etf_trades_recorded} ETF trades)";
