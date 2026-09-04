@@ -35,6 +35,8 @@ if (!defined('PORTAL_ENFORCE_HTTPS')) {
 // --- Core helpers (unchanged) ---
 
 function portal_json($data, $statusCode = 200, $message = null) {
+    // Discard any stray output (PHP notices/warnings) so the response is pure JSON.
+    while (ob_get_level() > 0) { ob_end_clean(); }
     http_response_code($statusCode);
     $response = [
         'success' => true,
@@ -49,6 +51,8 @@ function portal_json($data, $statusCode = 200, $message = null) {
 }
 
 function portal_error($message, $statusCode = 400, $details = null) {
+    // Discard any stray output (PHP notices/warnings) so the response is pure JSON.
+    while (ob_get_level() > 0) { ob_end_clean(); }
     http_response_code($statusCode);
     $response = [
         'success' => false,

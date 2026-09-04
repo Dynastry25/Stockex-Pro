@@ -15,6 +15,11 @@
  *   GET  ?action=csrf_token         (staff)  -> CSRF token for forms
  */
 
+// Guarantee clean JSON: never let PHP notices/warnings pollute the response.
+error_reporting(E_ERROR | E_PARSE);
+ini_set('display_errors', '0');
+ob_start();
+
 require_once __DIR__ . '/helpers.php';
 
 $allowedOrigin = (string)CLIENT_PORTAL_URL;
@@ -271,31 +276,45 @@ try {
             $staff = get_logged_in_user();
 
             try {
+                // 1) Update the client record with any provided bank fields
                 $set = [];
-                $params = [':sid' => $submissionId, ':by' => (int)$staff['id'], ':ip' => $ip];
-
-                if ($submission['bank_name'] !== null) $set[] = "bank_name = :bn";
-                if ($submission['bank_account_number'] !== null) $set[] = "bank_account_number = :ba";
-                if ($submission['bank_branch'] !== null) $set[] = "bank_branch = :bb";
-                if ($submission['currency'] !== null) $set[] = "currency = :curr";
-
-                if (!empty($set)) {
-                    $params[':bn'] = $submission['bank_name'];
-                    $params[':ba'] = $submission['bank_account_number'];
-                    $params[':bb'] = $submission['bank_branch'];
-                    $params[':curr'] = $submission['currency'];
-
-                    $db->prepare("UPDATE clients SET " . implode(', ', $set) . " WHERE id = :cid")
-                        ->execute([':cid' => $submission['client_id']]);
+                $cParams = [];
+                if ($submission['bank_name'] !== null && $submission['bank_name'] !== '') {
+                    $set[] = "bank_name = :bn";
+                    $cParams[':bn'] = $submission['bank_name'];
+                }
+                if ($submission['bank_account_number'] !== null && $submission['bank_account_number'] !== '') {
+                    $set[] = "bank_account_number = :ba";
+                    $cParams[':ba'] = $submission['bank_account_number'];
+                }
+                if ($submission['bank_branch'] !== null && $submission['bank_branch'] !== '') {
+                    $set[] = "bank_branch = :bb";
+                    $cParams[':bb'] = $submission['bank_branch'];
+                }
+                if ($submission['currency'] !== null && $submission['currency'] !== '') {
+                    $set[] = "currency = :curr";
+                    $cParams[':curr'] = $submission['currency'];
                 }
 
+                if (!empty($set)) {
+                    $cParams[':cid'] = $submission['client_id'];
+                    $db->prepare("UPDATE clients SET " . implode(', ', $set) . " WHERE id = :cid")
+                        ->execute($cParams);
+                }
+
+                // 2) Mark the submission approved (separate bound params)
+                $sParams = [
+                    ':sid' => $submissionId,
+                    ':by' => (int)$staff['id'],
+                    ':ip' => $ip
+                ];
                 $db->prepare(
                     "UPDATE client_submission_queue SET status = 'approved', reviewed_by = :by,
-                     reviewed_at = NOW(), ip_address = :ip WHERE id = :sid"
-                )->execute($params);
+                     reviewed_at = NOW(), client_ip = :ip WHERE id = :sid"
+                )->execute($sParams);
 
                 portal_log($db, $submission['client_id'], null, 'form_submission_approved', [
-                    'submission_id' => $submissionId, 'staff_id' => $staff['id'], 'staff_name' => $staff['name']
+                    'submission_id' => $submissionId, 'staff_id' => $staff['id'], 'staff_name' => $staff['full_name'] ?? $staff['username']
                 ], $staff['id']);
 
                 portal_json([
@@ -346,7 +365,7 @@ try {
             try {
                 $db->prepare(
                     "UPDATE client_submission_queue SET status = 'rejected', review_notes = :notes,
-                     reviewed_by = :by, reviewed_at = NOW(), ip_address = :ip WHERE id = :sid"
+                     reviewed_by = :by, reviewed_at = NOW(), client_ip = :ip WHERE id = :sid"
                 )->execute([
                     ':sid' => $submissionId,
                     ':notes' => $reason,
@@ -387,27 +406,27 @@ try {
             $where = $status === 'all' ? '1=1' : 's.status = :status';
             $params = $status === 'all' ? [] : [':status' => $status];
 
+            // LIMIT/OFFSET are integers (already cast + clamped); interpolate them
+            // directly because PDO binds placeholders as strings, which MariaDB
+            // rejects in LIMIT clauses.
             $stmt = $db->prepare(
-                "SELECT s.*, c.client_name, c.cds_account, u.name as reviewer_name
+                "SELECT s.*, c.client_name, c.cds_account, u.full_name as reviewer_name
                  FROM client_submission_queue s
                  JOIN clients c ON s.client_id = c.id
                  LEFT JOIN users u ON s.reviewed_by = u.id
                  WHERE $where
                  ORDER BY s.created_at DESC
-                 LIMIT :limit OFFSET :offset"
+                 LIMIT $limit OFFSET $offset"
             );
-            if ($status !== 'all') $params[':limit'] = $limit;
-            $params[':offset'] = $offset;
             $stmt->execute($params);
             $submissions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
             $totalStmt = $db->prepare(
-                "SELECT COUNT(*) FROM client_submission_queue WHERE $where"
+                "SELECT COUNT(*) FROM client_submission_queue s WHERE $where"
             );
             if ($status !== 'all') $totalStmt->execute([':status' => $status]);
             else $totalStmt->execute();
             $total = (int)$totalStmt->fetchColumn();
-
             portal_json([
                 'submissions' => $submissions,
                 'total' => $total,
@@ -430,7 +449,7 @@ try {
             }
 
             $stmt = $db->prepare(
-                "SELECT s.*, c.client_name, c.cds_account, u.name as reviewer_name
+                "SELECT s.*, c.client_name, c.cds_account, u.full_name as reviewer_name
                  FROM client_submission_queue s
                  JOIN clients c ON s.client_id = c.id
                  LEFT JOIN users u ON s.reviewed_by = u.id
@@ -486,7 +505,7 @@ try {
                 ]);
 
                 portal_log($db, $client['id'], null, 'link_minted', [
-                    'staff_id' => $staff['id'], 'staff_name' => $staff['name']
+                    'staff_id' => $staff['id'], 'staff_name' => $staff['full_name'] ?? $staff['username']
                 ], $staff['id']);
 
                 $link = CLIENT_PORTAL_URL . '?t=' . $raw;
@@ -527,7 +546,7 @@ try {
             $stmt->execute([':cid' => $client['id']]);
 
             portal_log($db, $client['id'], null, 'link_revoked', [
-                'staff_id' => $staff['id'], 'staff_name' => $staff['name']
+                'staff_id' => $staff['id'], 'staff_name' => $staff['full_name'] ?? $staff['username']
             ], $staff['id']);
 
             portal_json(['revoked' => $stmt->rowCount()], 200, 'Active access links revoked.');
