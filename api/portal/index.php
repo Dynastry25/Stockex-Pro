@@ -140,12 +140,6 @@ try {
             $cdsAccount = strtoupper(trim((string)($input['cds_account'] ?? '')));
             $submittedName = trim((string)($input['name'] ?? ''));
 
-            // Verify Cloudflare Turnstile CAPTCHA
-            $cfToken = trim((string)($input['cf_token'] ?? ''));
-            if (!portal_verify_turnstile($cfToken, $ip)) {
-                portal_error('CAPTCHA verification failed. Please try again.', 400);
-            }
-
             if (!preg_match('/^[A-Z0-9]{5,20}$/', $cdsAccount)) {
                 portal_error('Valid CDS account is required.', 400);
             }

@@ -48,13 +48,12 @@ Response — **name does NOT match** (no full name or bank data leaked, only mas
 
 ### `POST ?action=submit_details` — Public
 
-Submit client details (phone, email, bank info). Name must match ≥60%. Requires a valid Cloudflare Turnstile CAPTCHA token (`cf_token`).
+Submit client details (phone, email, bank info). Name must match ≥60%.
 
 ```json
 {
   "cds_account": "123456",
   "name": "JINA LA KATI",
-  "cf_token": "0.HK...",
   "phone": "0755123456",
   "email": "jina@mfano.com",
   "bank_name": "CRDB Bank PLC",
@@ -74,7 +73,6 @@ Response (201):
 ```
 
 - **Duplicate guard:** returns `409` if there is already a pending submission for this CDS.
-- **CAPTCHA:** token verified server-side against Cloudflare Turnstile (`TURNSTILE_SECRET_KEY`). If secret is not configured, verification is skipped but a non-empty token is still required.
 
 ### `POST ?action=list_submissions` — Staff
 
