@@ -2018,7 +2018,7 @@ $linkRef = (!empty($trade['ds_trade_reference'])) ? $trade['ds_trade_reference']
                         <select class="form-select" id="payment_mode" name="payment_mode" required onchange="toggleBankSelection()">
                             <option value="">Select Payment Method</option>
                             <?php foreach ($payment_methods as $method): ?>
-                                <option value="<?php echo (int)$method['id']; ?>">
+                                <option value="<?php echo (int)$method['id']; ?>" data-code="<?php echo htmlspecialchars($method['code']); ?>">
                                     <?php echo htmlspecialchars($method['code'] . ' - ' . $method['description']); ?>
                                 </option>
                             <?php endforeach; ?>
@@ -2077,7 +2077,7 @@ $linkRef = (!empty($trade['ds_trade_reference'])) ? $trade['ds_trade_reference']
                         <select class="form-select" id="bulk_payment_mode" name="payment_mode" required onchange="toggleBulkBankSelection()">
                             <option value="">Select Payment Method</option>
                             <?php foreach ($payment_methods as $method): ?>
-                                <option value="<?php echo (int)$method['id']; ?>">
+                                <option value="<?php echo (int)$method['id']; ?>" data-code="<?php echo htmlspecialchars($method['code']); ?>">
                                     <?php echo htmlspecialchars($method['code'] . ' - ' . $method['description']); ?>
                                 </option>
                             <?php endforeach; ?>
@@ -2628,7 +2628,9 @@ function showFailureDetails(tradeId, reason, action) {
 function toggleBankSelection() {
     var mode = document.getElementById('payment_mode');
     var bankField = document.getElementById('bankAccountField');
-    if (mode.value && (mode.options[mode.selectedIndex]?.text || '').toLowerCase().includes('bank')) {
+    var bankCodes = ['BC', 'BO', 'DB', 'DD', 'DS', 'DT', 'TT'];
+    var code = mode.selectedIndex >= 0 ? (mode.options[mode.selectedIndex].getAttribute('data-code') || '').toUpperCase() : '';
+    if (mode.value && bankCodes.indexOf(code) !== -1) {
         bankField.style.display = 'block';
     } else {
         bankField.style.display = 'none';
@@ -2638,7 +2640,9 @@ function toggleBankSelection() {
 function toggleBulkBankSelection() {
     var mode = document.getElementById('bulk_payment_mode');
     var bankField = document.getElementById('bulkBankAccountField');
-    if (mode.value && (mode.options[mode.selectedIndex]?.text || '').toLowerCase().includes('bank')) {
+    var bankCodes = ['BC', 'BO', 'DB', 'DD', 'DS', 'DT', 'TT'];
+    var code = mode.selectedIndex >= 0 ? (mode.options[mode.selectedIndex].getAttribute('data-code') || '').toUpperCase() : '';
+    if (mode.value && bankCodes.indexOf(code) !== -1) {
         bankField.style.display = 'block';
     } else {
         bankField.style.display = 'none';
