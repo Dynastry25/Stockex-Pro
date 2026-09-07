@@ -2322,7 +2322,7 @@ $linkRef = (!empty($trade['ds_trade_reference'])) ? $trade['ds_trade_reference']
                     <div class="mb-3">
                         <label for="export_date" class="form-label fw-bold">Settlement Date <span class="text-danger">*</span></label>
                         <input type="date" class="form-control" id="export_date" name="export_date" value="<?php echo date('Y-m-d'); ?>" required>
-                        <small class="text-muted">Select the settlement date to export.</small>
+                        <small class="text-muted">Used only when no status tab or date filter is active. Otherwise the export matches the currently selected tab and filters.</small>
                     </div>
 
                     <div class="mb-3">
@@ -2330,6 +2330,16 @@ $linkRef = (!empty($trade['ds_trade_reference'])) ? $trade['ds_trade_reference']
                         <input type="text" class="form-control" id="cds_filter" name="cds_filter" placeholder="Leave blank for all clients">
                         <small class="text-muted">Filter by a specific CDS account number.</small>
                     </div>
+
+                    <input type="hidden" name="tab" value="<?php echo htmlspecialchars($filter_tab); ?>">
+                    <input type="hidden" name="filter_status" value="<?php echo htmlspecialchars($filter_status); ?>">
+                    <input type="hidden" name="filter_client" value="<?php echo htmlspecialchars($filter_client); ?>">
+                    <input type="hidden" name="filter_security" value="<?php echo htmlspecialchars($filter_security); ?>">
+                    <input type="hidden" name="filter_date_from" value="<?php echo htmlspecialchars($filter_date_from); ?>">
+                    <input type="hidden" name="filter_date_to" value="<?php echo htmlspecialchars($filter_date_to); ?>">
+                    <input type="hidden" name="filter_amount_min" value="<?php echo htmlspecialchars((string)$filter_amount_min); ?>">
+                    <input type="hidden" name="filter_amount_max" value="<?php echo htmlspecialchars((string)$filter_amount_max); ?>">
+                    <small class="text-muted">Export inaendana na tab na filters zilizochaguliwa kwa sasa.</small>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
