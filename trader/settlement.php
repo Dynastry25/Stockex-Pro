@@ -1355,7 +1355,7 @@ include '../includes/header.php';
                     <input type="text" class="form-control form-control-sm" name="filter_client" 
                            value="<?php echo htmlspecialchars($filter_client); ?>" 
                            placeholder="Search client..." 
-                           oninput="this.form.submit()">
+                           oninput="liveFilterSettlement(this)">
                 </div>
                 
                 <div class="col-6 col-md-2">
@@ -1363,7 +1363,7 @@ include '../includes/header.php';
                     <input type="text" class="form-control form-control-sm" name="filter_security" 
                            value="<?php echo htmlspecialchars($filter_security); ?>" 
                            placeholder="Search security..." 
-                           oninput="this.form.submit()">
+                           oninput="liveFilterSettlement(this)">
                 </div>
                 
                 <div class="col-4 col-md-1">
@@ -1628,6 +1628,9 @@ include '../includes/header.php';
                             <p class="text-muted"><?php echo $filter_tab === 'all' ? 'All trades are settled or no settlements due within the period.' : 'No trades match this filter.'; ?></p>
                         </div>
                     <?php else: ?>
+                        <div class="mb-2">
+                            <small class="text-muted" id="liveFilterCountWrap">Showing <span id="liveFilterCount"><?php echo $total_records; ?></span> of <?php echo $total_records; ?> rows (live search)</small>
+                        </div>
                         <div class="table-responsive">
                             <table class="table table-hover" id="allSettlementsTable">
                                 <thead>
@@ -1822,11 +1825,9 @@ $linkRef = (!empty($trade['ds_trade_reference'])) ? $trade['ds_trade_reference']
                                                     </div>
                                                 <?php elseif ($trade['trade_side'] === 'sell'): ?>
                                                     <div class="btn-group btn-group-sm">
-                                                        <?php if ($user_role !== 'trader'): ?>
                                                         <button type="button" class="btn btn-outline-success" onclick="showPaymentModal(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-cash-coin"></i> Pay
                                                         </button>
-                                                        <?php endif; ?>
                                                         <button type="button" class="btn btn-outline-info" onclick="showLinkTradeModal(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-link"></i> Link
                                                         </button>
@@ -1839,11 +1840,9 @@ $linkRef = (!empty($trade['ds_trade_reference'])) ? $trade['ds_trade_reference']
                                                     </div>
                                                 <?php else: ?>
                                                     <div class="btn-group btn-group-sm">
-                                                        <?php if ($user_role !== 'trader'): ?>
                                                         <button type="button" class="btn btn-outline-success" onclick="showPaymentModal(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-cash-coin"></i> Pay
                                                         </button>
-                                                        <?php endif; ?>
                                                         <button type="button" class="btn btn-outline-danger" onclick="markAsFailed(<?php echo $trade['id']; ?>)">
                                                             <i class="bi bi-x-lg"></i> Cancel
                                                         </button>
@@ -2295,17 +2294,68 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
     
-    // Auto-submit on any change
+    // Auto-submit on any change (excluding the live Client/Security text search fields)
     var filterForm = document.getElementById('filterForm');
     if (filterForm) {
         var inputs = filterForm.querySelectorAll('input, select');
         inputs.forEach(function(input) {
+            if (input.name === 'filter_client' || input.name === 'filter_security') {
+                return;
+            }
             input.addEventListener('change', function() {
                 filterForm.submit();
             });
         });
     }
+
+    // Reapply any saved client/security search values on load (no reload needed)
+    liveFilterSettlement();
 });
+
+// Live (no-reload) client-side filter for the Client and Security fields.
+// Shows/hides table rows instantly as the user types, and persists the value
+// in the URL so it survives other filter reloads (status/date/amount, tabs).
+function liveFilterSettlement() {
+    var clientEl = document.querySelector('input[name="filter_client"]');
+    var secEl = document.querySelector('input[name="filter_security"]');
+    var table = document.getElementById('allSettlementsTable');
+    var clientVal = clientEl ? clientEl.value.toLowerCase().trim() : '';
+    var secVal = secEl ? secEl.value.toLowerCase().trim() : '';
+
+    // Persist the values in the URL without triggering a page reload.
+    if (clientEl || secEl) {
+        var params = new URLSearchParams(window.location.search);
+        if (clientEl) {
+            if (clientVal) { params.set('filter_client', clientVal); }
+            else { params.delete('filter_client'); }
+        }
+        if (secEl) {
+            if (secVal) { params.set('filter_security', secVal); }
+            else { params.delete('filter_security'); }
+        }
+        var newUrl = window.location.pathname + '?' + params.toString();
+        window.history.replaceState({}, '', newUrl);
+    }
+
+    if (!table) { return; }
+    var rows = table.querySelectorAll('tbody tr');
+    var visible = 0;
+    rows.forEach(function(tr) {
+        if (tr.cells.length < 4) { return; }
+        var clientText = (tr.cells[2].textContent || '').toLowerCase();
+        var secText = (tr.cells[3].textContent || '').toLowerCase();
+        var show = true;
+        if (clientVal && clientText.indexOf(clientVal) === -1) { show = false; }
+        if (secVal && secText.indexOf(secVal) === -1) { show = false; }
+        tr.style.display = show ? '' : 'none';
+        if (show) { visible++; }
+    });
+
+    // Update the live result count shown near the table if present.
+    var countEl = document.getElementById('liveFilterCount');
+    if (countEl) { countEl.textContent = visible; }
+    return visible;
+}
 
 // Toggle select all
 function toggleSelectAll(checkbox) {

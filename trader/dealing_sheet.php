@@ -383,6 +383,7 @@ try {
     ensureColumn($db, 'trades', 'approval_status', "ENUM('pending','approved','rejected') DEFAULT 'pending' AFTER status");
     ensureColumn($db, 'trades', 'counterparty_cds_account', 'VARCHAR(50) AFTER counterparty_name');
     ensureColumn($db, 'trades', 'trader', 'VARCHAR(100) AFTER additional_reference');
+    ensureColumn($db, 'etf_trades', 'trader', 'VARCHAR(100) AFTER additional_reference');
     
 } catch (Exception $e) {
     error_log("Table setup error: " . $e->getMessage());

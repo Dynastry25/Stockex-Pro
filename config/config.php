@@ -380,29 +380,16 @@ function calculateHierarchicalTotals($accounts, $target_level = 2) {
 
 /**
  * Returns the display representation of a trader value.
- * Maps short codes (from CSV trade uploads) to full names for display only;
- * values that are not in the map are returned unchanged.
+ * Returns the trader short code (from CSV trade uploads) as-is for display.
  *
  * @param string|array|null $value The raw trader value (e.g. "YCE").
- * @return string The full name for display, or the original value if unmapped.
+ * @return string The original trader short code.
  */
 function traderDisplayName($value)
 {
     if (is_array($value)) {
         $value = reset($value);
     }
-    $value = trim((string)$value);
-
-    $traderNames = [
-        'YCE' => 'Ernest & Mary',
-        'ZER' => 'Alphonce',
-        'XBA' => 'Mickdad & Maurice',
-    ];
-
-    if ($value !== '' && isset($traderNames[strtoupper($value)])) {
-        return $traderNames[strtoupper($value)];
-    }
-
-    return $value;
+    return trim((string)$value);
 }
 ?>
