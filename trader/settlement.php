@@ -396,6 +396,62 @@ if (isset($_GET['ajax'])) {
         }
     }
     
+    if ($_GET['ajax'] == 'get_client_payout_details') {
+        $trade_id = (int)$_GET['trade_id'];
+        try {
+            $stmt = $db->prepare("SELECT client_name, client_cds_account FROM trades WHERE id = ?");
+            $stmt->execute([$trade_id]);
+            $trade = $stmt->fetch();
+            if (!$trade) {
+                echo json_encode(['error' => 'Trade not found']);
+                exit;
+            }
+            
+            // Look up the client's payout account details (bank/mobile) by CDS account
+            $client = null;
+            if (!empty($trade['client_cds_account'])) {
+                $client_stmt = $db->prepare("
+                    SELECT client_name, bank_name, bank_branch, bank_account_number, currency, phone
+                    FROM clients
+                    WHERE cds_account = ? AND (is_active = 1 OR is_active IS NULL)
+                    ORDER BY id DESC
+                    LIMIT 1
+                ");
+                $client_stmt->execute([$trade['client_cds_account']]);
+                $client = $client_stmt->fetch();
+            }
+            
+            // Fallback: match by client name
+            if (!$client && !empty($trade['client_name'])) {
+                $client_stmt = $db->prepare("
+                    SELECT client_name, bank_name, bank_branch, bank_account_number, currency, phone
+                    FROM clients
+                    WHERE client_name = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                ");
+                $client_stmt->execute([$trade['client_name']]);
+                $client = $client_stmt->fetch();
+            }
+            
+            echo json_encode([
+                'trade_id' => $trade_id,
+                'client_name' => $trade['client_name'],
+                'client_cds_account' => $trade['client_cds_account'],
+                'bank_name' => $client['bank_name'] ?? '',
+                'bank_branch' => $client['bank_branch'] ?? '',
+                'bank_account_number' => $client['bank_account_number'] ?? '',
+                'currency' => $client['currency'] ?? '',
+                'phone' => $client['phone'] ?? ''
+            ]);
+            exit;
+        } catch (Exception $e) {
+            error_log("get_client_payout_details error: " . $e->getMessage());
+            echo json_encode(['error' => $e->getMessage()]);
+            exit;
+        }
+    }
+    
     if ($_GET['ajax'] == 'get_grouped_buy_trades') {
         $trade_id = (int)$_GET['trade_id'];
         try {
@@ -2049,6 +2105,16 @@ $linkRef = (!empty($trade['ds_trade_reference'])) ? $trade['ds_trade_reference']
                         <i class="bi bi-info-circle me-2"></i>
                         Payment will be recorded in the payment book and bank balance will be updated accordingly.
                     </div>
+                    
+                    <div class="border rounded p-3 bg-light" id="clientPayoutBlock" style="display: none;">
+                        <div class="d-flex align-items-center mb-2">
+                            <i class="bi bi-person-lines-fill me-2 text-primary"></i>
+                            <strong>Client Payout Account</strong>
+                        </div>
+                        <div id="clientPayoutDetails">
+                            <div class="spinner-border spinner-border-sm text-secondary"></div> Loading client account details...
+                        </div>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -2390,7 +2456,62 @@ function updateBulkActions() {
 // Show payment modal
 function showPaymentModal(tradeId) {
     document.getElementById('paymentTradeId').value = tradeId;
-    new bootstrap.Modal(document.getElementById('paymentModal')).show();
+    resetPaymentBankSelection();
+    loadClientPayoutDetails(tradeId);
+    var paymentModalEl = document.getElementById('paymentModal');
+    paymentModalEl.addEventListener('shown.bs.modal', function() {
+        toggleBankSelection();
+    }, { once: true });
+    new bootstrap.Modal(paymentModalEl).show();
+}
+
+// Reset the bank-selection state for a fresh payment
+function resetPaymentBankSelection() {
+    var mode = document.getElementById('payment_mode');
+    var bankField = document.getElementById('bankAccountField');
+    if (mode) { mode.value = ''; }
+    if (bankField) { bankField.style.display = 'none'; }
+}
+
+// Fetch and display the client's payout account (bank/mobile) details
+function loadClientPayoutDetails(tradeId) {
+    var block = document.getElementById('clientPayoutBlock');
+    var container = document.getElementById('clientPayoutDetails');
+    if (!block || !container) { return; }
+    
+    block.style.display = 'block';
+    container.innerHTML = '<div class="spinner-border spinner-border-sm text-secondary"></div> Loading client account details...';
+    
+    fetch(window.location.pathname + '?ajax=get_client_payout_details&trade_id=' + tradeId)
+        .then(response => response.json())
+        .then(data => {
+            if (!data || data.error) {
+                container.innerHTML = '<span class="text-muted small">Client account details not available.</span>';
+                return;
+            }
+            var hasBank = data.bank_name || data.bank_branch || data.bank_account_number;
+            var hasMobile = data.phone;
+            if (!hasBank && !hasMobile) {
+                container.innerHTML = '<span class="text-muted small">No payout account recorded for this client (Bank/Mobile details not set).</span>';
+                return;
+            }
+            var html = '<div class="small">';
+            html += '<div class="mb-1"><strong>Client:</strong> ' + (data.client_name || 'N/A') + ' (CDS: ' + (data.client_cds_account || 'N/A') + ')</div>';
+            if (hasBank) {
+                html += '<div class="mb-1"><i class="bi bi-bank me-1"></i><strong>Bank:</strong> ' + (data.bank_name || '-');
+                if (data.bank_branch) { html += ' - ' + data.bank_branch; }
+                html += ' ' + (data.bank_account_number || '') + (data.currency ? ' (' + data.currency + ')' : '') + '</div>';
+            }
+            if (hasMobile) {
+                html += '<div class="mb-1"><i class="bi bi-phone me-1"></i><strong>Mobile:</strong> ' + data.phone + '</div>';
+            }
+            html += '</div>';
+            container.innerHTML = html;
+        })
+        .catch(error => {
+            console.error('Error loading client payout details:', error);
+            container.innerHTML = '<span class="text-danger small">Error loading client account details.</span>';
+        });
 }
 
 // Show link trade modal
