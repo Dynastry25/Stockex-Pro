@@ -396,6 +396,32 @@ class ContractNotePDF extends TCPDF {
         $this->Cell(40, 6, '', 0, 0, 'L');
         $this->Cell(40, 6, number_format($net_amount, 2), 0, 1, 'R');
         
+        // Client payout account details (from KYC - bank/mobile)
+        $payout_bank = trim($trade['client_bank_name'] ?? '');
+        $payout_bank_acct = trim($trade['client_bank_account_number'] ?? '');
+        $payout_bank_branch = trim($trade['client_bank_branch'] ?? '');
+        $payout_phone = trim($trade['client_phone'] ?? '');
+        if (strlen($payout_bank) > 0 || strlen($payout_phone) > 0) {
+            $this->Ln(4);
+            $this->SetFillColor(240, 244, 248);
+            $this->SetTextColor(40, 60, 80);
+            $this->SetFont('helvetica', 'B', 8);
+            $this->Cell(0, 5, 'CLIENT PAYMENT ACCOUNT', 0, 1, 'L');
+            $this->SetTextColor(0, 0, 0);
+            $this->SetFont('helvetica', '', 8);
+            if (strlen($payout_bank) > 0) {
+                $payout_line = 'Bank: ' . $payout_bank;
+                if (strlen($payout_bank_branch) > 0) { $payout_line .= ' - ' . $payout_bank_branch; }
+                if (strlen($payout_bank_acct) > 0) { $payout_line .= '  (Account: ' . $payout_bank_acct . ')'; }
+                if (strlen($trade['client_currency'] ?? '') > 0) { $payout_line .= '  ' . $trade['client_currency']; }
+                $this->Cell(0, 5, $payout_line, 0, 1, 'L');
+            }
+            if (strlen($payout_phone) > 0) {
+                $this->Cell(0, 5, 'Mobile: ' . $payout_phone, 0, 1, 'L');
+            }
+            $this->Ln(3);
+        }
+        
         $this->Ln(50);
         
         // Closing section - COMPACT
@@ -786,13 +812,24 @@ function generateContractNotePDF($trade_id, $contract_type = 'single') {
                c_buyer.company_name as buyer_company_name,
                c_buyer.company_code as buyer_cds_account,
                c_seller.company_name as seller_company_name,
-               c_seller.company_code as seller_cds_account
+               c_seller.company_code as seller_cds_account,
+               cl.fee_type as client_fee_type,
+               cl.default_brokerage_fee,
+               cl.liberty_mode as client_liberty_mode,
+               cl.address as client_address,
+               cl.email as client_email,
+               cl.bank_name as client_bank_name,
+               cl.bank_branch as client_bank_branch,
+               cl.bank_account_number as client_bank_account_number,
+               cl.currency as client_currency,
+               cl.phone as client_phone
         FROM trades t
         LEFT JOIN equities e ON t.security_id = e.security_id AND t.asset_class = 'equity'
         LEFT JOIN bonds b ON t.security_id = b.security_id AND t.asset_class = 'bond'
         LEFT JOIN etf_trades et ON t.trade_reference = et.trade_reference
         LEFT JOIN companies c_buyer ON t.client_name = c_buyer.company_name
         LEFT JOIN companies c_seller ON t.counterparty_name = c_seller.company_name
+        LEFT JOIN clients cl ON t.client_cds_account = cl.cds_account
         WHERE t.id = ?
     ");
     $stmt->execute([$trade_id]);
@@ -862,12 +899,23 @@ function generateSummaryContractNote($client_id, $trade_date, $trade_side, $secu
                b.coupon_rate,
                b.maturity_date,
                c_buyer.company_name as buyer_company_name,
-               c_seller.company_name as seller_company_name
+               c_seller.company_name as seller_company_name,
+               cl.fee_type as client_fee_type,
+               cl.default_brokerage_fee,
+               cl.liberty_mode as client_liberty_mode,
+               cl.address as client_address,
+               cl.email as client_email,
+               cl.bank_name as client_bank_name,
+               cl.bank_branch as client_bank_branch,
+               cl.bank_account_number as client_bank_account_number,
+               cl.currency as client_currency,
+               cl.phone as client_phone
         FROM trades t
         LEFT JOIN equities e ON t.security_id = e.security_id AND t.asset_class = 'equity'
         LEFT JOIN bonds b ON t.security_id = b.security_id AND t.asset_class = 'bond'
         LEFT JOIN companies c_buyer ON t.client_name = c_buyer.company_name
         LEFT JOIN companies c_seller ON t.counterparty_name = c_seller.company_name
+        LEFT JOIN clients cl ON t.client_cds_account = cl.cds_account
         WHERE t.client_cds_account = ? 
         AND t.trade_date = ? 
         AND t.trade_side = ? 
@@ -976,12 +1024,23 @@ function generateDetailedContractNotes($client_id, $trade_date, $trade_side, $se
                b.coupon_rate,
                b.maturity_date,
                c_buyer.company_name as buyer_company_name,
-               c_seller.company_name as seller_company_name
+               c_seller.company_name as seller_company_name,
+               cl.fee_type as client_fee_type,
+               cl.default_brokerage_fee,
+               cl.liberty_mode as client_liberty_mode,
+               cl.address as client_address,
+               cl.email as client_email,
+               cl.bank_name as client_bank_name,
+               cl.bank_branch as client_bank_branch,
+               cl.bank_account_number as client_bank_account_number,
+               cl.currency as client_currency,
+               cl.phone as client_phone
         FROM trades t
         LEFT JOIN equities e ON t.security_id = e.security_id AND t.asset_class = 'equity'
         LEFT JOIN bonds b ON t.security_id = b.security_id AND t.asset_class = 'bond'
         LEFT JOIN companies c_buyer ON t.client_name = c_buyer.company_name
         LEFT JOIN companies c_seller ON t.counterparty_name = c_seller.company_name
+        LEFT JOIN clients cl ON t.client_cds_account = cl.cds_account
         WHERE t.client_cds_account = ? 
         AND t.trade_date = ? 
         AND t.trade_side = ? 
