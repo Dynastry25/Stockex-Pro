@@ -1167,7 +1167,9 @@ $stats = [
     'today_count' => 0,
     'today_value' => 0,
     'upcoming_count' => 0,
-    'upcoming_value' => 0
+    'upcoming_value' => 0,
+    'pending_count' => 0,
+    'pending_value' => 0
 ];
 
 foreach ($filtered_trades as $trade) {
@@ -1185,6 +1187,8 @@ foreach ($filtered_trades as $trade) {
         $stats['failed_value'] += floatval($trade['total_consideration']);
     } else {
         $settlement_date = $trade['settlement_date'] ?? $trade['trade_date'];
+        $stats['pending_count']++;
+        $stats['pending_value'] += floatval($trade['total_consideration']);
         if ($settlement_date < $today) {
             $stats['overdue_count']++;
             $stats['overdue_value'] += floatval($trade['total_consideration']);
@@ -1579,9 +1583,9 @@ include '../includes/header.php';
         <div class="card-header bg-transparent border-0">
             <ul class="nav nav-tabs nav-tabs-custom" id="settlementTabs" role="tablist">
                 <li class="nav-item">
-                    <a class="nav-link <?php echo $filter_tab === 'all' ? 'active' : ''; ?>" href="?tab=all&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_status) ? '&filter_status=' . urlencode($filter_status) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" role="tab">
-                        <i class="bi bi-list-check me-2"></i>All Settlements
-                        <span class="badge bg-primary ms-2"><?php echo $stats['total_count']; ?></span>
+                    <a class="nav-link <?php echo $filter_tab === 'pending' ? 'active' : ''; ?>" href="?tab=pending&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_status) ? '&filter_status=' . urlencode($filter_status) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" role="tab">
+                        <i class="bi bi-hourglass-split me-2"></i>Pending
+                        <span class="badge bg-secondary ms-2"><?php echo $stats['pending_count']; ?></span>
                     </a>
                 </li>
                 <li class="nav-item">
@@ -1612,6 +1616,12 @@ include '../includes/header.php';
                     <a class="nav-link <?php echo $filter_tab === 'failed' ? 'active' : ''; ?>" href="?tab=failed&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_status) ? '&filter_status=' . urlencode($filter_status) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" role="tab">
                         <i class="bi bi-x-circle me-2"></i>Failed
                         <span class="badge bg-dark ms-2"><?php echo $stats['failed_count']; ?></span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link <?php echo $filter_tab === 'all' ? 'active' : ''; ?>" href="?tab=all&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_status) ? '&filter_status=' . urlencode($filter_status) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" role="tab">
+                        <i class="bi bi-list-check me-2"></i>All Settlements
+                        <span class="badge bg-primary ms-2"><?php echo $stats['total_count']; ?></span>
                     </a>
                 </li>
             </ul>
