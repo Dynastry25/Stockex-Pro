@@ -129,9 +129,9 @@ function generateBondsSummaryHTML($client_balances, $company_name, $company_addr
                 .report-title { font-size: 18px; font-weight: bold; margin: 10px 0; color: #2c3e50; }
                 .report-subtitle { font-size: 14px; margin: 5px 0; color: #6c757d; }
                 .disclaimer { font-size: 11px; margin-top: 30px; padding: 15px; background-color: #f8f9fa; border-radius: 5px; color: #666; border-left: 4px solid #007bff; }
-                table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 10px 0; }
+                table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 10px 0; }
                 th, td { border: 1px solid #dee2e6; padding: 8px; text-align: center; }
-                th { background-color: #e9ecef; font-weight: bold; color: #495057; position: sticky; top: 0; z-index: 10; }
+                th { background-color: #e9ecef; font-weight: bold; color: #495057; }
                 .text-left { text-align: left; }
                 .text-right { text-align: right; }
                 .total-row { background-color: #f8f9fa; font-weight: bold; color: #007bff; }
@@ -152,25 +152,6 @@ function generateBondsSummaryHTML($client_balances, $company_name, $company_addr
                 .text-right { text-align: right; }
                 .total-row { background-color: #f8f8f8; font-weight: bold; }
                 .action-buttons { display: none !important; }
-            }
-            @media screen and (max-width: 768px) {
-                .client-card {
-                    border: 1px solid #dee2e6;
-                    border-radius: 8px;
-                    padding: 15px;
-                    margin-bottom: 15px;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                }
-                .card-row { margin-bottom: 8px; display: flex; justify-content: space-between; }
-                .card-label { font-weight: bold; color: #6c757d; font-size: 12px; }
-                .card-value { font-size: 14px; text-align: right; }
-                table { display: none; }
-                .mobile-view { display: block !important; }
-                .summary-cards { display: block !important; }
-            }
-            @media screen and (min-width: 769px) {
-                .mobile-view { display: none !important; }
-                .summary-cards { display: none !important; }
             }
         </style>
     </head>
@@ -275,46 +256,6 @@ function generateBondsSummaryHTML($client_balances, $company_name, $company_addr
             </tr>
         </tbody>
     </table>
-    </div>
-    
-    <div class="mobile-view">';
-    
-    $running_balance_mobile = 0;
-    foreach ($client_balances as $client) {
-        $running_balance_mobile += $client['net'];
-        $net_class = $client['net'] >= 0 ? 'positive' : 'negative';
-        $balance_class = $running_balance_mobile >= 0 ? 'positive' : 'negative';
-        
-        $html .= '
-        <div class="client-card">
-            <div class="card-row">
-                <span class="card-label">Client:</span>
-                <span class="card-value">' . htmlspecialchars($client['client_name']) . '</span>
-            </div>
-            <div class="card-row">
-                <span class="card-label">Account:</span>
-                <span class="card-value">' . htmlspecialchars($client['client_account']) . '</span>
-            </div>
-            <div class="card-row">
-                <span class="card-label">Inflow:</span>
-                <span class="card-value positive">TZS ' . number_format($client['inflow'], 2) . '</span>
-            </div>
-            <div class="card-row">
-                <span class="card-label">Outflow:</span>
-                <span class="card-value negative">TZS ' . number_format($client['outflow'], 2) . '</span>
-            </div>
-            <div class="card-row">
-                <span class="card-label">Net Position:</span>
-                <span class="card-value ' . $net_class . '">TZS ' . number_format($client['net'], 2) . '</span>
-            </div>
-            <div class="card-row">
-                <span class="card-label">Balance:</span>
-                <span class="card-value ' . $balance_class . '">TZS ' . number_format($running_balance_mobile, 2) . '</span>
-            </div>
-        </div>';
-    }
-    
-    $html .= '
     </div>
     
     <div class="row mt-4">
@@ -521,46 +462,6 @@ function generateEquitiesSummaryHTML($client_balances, $company_name, $company_a
             </tr>
         </tbody>
     </table>
-    </div>
-    
-    <div class="mobile-view">';
-    
-    $running_balance_mobile = 0;
-    foreach ($client_balances as $client) {
-        $running_balance_mobile += $client['net'];
-        $net_class = $client['net'] >= 0 ? 'positive' : 'negative';
-        $balance_class = $running_balance_mobile >= 0 ? 'positive' : 'negative';
-        
-        $html .= '
-        <div class="client-card">
-            <div class="card-row">
-                <span class="card-label">Client:</span>
-                <span class="card-value">' . htmlspecialchars($client['client_name']) . '</span>
-            </div>
-            <div class="card-row">
-                <span class="card-label">Account:</span>
-                <span class="card-value">' . htmlspecialchars($client['client_account']) . '</span>
-            </div>
-            <div class="card-row">
-                <span class="card-label">Inflow:</span>
-                <span class="card-value positive">TZS ' . number_format($client['inflow'], 2) . '</span>
-            </div>
-            <div class="card-row">
-                <span class="card-label">Outflow:</span>
-                <span class="card-value negative">TZS ' . number_format($client['outflow'], 2) . '</span>
-            </div>
-            <div class="card-row">
-                <span class="card-label">Net Position:</span>
-                <span class="card-value ' . $net_class . '">TZS ' . number_format($client['net'], 2) . '</span>
-            </div>
-            <div class="card-row">
-                <span class="card-label">Balance:</span>
-                <span class="card-value ' . $balance_class . '">TZS ' . number_format($running_balance_mobile, 2) . '</span>
-            </div>
-        </div>';
-    }
-    
-    $html .= '
     </div>
     
     <div class="row mt-4">
@@ -839,78 +740,6 @@ function generateCombinedSummaryHTML($bond_balances, $equity_balances, $company_
                     </tbody>
                 </table>
             </div>';
-    }
-    
-    // Mobile card view for bonds
-    if (!empty($bond_balances)) {
-        $html .= '
-            <div class="mobile-view">
-                <h5 class="border-bottom pb-2 mb-3" style="color: #007bff;">
-                    <i class="fas fa-file-invoice-dollar me-2"></i>BONDS SUMMARY (' . count($bond_balances) . ' clients)
-                </h5>';
-        foreach ($bond_balances as $client) {
-            $net_class = $client['net'] >= 0 ? 'positive' : 'negative';
-            $html .= '
-            <div class="client-card">
-                <div class="card-row">
-                    <span class="card-label">Client:</span>
-                    <span class="card-value">' . htmlspecialchars($client['client_name']) . '</span>
-                </div>
-                <div class="card-row">
-                    <span class="card-label">Account:</span>
-                    <span class="card-value">' . htmlspecialchars($client['client_account']) . '</span>
-                </div>
-                <div class="card-row">
-                    <span class="card-label">Inflow:</span>
-                    <span class="card-value positive">TZS ' . number_format($client['inflow'], 2) . '</span>
-                </div>
-                <div class="card-row">
-                    <span class="card-label">Outflow:</span>
-                    <span class="card-value negative">TZS ' . number_format($client['outflow'], 2) . '</span>
-                </div>
-                <div class="card-row">
-                    <span class="card-label">Net Position:</span>
-                    <span class="card-value ' . $net_class . '">TZS ' . number_format($client['net'], 2) . '</span>
-                </div>
-            </div>';
-        }
-        $html .= '</div>';
-    }
-
-    // Mobile card view for equities
-    if (!empty($equity_balances)) {
-        $html .= '
-            <div class="mobile-view">
-                <h5 class="border-bottom pb-2 mb-3" style="color: #28a745;">
-                    <i class="fas fa-chart-line me-2"></i>SHARES (EQUITIES) SUMMARY (' . count($equity_balances) . ' clients)
-                </h5>';
-        foreach ($equity_balances as $client) {
-            $net_class = $client['net'] >= 0 ? 'positive' : 'negative';
-            $html .= '
-            <div class="client-card">
-                <div class="card-row">
-                    <span class="card-label">Client:</span>
-                    <span class="card-value">' . htmlspecialchars($client['client_name']) . '</span>
-                </div>
-                <div class="card-row">
-                    <span class="card-label">Account:</span>
-                    <span class="card-value">' . htmlspecialchars($client['client_account']) . '</span>
-                </div>
-                <div class="card-row">
-                    <span class="card-label">Inflow:</span>
-                    <span class="card-value positive">TZS ' . number_format($client['inflow'], 2) . '</span>
-                </div>
-                <div class="card-row">
-                    <span class="card-label">Outflow:</span>
-                    <span class="card-value negative">TZS ' . number_format($client['outflow'], 2) . '</span>
-                </div>
-                <div class="card-row">
-                    <span class="card-label">Net Position:</span>
-                    <span class="card-value ' . $net_class . '">TZS ' . number_format($client['net'], 2) . '</span>
-                </div>
-            </div>';
-        }
-        $html .= '</div>';
     }
     
     // Overall Summary Section
@@ -1227,401 +1056,14 @@ function generateEquitiesSummaryReport($db, $company_name, $company_address, $co
     }
 }
 
-// ==================== DETAILED REPORTS ====================
-function generateBondsDetailedReport($db, $company_name, $company_address, $company_phone, $company_email, $filters) {
-    $where_conditions = ["t.asset_class = 'bond'", "t.status = 'active'"];
-    $params = [];
-
-    if (!empty($filters['period_from']) && !empty($filters['period_to'])) {
-        $where_conditions[] = "DATE(t.trade_date) BETWEEN ? AND ?";
-        $params[] = $filters['period_from'];
-        $params[] = $filters['period_to'];
-    } elseif (!empty($filters['chosen_date'])) {
-        $where_conditions[] = "DATE(t.trade_date) = ?";
-        $params[] = $filters['chosen_date'];
-    }
-
-    $where_clause = implode(' AND ', $where_conditions);
-
-    $stmt = $db->prepare("
-        SELECT 
-            t.trade_date,
-            t.client_name,
-            t.client_cds_account,
-            t.security_name,
-            t.trade_side,
-            t.quantity,
-            t.price,
-            t.consideration,
-            t.trade_id
-        FROM trades t
-        WHERE $where_clause
-        ORDER BY t.trade_date DESC, t.client_name, t.trade_side
-    ");
-    $stmt->execute($params);
-    $transactions = $stmt->fetchAll();
-
-    if (empty($transactions)) {
-        echo '<div class="container py-5"><div class="alert alert-info text-center py-5">
-            <i class="fas fa-info-circle fa-3x text-muted mb-3"></i>
-            <h5>No Bond Transactions Found</h5>
-            <p class="text-muted">No bond trades match your selected criteria.</p>
-            <a href="transactions.php?action=filter" class="btn btn-primary mt-3">
-                <i class="fas fa-filter me-2"></i>Apply New Filter
-            </a>
-        </div></div>';
-        return;
-    }
-
-    echo generateDetailedHTML($transactions, 'Bonds', 'bond', $company_name, $company_address, $company_phone, $company_email, $filters);
-}
-
-function generateEquitiesDetailedReport($db, $company_name, $company_address, $company_phone, $company_email, $filters) {
-    $where_conditions = ["t.asset_class = 'equity'", "t.status = 'active'"];
-    $params = [];
-
-    if (!empty($filters['period_from']) && !empty($filters['period_to'])) {
-        $where_conditions[] = "DATE(t.trade_date) BETWEEN ? AND ?";
-        $params[] = $filters['period_from'];
-        $params[] = $filters['period_to'];
-    } elseif (!empty($filters['chosen_date'])) {
-        $where_conditions[] = "DATE(t.trade_date) = ?";
-        $params[] = $filters['chosen_date'];
-    }
-
-    $where_clause = implode(' AND ', $where_conditions);
-
-    $stmt = $db->prepare("
-        SELECT 
-            t.trade_date,
-            t.client_name,
-            t.client_cds_account,
-            t.security_name,
-            t.trade_side,
-            t.quantity,
-            t.price,
-            t.consideration,
-            t.trade_id
-        FROM trades t
-        WHERE $where_clause
-        ORDER BY t.trade_date DESC, t.client_name, t.trade_side
-    ");
-    $stmt->execute($params);
-    $transactions = $stmt->fetchAll();
-
-    if (empty($transactions)) {
-        echo '<div class="container py-5"><div class="alert alert-info text-center py-5">
-            <i class="fas fa-info-circle fa-3x text-muted mb-3"></i>
-            <h5>No Equity Transactions Found</h5>
-            <p class="text-muted">No equity trades match your selected criteria.</p>
-            <a href="transactions.php?action=filter" class="btn btn-primary mt-3">
-                <i class="fas fa-filter me-2"></i>Apply New Filter
-            </a>
-        </div></div>';
-        return;
-    }
-
-    echo generateDetailedHTML($transactions, 'Equities', 'equity', $company_name, $company_address, $company_phone, $company_email, $filters);
-}
-
-function generateCombinedDetailedReport($db, $company_name, $company_address, $company_phone, $company_email, $filters) {
-    $where_conditions = ["t.status = 'active'"];
-    $params = [];
-
-    if (!empty($filters['period_from']) && !empty($filters['period_to'])) {
-        $where_conditions[] = "DATE(t.trade_date) BETWEEN ? AND ?";
-        $params[] = $filters['period_from'];
-        $params[] = $filters['period_to'];
-    } elseif (!empty($filters['chosen_date'])) {
-        $where_conditions[] = "DATE(t.trade_date) = ?";
-        $params[] = $filters['chosen_date'];
-    }
-
-    $where_clause = implode(' AND ', $where_conditions);
-
-    $stmt = $db->prepare("
-        SELECT 
-            t.trade_date,
-            t.client_name,
-            t.client_cds_account,
-            t.security_name,
-            t.asset_class,
-            t.trade_side,
-            t.quantity,
-            t.price,
-            t.consideration,
-            t.trade_id
-        FROM trades t
-        WHERE $where_clause
-        ORDER BY t.trade_date DESC, t.asset_class, t.client_name, t.trade_side
-    ");
-    $stmt->execute($params);
-    $transactions = $stmt->fetchAll();
-
-    if (empty($transactions)) {
-        echo '<div class="container py-5"><div class="alert alert-info text-center py-5">
-            <i class="fas fa-info-circle fa-3x text-muted mb-3"></i>
-            <h5>No Transactions Found</h5>
-            <p class="text-muted">No trades match your selected criteria.</p>
-            <a href="transactions.php?action=filter" class="btn btn-primary mt-3">
-                <i class="fas fa-filter me-2"></i>Apply New Filter
-            </a>
-        </div></div>';
-        return;
-    }
-
-    echo generateDetailedHTML($transactions, 'Combined', 'combined', $company_name, $company_address, $company_phone, $company_email, $filters);
-}
-
-function generateDetailedHTML($transactions, $report_title, $asset_type, $company_name, $company_address, $company_phone, $company_email, $filters) {
-    $period_from = !empty($filters['period_from']) ? date('d/m/Y', strtotime($filters['period_from'])) : date('d/m/Y', strtotime($filters['chosen_date'] ?? date('Y-m-d')));
-    $period_to = !empty($filters['period_to']) ? date('d/m/Y', strtotime($filters['period_to'])) : $period_from;
-    $current_date = date('d/m/Y');
-    
-    $color_code = $asset_type === 'bond' ? '#007bff' : ($asset_type === 'equity' ? '#28a745' : '#6c757d');
-    
-    $html = '
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>' . $report_title . ' Detailed Transaction Report</title>
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-        <style>
-            @media screen {
-                .header { text-align: center; margin-bottom: 20px; border-bottom: 2px solid #dee2e6; padding-bottom: 15px; }
-                .company-info { font-size: 12px; margin-bottom: 10px; color: #495057; line-height: 1.4; }
-                .report-title { font-size: 18px; font-weight: bold; margin: 10px 0; color: #2c3e50; }
-                .report-subtitle { font-size: 14px; margin: 5px 0; color: #6c757d; }
-                .disclaimer { font-size: 11px; margin-top: 30px; padding: 15px; background-color: #f8f9fa; border-radius: 5px; color: #666; border-left: 4px solid ' . $color_code . '; }
-                .table-responsive { overflow-x: auto; }
-                table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 10px 0; }
-                th, td { border: 1px solid #dee2e6; padding: 8px; text-align: center; }
-                th { background-color: #e9ecef; font-weight: bold; color: #495057; position: sticky; top: 0; z-index: 10; }
-                .text-left { text-align: left; }
-                .text-right { text-align: right; }
-                .buy-row { background-color: #fff5f5; }
-                .sell-row { background-color: #f0fff4; }
-                .action-buttons { position: sticky; top: 0; background: white; padding: 10px 0; z-index: 1000; }
-                .badge-sell { background-color: #28a745; color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px; }
-                .badge-buy { background-color: #dc3545; color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px; }
-            }
-            @media print {
-                .header { text-align: center; margin-bottom: 5px; border-bottom: 1px solid #000; padding-bottom: 3px; }
-                .company-info { font-size: 9px; margin-bottom: 5px; }
-                .report-title { font-size: 14px; font-weight: bold; margin: 5px 0; }
-                .report-subtitle { font-size: 10px; margin: 2px 0; }
-                .disclaimer { font-size: 8px; margin-top: 15px; color: #666; }
-                table { width: 100%; border-collapse: collapse; font-size: 10px; margin: 5px 0; }
-                th, td { border: 1px solid #000; padding: 4px; text-align: center; }
-                th { background-color: #f0f0f0; font-weight: bold; }
-                .text-left { text-align: left; }
-                .text-right { text-align: right; }
-                .action-buttons { display: none !important; }
-            }
-            @media screen and (max-width: 768px) {
-                .transaction-card {
-                    border: 1px solid #dee2e6;
-                    border-radius: 8px;
-                    padding: 15px;
-                    margin-bottom: 15px;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                }
-                .card-row { margin-bottom: 8px; }
-                .card-label { font-weight: bold; color: #6c757d; font-size: 12px; }
-                .card-value { font-size: 14px; }
-                table { display: none; }
-                .mobile-view { display: block !important; }
-            }
-            @media screen and (min-width: 769px) {
-                .mobile-view { display: none !important; }
-            }
-        </style>
-    </head>
-    <body>
-        <div class="container-fluid">
-            <div class="action-buttons mb-3">
-                <div class="d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0"><i class="fas fa-list me-2"></i>' . $report_title . ' Detailed Transactions</h5>
-                    <div>
-                        <button onclick="window.print()" class="btn btn-secondary btn-sm">
-                            <i class="fas fa-print me-1"></i>Print
-                        </button>
-                        <a href="transactions.php?action=filter" class="btn btn-primary btn-sm ms-2">
-                            <i class="fas fa-filter me-1"></i>New Filter
-                        </a>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="header">
-                <div style="margin-bottom: 10px;">
-                    <img src="<?php echo BASE_URL; ?>assets/HeaderLogoVfsl.jpg" alt="VFSL Logo" style="height: 50px;">
-                </div>
-                <div class="company-info">
-                    <strong style="color: #002e92; font-size: 14px;">' . strtoupper($company_name) . '</strong><br>
-                    <span style="color: #cc0000; font-style: italic; font-size: 11px;">Stockbroker/Dealer, Fund Manager & Investment Advisor</span><br>
-                    <span style="color: #002e92; font-size: 10px;">Members of the Dar Es Salaam Stock Exchange</span><br>
-                    <span style="color: #666; font-size: 10px;">' . htmlspecialchars($company_address) . '</span><br>
-                    <span style="color: #666; font-size: 10px;">Mob: +255 752 824 977 | Tel: +255 22 211 2691 | Email: info@vfsl.co.tz</span>
-                </div>
-                <div style="border-top: 2px solid #002e92; border-bottom: 1px solid #cc0000; padding: 5px 0; margin-top: 5px;"></div>
-                <div class="report-title">' . strtoupper($report_title) . ' DETAILED TRANSACTION REPORT</div>
-                <div class="report-subtitle">Period: ' . $period_from . ' to ' . $period_to . '</div>
-                <div class="report-subtitle">Date Printed: ' . $current_date . '</div>
-            </div>
-            
-            <div style="background-color: #f8f9fa; border-left: 4px solid ' . $color_code . '; padding: 10px 15px; margin: 10px 0; font-size: 11px; color: #333;">
-                <strong>Report Overview:</strong> This detailed transaction report shows every individual trade transaction for the selected period.
-                <strong>Total Transactions:</strong> ' . count($transactions) . ' trades.
-                <strong>How to Read:</strong> Each row represents one transaction. <span class="badge-sell">SELL</span> transactions are highlighted in green (money coming in). 
-                <span class="badge-buy">BUY</span> transactions are highlighted in red (money going out).
-            </div>
-            
-            <div class="table-responsive">
-                <table class="table table-bordered table-striped">
-                    <thead>
-                        <tr>
-                            <th width="3%">#</th>
-                            <th width="10%">Date</th>
-                            <th width="20%">Client Name</th>
-                            <th width="10%">Account</th>
-                            <th width="15%">Security</th>' . ($asset_type === 'combined' ? '<th width="8%">Asset</th>' : '') . 
-                            '<th width="8%">Side</th>
-                            <th width="10%">Quantity</th>
-                            <th width="10%">Price</th>
-                            <th width="12%">Consideration</th>
-                        </tr>
-                    </thead>
-                    <tbody>';
-    
-    $counter = 1;
-    $total_inflow = 0;
-    $total_outflow = 0;
-    
-    foreach ($transactions as $trans) {
-        $row_class = strtoupper($trans['trade_side']) === 'SELL' ? 'sell-row' : 'buy-row';
-        $badge_class = strtoupper($trans['trade_side']) === 'SELL' ? 'badge-sell' : 'badge-buy';
-        
-        if (strtoupper($trans['trade_side']) === 'SELL') {
-            $total_inflow += $trans['consideration'];
-        } else {
-            $total_outflow += $trans['consideration'];
-        }
-        
-        $html .= '
-            <tr class="' . $row_class . '">
-                <td>' . $counter . '</td>
-                <td>' . date('d/m/Y', strtotime($trans['trade_date'])) . '</td>
-                <td class="text-left">' . htmlspecialchars($trans['client_name']) . '</td>
-                <td class="text-left">' . htmlspecialchars($trans['client_cds_account']) . '</td>
-                <td class="text-left">' . htmlspecialchars($trans['security_name']) . '</td>' .
-                ($asset_type === 'combined' ? '<td>' . ucfirst($trans['asset_class']) . '</td>' : '') .
-                '<td><span class="' . $badge_class . '">' . strtoupper($trans['trade_side']) . '</span></td>
-                <td class="text-right">' . number_format($trans['quantity'], 0) . '</td>
-                <td class="text-right">' . number_format($trans['price'], 2) . '</td>
-                <td class="text-right">' . number_format($trans['consideration'], 2) . '</td>
-            </tr>';
-        $counter++;
-    }
-    
-    $total_net = $total_inflow - $total_outflow;
-    $total_net_class = $total_net >= 0 ? 'positive' : 'negative';
-    
-    $html .= '
-            <tr style="background-color: #f8f9fa; font-weight: bold;">
-                <td colspan="' . ($asset_type === 'combined' ? '9' : '8') . '" class="text-right"><strong>TOTALS:</strong></td>
-                <td class="text-right">
-                    <div class="text-success">In: ' . number_format($total_inflow, 2) . '</div>
-                    <div class="text-danger">Out: ' . number_format($total_outflow, 2) . '</div>
-                    <div class="' . $total_net_class . '">Net: ' . number_format($total_net, 2) . '</div>
-                </td>
-            </tr>
-        </tbody>
-    </table>
-    </div>
-    
-    <div class="mobile-view">';
-    
-    $counter = 1;
-    foreach ($transactions as $trans) {
-        $badge_class = strtoupper($trans['trade_side']) === 'SELL' ? 'badge-sell' : 'badge-buy';
-        $html .= '
-        <div class="transaction-card">
-            <div class="card-row">
-                <span class="card-label">Date:</span>
-                <span class="card-value">' . date('d/m/Y', strtotime($trans['trade_date'])) . '</span>
-            </div>
-            <div class="card-row">
-                <span class="card-label">Client:</span>
-                <span class="card-value">' . htmlspecialchars($trans['client_name']) . '</span>
-            </div>
-            <div class="card-row">
-                <span class="card-label">Security:</span>
-                <span class="card-value">' . htmlspecialchars($trans['security_name']) . '</span>
-            </div>
-            <div class="card-row">
-                <span class="card-label">Side:</span>
-                <span class="' . $badge_class . '">' . strtoupper($trans['trade_side']) . '</span>
-            </div>
-            <div class="card-row">
-                <span class="card-label">Quantity:</span>
-                <span class="card-value">' . number_format($trans['quantity'], 0) . '</span>
-            </div>
-            <div class="card-row">
-                <span class="card-label">Price:</span>
-                <span class="card-value">' . number_format($trans['price'], 2) . '</span>
-            </div>
-            <div class="card-row">
-                <span class="card-label">Consideration:</span>
-                <span class="card-value"><strong>' . number_format($trans['consideration'], 2) . '</strong></span>
-            </div>
-        </div>';
-        $counter++;
-    }
-    
-    $html .= '
-    </div>
-    
-    <div class="disclaimer mt-4">
-        <strong>Disclaimer:</strong> ' . $company_name . ' has prepared this Report solely for informational purposes. ' . $company_name . ' does not represent warrant or guarantee that the
-        Reports are accurate. ' . $company_name . ' disclaims liability for any direct indirect punitive special consequential or incidental damages related to the Reports or the use
-        of the Reports. This disclaimer applies to the Reports in their entirety irrespective of whether the Reports are used or viewed in whole or in part.
-    </div>
-    
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-    </body>
-    </html>';
-    
-    return $html;
-}
-
 function generateCombinedSummaryReport($db, $company_name, $company_address, $company_phone, $company_email, $filters) {
     $chosen_date = $filters['chosen_date'] ?? date('Y-m-d');
-    $period_from = $filters['period_from'] ?? $chosen_date;
-    $period_to = $filters['period_to'] ?? $chosen_date;
-
-    // Build conditions
-    $bond_where_conditions = ["t.asset_class = 'bond'", "t.status = 'active'"];
-    $equity_where_conditions = ["t.asset_class = 'equity'", "t.status = 'active'"];
-    $params = [];
-
-    // Use date range logic
-    if (!empty($period_from) && !empty($period_to)) {
-        $bond_where_conditions[] = "DATE(t.trade_date) BETWEEN ? AND ?";
-        $equity_where_conditions[] = "DATE(t.trade_date) BETWEEN ? AND ?";
-        $params[] = $period_from;
-        $params[] = $period_to;
-    } else {
-        $bond_where_conditions[] = "DATE(t.trade_date) = ?";
-        $equity_where_conditions[] = "DATE(t.trade_date) = ?";
-        $params[] = $chosen_date;
-    }
-
+    
+    // Get bond transactions for chosen date
+    $bond_where_conditions = ["t.asset_class = 'bond'", "t.status = 'active'", "DATE(t.trade_date) = ?"];
+    $bond_params = [$chosen_date];
+    
     $bond_where_clause = implode(' AND ', $bond_where_conditions);
-    $equity_where_clause = implode(' AND ', $equity_where_conditions);
     
     $bond_stmt = $db->prepare("
         SELECT 
@@ -1636,8 +1078,14 @@ function generateCombinedSummaryReport($db, $company_name, $company_address, $co
         GROUP BY t.client_name, t.client_cds_account, t.trade_side
         ORDER BY t.client_name, t.trade_side
     ");
-    $bond_stmt->execute($params);
+    $bond_stmt->execute($bond_params);
     $bond_client_transactions = $bond_stmt->fetchAll();
+    
+    // Get equity transactions for chosen date
+    $equity_where_conditions = ["t.asset_class = 'equity'", "t.status = 'active'", "DATE(t.trade_date) = ?"];
+    $equity_params = [$chosen_date];
+    
+    $equity_where_clause = implode(' AND ', $equity_where_conditions);
     
     $equity_stmt = $db->prepare("
         SELECT 
@@ -1652,7 +1100,7 @@ function generateCombinedSummaryReport($db, $company_name, $company_address, $co
         GROUP BY t.client_name, t.client_cds_account, t.trade_side
         ORDER BY t.client_name, t.trade_side
     ");
-    $equity_stmt->execute($params);
+    $equity_stmt->execute($equity_params);
     $equity_client_transactions = $equity_stmt->fetchAll();
     
     if (empty($bond_client_transactions) && empty($equity_client_transactions)) {
@@ -1816,19 +1264,9 @@ function displayFilterForm() {
                                         <h5 class="border-bottom pb-2 mb-3">Filter Criteria</h5>
                                         <div class="row">
                                             <div class="col-md-6 mb-3">
-                                                <label class="form-label">Report Mode</label>
-                                                <select class="form-control" name="report_mode">
-                                                    <option value="summary">Summary (Aggregated)</option>
-                                                    <option value="detailed">Detailed (All Transactions)</option>
-                                                </select>
-                                            </div>
-                                            <div class="col-md-6 mb-3">
-                                                <label class="form-label">Date Range From</label>
-                                                <input type="date" class="form-control" name="period_from" value="' . date('Y-m-d') . '">
-                                            </div>
-                                            <div class="col-md-6 mb-3">
-                                                <label class="form-label">Date Range To</label>
-                                                <input type="date" class="form-control" name="period_to" value="' . date('Y-m-d') . '">
+                                                <label class="form-label">Date</label>
+                                                <input type="date" class="form-control" name="chosen_date" value="' . date('Y-m-d') . '" required>
+                                                <small class="text-muted">Select the date for the summary report</small>
                                             </div>
                                             <div class="col-md-6 mb-3">
                                                 <label class="form-label">Trade Type (Optional)</label>
@@ -1837,6 +1275,7 @@ function displayFilterForm() {
                                                     <option value="BUY">Buy Only</option>
                                                     <option value="SELL">Sell Only</option>
                                                 </select>
+                                                <small class="text-muted">Filter by trade type (optional)</small>
                                             </div>
                                         </div>
                                     </div>
@@ -1849,7 +1288,7 @@ function displayFilterForm() {
                                                 <i class="fas fa-arrow-left me-2"></i>Back
                                             </button>
                                             <button type="submit" class="btn btn-primary">
-                                                <i class="fas fa-chart-bar me-2"></i>Generate Report
+                                                <i class="fas fa-chart-bar me-2"></i>Generate Summary Report
                                             </button>
                                         </div>
                                     </div>
@@ -1865,16 +1304,16 @@ function displayFilterForm() {
                         <div class="card-body">
                             <div class="row">
                                 <div class="col-md-4">
-                                    <h6>Summary Mode</h6>
-                                    <p class="text-muted small">Aggregated totals per client. Ideal for quick reviews and net position assessment.</p>
+                                    <h6>Bonds Summary</h6>
+                                    <p class="text-muted small">Summary of bond transactions grouped by client showing inflow, outflow and net position.</p>
                                 </div>
                                 <div class="col-md-4">
-                                    <h6>Detailed Mode</h6>
-                                    <p class="text-muted small">Lists every transaction record for the selected period.</p>
+                                    <h6>Equities Summary</h6>
+                                    <p class="text-muted small">Summary of share/equity transactions grouped by client with financial overview.</p>
                                 </div>
                                 <div class="col-md-4">
-                                    <h6>Date Range Filtering</h6>
-                                    <p class="text-muted small">Select a start and end date to analyze trends over a custom period.</p>
+                                    <h6>Combined Summary</h6>
+                                    <p class="text-muted small">Comprehensive summary showing both bonds and shares with overall totals and statistics.</p>
                                 </div>
                             </div>
                         </div>
@@ -1936,32 +1375,18 @@ if (empty($report_name) || isset($_GET['action']) && $_GET['action'] === 'filter
     exit;
 }
 
-$report_mode = $_POST['report_mode'] ?? 'summary';
-
-// Handle report generation based on report type and mode
+// Handle report generation based on report type
 switch ($report_name) {
     case 'bonds_summary':
-        if ($report_mode === 'detailed') {
-            generateBondsDetailedReport($db, $company_name, $company_address, $company_phone, $company_email, $_POST);
-        } else {
-            generateBondsSummaryReport($db, $company_name, $company_address, $company_phone, $company_email, $_POST);
-        }
+        generateBondsSummaryReport($db, $company_name, $company_address, $company_phone, $company_email, $_POST);
         break;
         
     case 'equities_summary':
-        if ($report_mode === 'detailed') {
-            generateEquitiesDetailedReport($db, $company_name, $company_address, $company_phone, $company_email, $_POST);
-        } else {
-            generateEquitiesSummaryReport($db, $company_name, $company_address, $company_phone, $company_email, $_POST);
-        }
+        generateEquitiesSummaryReport($db, $company_name, $company_address, $company_phone, $company_email, $_POST);
         break;
         
     case 'combined_summary':
-        if ($report_mode === 'detailed') {
-            generateCombinedDetailedReport($db, $company_name, $company_address, $company_phone, $company_email, $_POST);
-        } else {
-            generateCombinedSummaryReport($db, $company_name, $company_address, $company_phone, $company_email, $_POST);
-        }
+        generateCombinedSummaryReport($db, $company_name, $company_address, $company_phone, $company_email, $_POST);
         break;
         
     default:
