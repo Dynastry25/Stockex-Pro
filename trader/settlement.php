@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 // ============================================
 // SETTLEMENT.PHP - COMPLETE WITH AUTO-FILTER
 // ============================================
@@ -391,6 +391,62 @@ if (isset($_GET['ajax'])) {
             exit;
         } catch (Exception $e) {
             error_log("get_trade_details error: " . $e->getMessage());
+            echo json_encode(['error' => $e->getMessage()]);
+            exit;
+        }
+    }
+    
+    if ($_GET['ajax'] == 'get_client_payout_details') {
+        $trade_id = (int)$_GET['trade_id'];
+        try {
+            $stmt = $db->prepare("SELECT client_name, client_cds_account FROM trades WHERE id = ?");
+            $stmt->execute([$trade_id]);
+            $trade = $stmt->fetch();
+            if (!$trade) {
+                echo json_encode(['error' => 'Trade not found']);
+                exit;
+            }
+            
+            // Look up the client's payout account details (bank/mobile) by CDS account
+            $client = null;
+            if (!empty($trade['client_cds_account'])) {
+                $client_stmt = $db->prepare("
+                    SELECT client_name, bank_name, bank_branch, bank_account_number, currency, phone
+                    FROM clients
+                    WHERE cds_account = ? AND (is_active = 1 OR is_active IS NULL)
+                    ORDER BY id DESC
+                    LIMIT 1
+                ");
+                $client_stmt->execute([$trade['client_cds_account']]);
+                $client = $client_stmt->fetch();
+            }
+            
+            // Fallback: match by client name
+            if (!$client && !empty($trade['client_name'])) {
+                $client_stmt = $db->prepare("
+                    SELECT client_name, bank_name, bank_branch, bank_account_number, currency, phone
+                    FROM clients
+                    WHERE client_name = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                ");
+                $client_stmt->execute([$trade['client_name']]);
+                $client = $client_stmt->fetch();
+            }
+            
+            echo json_encode([
+                'trade_id' => $trade_id,
+                'client_name' => $trade['client_name'],
+                'client_cds_account' => $trade['client_cds_account'],
+                'bank_name' => $client['bank_name'] ?? '',
+                'bank_branch' => $client['bank_branch'] ?? '',
+                'bank_account_number' => $client['bank_account_number'] ?? '',
+                'currency' => $client['currency'] ?? '',
+                'phone' => $client['phone'] ?? ''
+            ]);
+            exit;
+        } catch (Exception $e) {
+            error_log("get_client_payout_details error: " . $e->getMessage());
             echo json_encode(['error' => $e->getMessage()]);
             exit;
         }
@@ -1167,7 +1223,9 @@ $stats = [
     'today_count' => 0,
     'today_value' => 0,
     'upcoming_count' => 0,
-    'upcoming_value' => 0
+    'upcoming_value' => 0,
+    'pending_count' => 0,
+    'pending_value' => 0
 ];
 
 foreach ($filtered_trades as $trade) {
@@ -1185,6 +1243,8 @@ foreach ($filtered_trades as $trade) {
         $stats['failed_value'] += floatval($trade['total_consideration']);
     } else {
         $settlement_date = $trade['settlement_date'] ?? $trade['trade_date'];
+        $stats['pending_count']++;
+        $stats['pending_value'] += floatval($trade['total_consideration']);
         if ($settlement_date < $today) {
             $stats['overdue_count']++;
             $stats['overdue_value'] += floatval($trade['total_consideration']);
@@ -1341,8 +1401,113 @@ include '../includes/header.php';
     <?php endif; ?>
 
     <!-- Filter Section - AUTO FILTER -->
+    <!-- Summary Cards -->
+    <div class="row mb-4">
+        <div class="col-xl-2 col-md-4 mb-4">
+            <div class="card border-left-primary shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs fw-bold text-primary text-uppercase mb-1">Total Value</div>
+                            <div class="h5 mb-0 fw-bold text-gray-800">TZS <?php echo number_format($stats['total_value'], 2); ?></div>
+                            <div class="mt-2 text-muted small"><?php echo $stats['total_count']; ?> trade groups</div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="bi bi-currency-exchange fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-xl-2 col-md-4 mb-4">
+            <div class="card border-left-danger shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs fw-bold text-danger text-uppercase mb-1">Overdue</div>
+                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $stats['overdue_count']; ?></div>
+                            <div class="mt-2 text-muted small">TZS <?php echo number_format($stats['overdue_value'], 2); ?></div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="bi bi-exclamation-triangle fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-xl-2 col-md-4 mb-4">
+            <div class="card border-left-warning shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs fw-bold text-warning text-uppercase mb-1">Due Today</div>
+                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $stats['today_count']; ?></div>
+                            <div class="mt-2 text-muted small">TZS <?php echo number_format($stats['today_value'], 2); ?></div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="bi bi-calendar-day fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-xl-2 col-md-4 mb-4">
+            <div class="card border-left-success shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs fw-bold text-success text-uppercase mb-1">Paid</div>
+                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $stats['paid_count']; ?></div>
+                            <div class="mt-2 text-muted small">TZS <?php echo number_format($stats['paid_value'], 2); ?></div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="bi bi-check-circle fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-xl-2 col-md-4 mb-4">
+            <div class="card border-left-info shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs fw-bold text-info text-uppercase mb-1">Linked</div>
+                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $stats['linked_count']; ?></div>
+                            <div class="mt-2 text-muted small">TZS <?php echo number_format($stats['linked_value'], 2); ?></div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="bi bi-link fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-xl-2 col-md-4 mb-4">
+            <div class="card border-left-dark shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs fw-bold text-dark text-uppercase mb-1">Failed</div>
+                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $stats['failed_count']; ?></div>
+                            <div class="mt-2 text-muted small">TZS <?php echo number_format($stats['failed_value'], 2); ?></div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="bi bi-x-circle fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="filter-section">
-        <form method="GET" id="filterForm" onchange="this.submit()">
+        <form method="GET" id="filterForm">
             <div class="row g-2">
                 <!-- Hidden fields to preserve existing filters -->
                 <input type="hidden" name="tab" value="<?php echo htmlspecialchars($filter_tab); ?>">
@@ -1459,113 +1624,7 @@ include '../includes/header.php';
             <?php endif; ?>
         </form>
     </div>
-
-    <!-- Summary Cards -->
-    <div class="row mb-4">
-        <div class="col-xl-2 col-md-4 mb-4">
-            <div class="card border-left-primary shadow h-100 py-2">
-                <div class="card-body">
-                    <div class="row no-gutters align-items-center">
-                        <div class="col mr-2">
-                            <div class="text-xs fw-bold text-primary text-uppercase mb-1">Total Value</div>
-                            <div class="h5 mb-0 fw-bold text-gray-800">TZS <?php echo number_format($stats['total_value'], 2); ?></div>
-                            <div class="mt-2 text-muted small"><?php echo $stats['total_count']; ?> trade groups</div>
-                        </div>
-                        <div class="col-auto">
-                            <i class="bi bi-currency-exchange fa-2x text-gray-300"></i>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="col-xl-2 col-md-4 mb-4">
-            <div class="card border-left-danger shadow h-100 py-2">
-                <div class="card-body">
-                    <div class="row no-gutters align-items-center">
-                        <div class="col mr-2">
-                            <div class="text-xs fw-bold text-danger text-uppercase mb-1">Overdue</div>
-                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $stats['overdue_count']; ?></div>
-                            <div class="mt-2 text-muted small">TZS <?php echo number_format($stats['overdue_value'], 2); ?></div>
-                        </div>
-                        <div class="col-auto">
-                            <i class="bi bi-exclamation-triangle fa-2x text-gray-300"></i>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="col-xl-2 col-md-4 mb-4">
-            <div class="card border-left-warning shadow h-100 py-2">
-                <div class="card-body">
-                    <div class="row no-gutters align-items-center">
-                        <div class="col mr-2">
-                            <div class="text-xs fw-bold text-warning text-uppercase mb-1">Due Today</div>
-                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $stats['today_count']; ?></div>
-                            <div class="mt-2 text-muted small">TZS <?php echo number_format($stats['today_value'], 2); ?></div>
-                        </div>
-                        <div class="col-auto">
-                            <i class="bi bi-calendar-day fa-2x text-gray-300"></i>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="col-xl-2 col-md-4 mb-4">
-            <div class="card border-left-success shadow h-100 py-2">
-                <div class="card-body">
-                    <div class="row no-gutters align-items-center">
-                        <div class="col mr-2">
-                            <div class="text-xs fw-bold text-success text-uppercase mb-1">Paid</div>
-                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $stats['paid_count']; ?></div>
-                            <div class="mt-2 text-muted small">TZS <?php echo number_format($stats['paid_value'], 2); ?></div>
-                        </div>
-                        <div class="col-auto">
-                            <i class="bi bi-check-circle fa-2x text-gray-300"></i>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="col-xl-2 col-md-4 mb-4">
-            <div class="card border-left-info shadow h-100 py-2">
-                <div class="card-body">
-                    <div class="row no-gutters align-items-center">
-                        <div class="col mr-2">
-                            <div class="text-xs fw-bold text-info text-uppercase mb-1">Linked</div>
-                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $stats['linked_count']; ?></div>
-                            <div class="mt-2 text-muted small">TZS <?php echo number_format($stats['linked_value'], 2); ?></div>
-                        </div>
-                        <div class="col-auto">
-                            <i class="bi bi-link fa-2x text-gray-300"></i>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="col-xl-2 col-md-4 mb-4">
-            <div class="card border-left-dark shadow h-100 py-2">
-                <div class="card-body">
-                    <div class="row no-gutters align-items-center">
-                        <div class="col mr-2">
-                            <div class="text-xs fw-bold text-dark text-uppercase mb-1">Failed</div>
-                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $stats['failed_count']; ?></div>
-                            <div class="mt-2 text-muted small">TZS <?php echo number_format($stats['failed_value'], 2); ?></div>
-                        </div>
-                        <div class="col-auto">
-                            <i class="bi bi-x-circle fa-2x text-gray-300"></i>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Floating Bulk Payment Button -->
+<!-- Floating Bulk Payment Button -->
     <?php if ($user_role !== 'trader'): ?>
     <div class="floating-bulk-payment" id="floatingBulkPayment" style="display: none;">
         <button type="button" class="btn btn-success btn-lg rounded-circle shadow-lg" onclick="showBulkPaymentModal()" data-bs-toggle="tooltip" data-bs-placement="left" title="Pay Selected Trades">
@@ -1580,9 +1639,9 @@ include '../includes/header.php';
         <div class="card-header bg-transparent border-0">
             <ul class="nav nav-tabs nav-tabs-custom" id="settlementTabs" role="tablist">
                 <li class="nav-item">
-                    <a class="nav-link <?php echo $filter_tab === 'all' ? 'active' : ''; ?>" href="?tab=all&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_status) ? '&filter_status=' . urlencode($filter_status) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" role="tab">
-                        <i class="bi bi-list-check me-2"></i>All Settlements
-                        <span class="badge bg-primary ms-2"><?php echo $stats['total_count']; ?></span>
+                    <a class="nav-link <?php echo $filter_tab === 'pending' ? 'active' : ''; ?>" href="?tab=pending&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_status) ? '&filter_status=' . urlencode($filter_status) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" role="tab">
+                        <i class="bi bi-hourglass-split me-2"></i>Pending
+                        <span class="badge bg-secondary ms-2"><?php echo $stats['pending_count']; ?></span>
                     </a>
                 </li>
                 <li class="nav-item">
@@ -1613,6 +1672,12 @@ include '../includes/header.php';
                     <a class="nav-link <?php echo $filter_tab === 'failed' ? 'active' : ''; ?>" href="?tab=failed&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_status) ? '&filter_status=' . urlencode($filter_status) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" role="tab">
                         <i class="bi bi-x-circle me-2"></i>Failed
                         <span class="badge bg-dark ms-2"><?php echo $stats['failed_count']; ?></span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link <?php echo $filter_tab === 'all' ? 'active' : ''; ?>" href="?tab=all&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_status) ? '&filter_status=' . urlencode($filter_status) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" role="tab">
+                        <i class="bi bi-list-check me-2"></i>All Settlements
+                        <span class="badge bg-primary ms-2"><?php echo $stats['total_count']; ?></span>
                     </a>
                 </li>
             </ul>
@@ -2009,7 +2074,7 @@ $linkRef = (!empty($trade['ds_trade_reference'])) ? $trade['ds_trade_reference']
                         <select class="form-select" id="payment_mode" name="payment_mode" required onchange="toggleBankSelection()">
                             <option value="">Select Payment Method</option>
                             <?php foreach ($payment_methods as $method): ?>
-                                <option value="<?php echo (int)$method['id']; ?>">
+                                <option value="<?php echo (int)$method['id']; ?>" data-code="<?php echo htmlspecialchars($method['code']); ?>">
                                     <?php echo htmlspecialchars($method['code'] . ' - ' . $method['description']); ?>
                                 </option>
                             <?php endforeach; ?>
@@ -2040,6 +2105,16 @@ $linkRef = (!empty($trade['ds_trade_reference'])) ? $trade['ds_trade_reference']
                         <i class="bi bi-info-circle me-2"></i>
                         Payment will be recorded in the payment book and bank balance will be updated accordingly.
                     </div>
+                    
+                    <div class="border rounded p-3 bg-light" id="clientPayoutBlock" style="display: none;">
+                        <div class="d-flex align-items-center mb-2">
+                            <i class="bi bi-person-lines-fill me-2 text-primary"></i>
+                            <strong>Client Payout Account</strong>
+                        </div>
+                        <div id="clientPayoutDetails">
+                            <div class="spinner-border spinner-border-sm text-secondary"></div> Loading client account details...
+                        </div>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -2068,7 +2143,7 @@ $linkRef = (!empty($trade['ds_trade_reference'])) ? $trade['ds_trade_reference']
                         <select class="form-select" id="bulk_payment_mode" name="payment_mode" required onchange="toggleBulkBankSelection()">
                             <option value="">Select Payment Method</option>
                             <?php foreach ($payment_methods as $method): ?>
-                                <option value="<?php echo (int)$method['id']; ?>">
+                                <option value="<?php echo (int)$method['id']; ?>" data-code="<?php echo htmlspecialchars($method['code']); ?>">
                                     <?php echo htmlspecialchars($method['code'] . ' - ' . $method['description']); ?>
                                 </option>
                             <?php endforeach; ?>
@@ -2247,7 +2322,7 @@ $linkRef = (!empty($trade['ds_trade_reference'])) ? $trade['ds_trade_reference']
                     <div class="mb-3">
                         <label for="export_date" class="form-label fw-bold">Settlement Date <span class="text-danger">*</span></label>
                         <input type="date" class="form-control" id="export_date" name="export_date" value="<?php echo date('Y-m-d'); ?>" required>
-                        <small class="text-muted">Select the settlement date to export.</small>
+                        <small class="text-muted">Used only when no status tab or date filter is active. Otherwise the export matches the currently selected tab and filters.</small>
                     </div>
 
                     <div class="mb-3">
@@ -2255,6 +2330,16 @@ $linkRef = (!empty($trade['ds_trade_reference'])) ? $trade['ds_trade_reference']
                         <input type="text" class="form-control" id="cds_filter" name="cds_filter" placeholder="Leave blank for all clients">
                         <small class="text-muted">Filter by a specific CDS account number.</small>
                     </div>
+
+                    <input type="hidden" name="tab" value="<?php echo htmlspecialchars($filter_tab); ?>">
+                    <input type="hidden" name="filter_status" value="<?php echo htmlspecialchars($filter_status); ?>">
+                    <input type="hidden" name="filter_client" value="<?php echo htmlspecialchars($filter_client); ?>">
+                    <input type="hidden" name="filter_security" value="<?php echo htmlspecialchars($filter_security); ?>">
+                    <input type="hidden" name="filter_date_from" value="<?php echo htmlspecialchars($filter_date_from); ?>">
+                    <input type="hidden" name="filter_date_to" value="<?php echo htmlspecialchars($filter_date_to); ?>">
+                    <input type="hidden" name="filter_amount_min" value="<?php echo htmlspecialchars((string)$filter_amount_min); ?>">
+                    <input type="hidden" name="filter_amount_max" value="<?php echo htmlspecialchars((string)$filter_amount_max); ?>">
+                    <small class="text-muted">Export inaendana na tab na filters zilizochaguliwa kwa sasa.</small>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -2381,7 +2466,62 @@ function updateBulkActions() {
 // Show payment modal
 function showPaymentModal(tradeId) {
     document.getElementById('paymentTradeId').value = tradeId;
-    new bootstrap.Modal(document.getElementById('paymentModal')).show();
+    resetPaymentBankSelection();
+    loadClientPayoutDetails(tradeId);
+    var paymentModalEl = document.getElementById('paymentModal');
+    paymentModalEl.addEventListener('shown.bs.modal', function() {
+        toggleBankSelection();
+    }, { once: true });
+    new bootstrap.Modal(paymentModalEl).show();
+}
+
+// Reset the bank-selection state for a fresh payment
+function resetPaymentBankSelection() {
+    var mode = document.getElementById('payment_mode');
+    var bankField = document.getElementById('bankAccountField');
+    if (mode) { mode.value = ''; }
+    if (bankField) { bankField.style.display = 'none'; }
+}
+
+// Fetch and display the client's payout account (bank/mobile) details
+function loadClientPayoutDetails(tradeId) {
+    var block = document.getElementById('clientPayoutBlock');
+    var container = document.getElementById('clientPayoutDetails');
+    if (!block || !container) { return; }
+    
+    block.style.display = 'block';
+    container.innerHTML = '<div class="spinner-border spinner-border-sm text-secondary"></div> Loading client account details...';
+    
+    fetch(window.location.pathname + '?ajax=get_client_payout_details&trade_id=' + tradeId)
+        .then(response => response.json())
+        .then(data => {
+            if (!data || data.error) {
+                container.innerHTML = '<span class="text-muted small">Client account details not available.</span>';
+                return;
+            }
+            var hasBank = data.bank_name || data.bank_branch || data.bank_account_number;
+            var hasMobile = data.phone;
+            if (!hasBank && !hasMobile) {
+                container.innerHTML = '<span class="text-muted small">No payout account recorded for this client (Bank/Mobile details not set).</span>';
+                return;
+            }
+            var html = '<div class="small">';
+            html += '<div class="mb-1"><strong>Client:</strong> ' + (data.client_name || 'N/A') + ' (CDS: ' + (data.client_cds_account || 'N/A') + ')</div>';
+            if (hasBank) {
+                html += '<div class="mb-1"><i class="bi bi-bank me-1"></i><strong>Bank:</strong> ' + (data.bank_name || '-');
+                if (data.bank_branch) { html += ' - ' + data.bank_branch; }
+                html += ' ' + (data.bank_account_number || '') + (data.currency ? ' (' + data.currency + ')' : '') + '</div>';
+            }
+            if (hasMobile) {
+                html += '<div class="mb-1"><i class="bi bi-phone me-1"></i><strong>Mobile:</strong> ' + data.phone + '</div>';
+            }
+            html += '</div>';
+            container.innerHTML = html;
+        })
+        .catch(error => {
+            console.error('Error loading client payout details:', error);
+            container.innerHTML = '<span class="text-danger small">Error loading client account details.</span>';
+        });
 }
 
 // Show link trade modal
@@ -2619,7 +2759,9 @@ function showFailureDetails(tradeId, reason, action) {
 function toggleBankSelection() {
     var mode = document.getElementById('payment_mode');
     var bankField = document.getElementById('bankAccountField');
-    if (mode.value && (mode.options[mode.selectedIndex]?.text || '').toLowerCase().includes('bank')) {
+    var bankCodes = ['BC', 'BO', 'DB', 'DD', 'DS', 'DT', 'TT'];
+    var code = mode.selectedIndex >= 0 ? (mode.options[mode.selectedIndex].getAttribute('data-code') || '').toUpperCase() : '';
+    if (mode.value && bankCodes.indexOf(code) !== -1) {
         bankField.style.display = 'block';
     } else {
         bankField.style.display = 'none';
@@ -2629,7 +2771,9 @@ function toggleBankSelection() {
 function toggleBulkBankSelection() {
     var mode = document.getElementById('bulk_payment_mode');
     var bankField = document.getElementById('bulkBankAccountField');
-    if (mode.value && (mode.options[mode.selectedIndex]?.text || '').toLowerCase().includes('bank')) {
+    var bankCodes = ['BC', 'BO', 'DB', 'DD', 'DS', 'DT', 'TT'];
+    var code = mode.selectedIndex >= 0 ? (mode.options[mode.selectedIndex].getAttribute('data-code') || '').toUpperCase() : '';
+    if (mode.value && bankCodes.indexOf(code) !== -1) {
         bankField.style.display = 'block';
     } else {
         bankField.style.display = 'none';

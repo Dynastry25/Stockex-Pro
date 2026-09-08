@@ -941,6 +941,32 @@ class ContractNotePDF extends TCPDF {
         $this->Cell(40, 6, '', 0, 0, 'L');
         $this->Cell(40, 6, number_format($net_amount, 2), 0, 1, 'R');
         
+        // Client payout account details (from KYC - bank/mobile)
+        $payout_bank = trim($trade['client_bank_name'] ?? '');
+        $payout_bank_acct = trim($trade['client_bank_account_number'] ?? '');
+        $payout_bank_branch = trim($trade['client_bank_branch'] ?? '');
+        $payout_phone = trim($trade['client_phone'] ?? '');
+        if (strlen($payout_bank) > 0 || strlen($payout_phone) > 0) {
+            $this->Ln(4);
+            $this->SetFillColor(240, 244, 248);
+            $this->SetTextColor(40, 60, 80);
+            $this->SetFont('helvetica', 'B', 8);
+            $this->Cell(0, 5, 'CLIENT PAYMENT ACCOUNT', 0, 1, 'L');
+            $this->SetTextColor(0, 0, 0);
+            $this->SetFont('helvetica', '', 8);
+            if (strlen($payout_bank) > 0) {
+                $payout_line = 'Bank: ' . $payout_bank;
+                if (strlen($payout_bank_branch) > 0) { $payout_line .= ' - ' . $payout_bank_branch; }
+                if (strlen($payout_bank_acct) > 0) { $payout_line .= '  (Account: ' . $payout_bank_acct . ')'; }
+                if (strlen($trade['client_currency'] ?? '') > 0) { $payout_line .= '  ' . $trade['client_currency']; }
+                $this->Cell(0, 5, $payout_line, 0, 1, 'L');
+            }
+            if (strlen($payout_phone) > 0) {
+                $this->Cell(0, 5, 'Mobile: ' . $payout_phone, 0, 1, 'L');
+            }
+            $this->Ln(3);
+        }
+        
         $this->Ln(50);
         
         $this->SetFont('helvetica', '', 8);
@@ -1167,7 +1193,12 @@ function generateContractNotePDF($trade_id, $contract_type = 'single') {
                cl.default_brokerage_fee,
                cl.liberty_mode as client_liberty_mode,
                cl.address as client_address,
-               cl.email as client_email
+               cl.email as client_email,
+               cl.bank_name as client_bank_name,
+               cl.bank_branch as client_bank_branch,
+               cl.bank_account_number as client_bank_account_number,
+               cl.currency as client_currency,
+               cl.phone as client_phone
         FROM trades t
         LEFT JOIN equities e ON t.security_id = e.security_id AND t.asset_class = 'equity'
         LEFT JOIN bonds b ON t.security_id = b.security_id AND t.asset_class = 'bond'
@@ -1261,7 +1292,12 @@ function generateSummaryContractNote($cds_account, $trade_date, $trade_side, $se
                cl.default_brokerage_fee,
                cl.liberty_mode as client_liberty_mode,
                cl.address as client_address,
-               cl.email as client_email
+               cl.email as client_email,
+               cl.bank_name as client_bank_name,
+               cl.bank_branch as client_bank_branch,
+               cl.bank_account_number as client_bank_account_number,
+               cl.currency as client_currency,
+               cl.phone as client_phone
         FROM trades t
         LEFT JOIN equities e ON t.security_id = e.security_id AND t.asset_class = 'equity'
         LEFT JOIN bonds b ON t.security_id = b.security_id AND t.asset_class = 'bond'
@@ -1384,7 +1420,12 @@ function generateDetailedContractNotes($cds_account, $trade_date, $trade_side, $
                cl.default_brokerage_fee,
                cl.liberty_mode as client_liberty_mode,
                cl.address as client_address,
-               cl.email as client_email
+               cl.email as client_email,
+               cl.bank_name as client_bank_name,
+               cl.bank_branch as client_bank_branch,
+               cl.bank_account_number as client_bank_account_number,
+               cl.currency as client_currency,
+               cl.phone as client_phone
         FROM trades t
         LEFT JOIN equities e ON t.security_id = e.security_id AND t.asset_class = 'equity'
         LEFT JOIN bonds b ON t.security_id = b.security_id AND t.asset_class = 'bond'
@@ -1718,15 +1759,20 @@ $stmt = $db->prepare("
            et.isin as etf_isin,
            c_buyer.company_name as buyer_company_name,
            c_seller.company_name as seller_company_name,
-           cl.id as client_id,
+cl.id as client_id,
            cl.client_name as proper_client_name,
            cl.fee_type as client_fee_type,
            cl.default_brokerage_fee,
            cl.liberty_mode as client_liberty_mode,
            cl.address as client_address,
-           cl.email as client_email
-    FROM trades t
-    LEFT JOIN equities e ON t.security_id = e.security_id AND t.asset_class = 'equity'
+           cl.email as client_email,
+           cl.bank_name as client_bank_name,
+           cl.bank_branch as client_bank_branch,
+           cl.bank_account_number as client_bank_account_number,
+           cl.currency as client_currency,
+           cl.phone as client_phone
+        FROM trades t
+        LEFT JOIN equities e ON t.security_id = e.security_id AND t.asset_class = 'equity'
     LEFT JOIN bonds b ON t.security_id = b.security_id AND t.asset_class = 'bond'
     LEFT JOIN equities etf ON t.security_id = etf.security_id AND t.asset_class = 'Exchange Traded Funds'
     LEFT JOIN etf_trades et ON t.trade_reference = et.trade_reference

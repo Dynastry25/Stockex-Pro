@@ -49,12 +49,34 @@ $export_type = $_POST['export_type'] ?? '';
 $export_date = $_POST['export_date'] ?? date('Y-m-d');
 $cds_filter = trim($_POST['cds_filter'] ?? '');
 
+// Get the current settlement page filter state so the export matches the
+// active tab (Pending / Overdue / Due Today / Paid / Linked / Failed /
+// All Settlements) and the applied client/security/date/amount filters.
+$filter_tab = $_POST['tab'] ?? 'all';
+$filter_status = trim($_POST['filter_status'] ?? '');
+if (empty($filter_status) && in_array($filter_tab, ['linked', 'paid', 'failed', 'today', 'overdue', 'pending'])) {
+    $filter_status = $filter_tab;
+}
+$filter_client = trim($_POST['filter_client'] ?? '');
+$filter_security = trim($_POST['filter_security'] ?? '');
+$filter_date_from = trim($_POST['filter_date_from'] ?? '');
+$filter_date_to = trim($_POST['filter_date_to'] ?? '');
+$filter_amount_min = (float)($_POST['filter_amount_min'] ?? 0);
+$filter_amount_max = (float)($_POST['filter_amount_max'] ?? 0);
+$today = date('Y-m-d');
+
+$tab_active = in_array($filter_status, ['pending', 'overdue', 'today', 'paid', 'linked', 'failed']);
+$has_date_filters = !empty($filter_date_from) || !empty($filter_date_to);
+
 if (!in_array($export_type, ['contract_notes', 'client_list'])) {
     header('Location: settlement.php?message=' . urlencode('Invalid export type selected.') . '&type=danger');
     exit;
 }
 
-// Fetch trades for the selected settlement date
+// Fetch trades matching the current filtered settlement view.
+// When a status tab or a date-range filter is active we match the on-screen
+// window (same defaults the settlement page uses); otherwise we keep the
+// classic single settlement-date export.
 $query = "
     SELECT t.*, 
            cl.address as client_address,
@@ -65,13 +87,24 @@ $query = "
     FROM trades t
     LEFT JOIN clients cl ON t.client_name = cl.client_name
     WHERE t.settlement_date IS NOT NULL 
-    AND t.settlement_date = ?
     AND t.status = 'active'
     AND t.trade_side = 'sell'
     AND (t.settlement_status IS NULL OR t.settlement_status NOT IN ('cancelled'))
 ";
 
-$params = [$export_date];
+$params = [];
+
+if ($tab_active || $has_date_filters) {
+    $d_from = !empty($filter_date_from) ? $filter_date_from : date('Y-m-d', strtotime('-30 days'));
+    $d_to = !empty($filter_date_to) ? $filter_date_to : date('Y-m-d', strtotime('+30 days'));
+    if ($d_from > $d_to) { $tmp = $d_from; $d_from = $d_to; $d_to = $tmp; }
+    $query .= " AND t.settlement_date BETWEEN ? AND ?";
+    $params[] = $d_from;
+    $params[] = $d_to;
+} else {
+    $query .= " AND t.settlement_date = ?";
+    $params[] = $export_date;
+}
 
 if (!empty($cds_filter)) {
     $query .= " AND t.client_cds_account = ?";
@@ -83,6 +116,60 @@ $query .= " ORDER BY t.client_cds_account, t.trade_side, t.security_id, t.create
 $stmt = $db->prepare($query);
 $stmt->execute($params);
 $trades = $stmt->fetchAll();
+
+// Apply the same client/security/status/amount filters as the settlement page
+// so the export matches the active tab and filters.
+$trades = array_values(array_filter($trades, function ($trade) use ($filter_status, $filter_client, $filter_security, $filter_amount_min, $filter_amount_max, $today) {
+    // Client filter
+    if ($filter_client !== '' && stripos($trade['client_name'], $filter_client) === false) {
+        return false;
+    }
+    
+    // Security filter
+    if ($filter_security !== '' && stripos($trade['security_id'], $filter_security) === false) {
+        return false;
+    }
+    
+    // Status / tab filter
+    if (!empty($filter_status) && $filter_status !== 'all') {
+        $status = $trade['settlement_status'] ?? 'pending';
+        if ($filter_status === 'overdue') {
+            if ($status === 'paid' || $status === 'linked' || $status === 'failed') {
+                return false;
+            }
+            $settlement_date = $trade['settlement_date'] ?? $trade['trade_date'];
+            if ($settlement_date >= $today) {
+                return false;
+            }
+        } elseif ($filter_status === 'today') {
+            if ($status === 'paid' || $status === 'linked' || $status === 'failed') {
+                return false;
+            }
+            $settlement_date = $trade['settlement_date'] ?? $trade['trade_date'];
+            if ($settlement_date != $today) {
+                return false;
+            }
+        } elseif ($filter_status === 'pending') {
+            if ($status === 'paid' || $status === 'linked' || $status === 'failed') {
+                return false;
+            }
+        } else {
+            if ($status !== $filter_status) {
+                return false;
+            }
+        }
+    }
+    
+    // Amount range filter
+    if ($filter_amount_min > 0 && floatval($trade['consideration']) < $filter_amount_min) {
+        return false;
+    }
+    if ($filter_amount_max > 0 && floatval($trade['consideration']) > $filter_amount_max) {
+        return false;
+    }
+    
+    return true;
+}));
 
 if (empty($trades)) {
     header('Location: settlement.php?message=' . urlencode('No trades found for the selected date.' . (!empty($cds_filter) ? ' CDS: ' . $cds_filter : '')) . '&type=warning');
