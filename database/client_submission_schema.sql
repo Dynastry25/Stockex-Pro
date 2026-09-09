@@ -10,10 +10,12 @@ CREATE TABLE IF NOT EXISTS client_submission_queue (
   match_pct INT NOT NULL DEFAULT 0 COMMENT 'Name match percentage vs stored name',
   phone VARCHAR(20) DEFAULT NULL,
   email VARCHAR(255) DEFAULT NULL,
+  address TEXT DEFAULT NULL,
   bank_name VARCHAR(100) DEFAULT NULL,
   bank_account_number VARCHAR(50) DEFAULT NULL,
   bank_branch VARCHAR(100) DEFAULT NULL,
   currency VARCHAR(10) DEFAULT 'TZS',
+  payment_methods JSON DEFAULT NULL COMMENT 'Selected payout methods: bank, phone, selcom',
   status ENUM('pending','approved','rejected','used') DEFAULT 'pending',
   review_notes TEXT DEFAULT NULL,
   reviewed_by INT DEFAULT NULL COMMENT 'staff user id',
@@ -25,6 +27,12 @@ CREATE TABLE IF NOT EXISTS client_submission_queue (
   KEY idx_status (status),
   CONSTRAINT fk_sq_client FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+
+-- Store the approved flexible payout methods on the client record while
+-- retaining legacy bank columns for compatibility with existing reports.
+ALTER TABLE clients
+  ADD COLUMN IF NOT EXISTS payment_methods JSON DEFAULT NULL COMMENT 'Approved payout methods from client portal';
 
 -- Extend audit action enum
 ALTER TABLE client_profile_update_log
