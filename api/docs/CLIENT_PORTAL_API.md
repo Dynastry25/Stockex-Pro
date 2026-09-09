@@ -1,119 +1,157 @@
 # StockEx — Client Submission API
 
-Open-form submission API. Clients submit their details via a public form. Staff reviews submissions before applying changes to client records.
+Open-form client update API. Clients verify a CDS account by name, submit contact/address/payment details, and staff reviews each submission before approved values are applied to the client record.
 
 - **Base URL:** `/api/portal/index.php`
 - **Format:** JSON only, HTTPS only
+- **Name-match threshold:** 60% by default (`PORTAL_NAME_MATCH_MIN`)
 
-## Actions
+## Client actions
 
-### `POST ?action=lookup_cds` — Public
+### `POST ?action=lookup_cds`
 
-Look up a CDS account and check name match.
-
-```json
-{"cds_account": "123456", "name": "JINA LA KATI"}
-```
-
-Response — **name matches (≥60%)**:
-```json
-{
-  "success": true,
-  "data": {
-    "cds_account": "123456",
-    "client_name": "JINA LA KATI",
-    "name_hint": "JA*****TI",
-    "match_pct": 75,
-    "requires_name": false,
-    "bank_current": {"phone": "...", "email": "...", "bank_account_number": "..."}
-  }
-}
-```
-
-Response — **name does NOT match** (no full name or bank data leaked, only masked hint):
-```json
-{
-  "success": true,
-  "data": {
-    "cds_account": "123456",
-    "name_hint": "JA*****TI",
-    "match_pct": 15,
-    "requires_name": true
-  }
-}
-```
-
-- Name matching is **Levenshtein-based** (handles typos, missing middle names, reversed order). Minimum match: 60% (configurable via `PORTAL_NAME_MATCH_MIN`).
-- **Rate limits:** 20 lookups/IP/min, 200/IP/day, 10 lookups per CDS account per hour.
-
-### `POST ?action=submit_details` — Public
-
-Submit client details (phone, email, bank info). Name must match ≥60%.
+Look up a CDS account and compare the submitted name with the account name.
 
 ```json
 {
   "cds_account": "123456",
-  "name": "JINA LA KATI",
-  "phone": "0755123456",
-  "email": "jina@mfano.com",
-  "bank_name": "CRDB Bank PLC",
-  "bank_account_number": "0123456789",
-  "bank_branch": "Kinondoni",
-  "currency": "TZS"
+  "name": "DENZEL CHANGA"
 }
 ```
 
-Response (201):
+The comparison is not tied to first/middle/last-name positions. Any two or more exact stored name parts should pass the default gate, including reordered names. A single name is capped below the default pass mark. String similarity also contributes a smaller allowance for ordinary spelling variations.
+
+Successful match:
+
 ```json
 {
   "success": true,
-  "data": {"submission_id": 1, "match_pct": 75, "client_id": 123, "cds_account": "123456"},
+  "data": {
+    "cds_account": "123456",
+    "client_name": "DENZEL ENOCK CHANGA",
+    "name_hint": "DE***************GA",
+    "match_pct": 89,
+    "requires_name": false,
+    "bank_current": {
+      "phone": "255712345678",
+      "email": "client@example.com",
+      "address": "Mikocheni, Dar es Salaam",
+      "payment_methods": {
+        "bank": {
+          "bank_name": "CRDB Bank PLC",
+          "account_number": "0123456789",
+          "branch": "Kinondoni",
+          "currency": "TZS"
+        }
+      }
+    }
+  }
+}
+```
+
+If the name does not pass the gate, the API returns `requires_name: true` and does not expose the full client/contact/payment record.
+
+Rate limits remain enforced by the portal helpers.
+
+### `POST ?action=submit_details`
+
+Submit client contact/address details and one or more payment methods for staff review.
+
+```json
+{
+  "cds_account": "123456",
+  "name": "DENZEL CHANGA",
+  "phone": "0755123456",
+  "email": "client@example.com",
+  "address": "Mikocheni, Dar es Salaam",
+  "payment_methods": {
+    "bank": {
+      "bank_name": "CRDB Bank PLC",
+      "account_number": "0123456789",
+      "branch": "Kinondoni",
+      "currency": "TZS"
+    },
+    "phone": {
+      "phone_number": "0755123456",
+      "provider": "M-Pesa"
+    },
+    "selcom": {
+      "account_number": "SEL-123456",
+      "account_name": "DENZEL CHANGA"
+    }
+  }
+}
+```
+
+Supported `payment_methods` keys:
+
+- `bank` — requires `bank_name`, `account_number`, and `currency`; `branch` is optional.
+- `phone` — requires a valid Tanzanian `phone_number` and `provider`/mobile-money service.
+- `selcom` — requires `account_number` and `account_name`.
+
+When `payment_methods` is explicitly supplied, at least one supported method is required. Legacy flat bank fields are still accepted during a rolling frontend/backend transition.
+
+Response (201):
+
+```json
+{
+  "success": true,
+  "data": {
+    "submission_id": 1,
+    "match_pct": 89,
+    "client_id": 123,
+    "cds_account": "123456"
+  },
   "message": "Submission received. We will review your details shortly."
 }
 ```
 
-- **Duplicate guard:** returns `409` if there is already a pending submission for this CDS.
+A pending submission for the same CDS account is rejected with `409`.
 
-### `POST ?action=list_submissions` — Staff
+## Staff actions
 
-List pending submissions.
+### `POST ?action=list_submissions`
 
 ```json
 {"status": "pending", "limit": 50, "offset": 0}
 ```
 
-### `POST ?action=approve_submission` — Staff
+The admin and CEO review screens display submitted address and the selected Bank / Mobile Phone / Selcom details.
 
-Approve a submission and copy bank details to the client record.
-
-```json
-{"submission_id": 1}
-```
-
-### `POST ?action=reject_submission` — Staff
-
-Reject with a reason.
-
-```json
-{"submission_id": 1, "reason": "Name does not match client records."}
-```
-
-### `POST ?action=get_submission` — Staff
-
-Get submission details.
+### `POST ?action=approve_submission`
 
 ```json
 {"submission_id": 1}
 ```
 
-### `GET ?action=csrf_token` — Staff
+Approval applies submitted phone, email and address. Approved `payment_methods` are stored on the client record. Bank details are also mirrored into the legacy bank columns for compatibility with existing StockEx functionality.
 
-Get a CSRF token for forms.
+### `POST ?action=reject_submission`
 
-### `POST ?action=mint_link` — Staff
+```json
+{"submission_id": 1, "reason": "Submitted details could not be verified."}
+```
 
-Generate a secure link for a client (legacy fallback).
+### `POST ?action=get_submission`
 
-### `POST ?action=revoke_link` — Staff
+```json
+{"submission_id": 1}
+```
 
-Revoke all active links for a CDS account.
+### `GET ?action=csrf_token`
+
+Returns a CSRF token for authenticated staff operations.
+
+### Legacy link actions
+
+`mint_link` and `revoke_link` remain available for older workflows where applicable.
+
+## Database migration
+
+Before enabling the updated client frontend in production, apply the migration on the StockEx server:
+
+```bash
+php database/run_client_payment_details_migration.php
+```
+
+The runner applies the same changes documented in `database/client_payment_details_schema.sql` using the application's configured database connection. The migration adds `address` and `payment_methods` to the submission queue and `payment_methods` to the approved client record. The statements are additive/idempotent (`ADD COLUMN IF NOT EXISTS`).

@@ -97,6 +97,20 @@ function portal_read_input() {
     return $_POST;
 }
 
+
+function portal_text_length($value) {
+    $value = (string)$value;
+    return function_exists('mb_strlen') ? mb_strlen($value, 'UTF-8') : strlen($value);
+}
+
+function portal_text_substr($value, $start, $length = null) {
+    $value = (string)$value;
+    if (function_exists('mb_substr')) {
+        return $length === null ? mb_substr($value, $start, null, 'UTF-8') : mb_substr($value, $start, $length, 'UTF-8');
+    }
+    return $length === null ? substr($value, $start) : substr($value, $start, $length);
+}
+
 function portal_table_columns($db, $table) {
     static $cache = [];
     if (!isset($cache[$table])) {
@@ -175,11 +189,14 @@ function portal_validate_profile($input) {
     $email = trim((string)($input['email'] ?? ''));
     if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) $errors[] = 'Email address is invalid.';
     elseif ($email !== '') $clean['email'] = $email;
+    $address = trim((string)($input['address'] ?? ''));
+    if (portal_text_length($address) > 500) $errors[] = 'address must be 500 characters or less.';
+    elseif ($address !== '') $clean['address'] = $address;
     $bankName = trim((string)($input['bank_name'] ?? ''));
     if (strlen($bankName) > 100) $errors[] = 'bank_name must be 100 characters or less.';
     elseif ($bankName !== '') $clean['bank_name'] = $bankName;
     $bankAccount = trim((string)($input['bank_account_number'] ?? ''));
-    if ($bankAccount !== '' && !preg_match('/^[A-Za-z0-9\-]{5,50}$/', $bankAccount)) $errors[] = 'bank_account_number: 5-50 alphanumeric characters.';
+    if ($bankAccount !== '' && !preg_match('/^[A-Za-z0-9 .\-\/]{5,50}$/', $bankAccount)) $errors[] = 'bank_account_number: 5-50 letters, numbers, spaces, dots, slashes or hyphens.';
     elseif ($bankAccount !== '') $clean['bank_account_number'] = $bankAccount;
     $bankBranch = trim((string)($input['bank_branch'] ?? ''));
     if (strlen($bankBranch) > 100) $errors[] = 'bank_branch must be 100 characters or less.';
@@ -190,12 +207,124 @@ function portal_validate_profile($input) {
     return ['errors' => $errors, 'clean' => $clean];
 }
 
+/**
+ * Validate the flexible payout methods used by the public portal.
+ * Multiple methods may be selected. Each selected method must contain
+ * the minimum details required to make it operationally useful.
+ */
+function portal_validate_payment_methods($raw, $requireAtLeastOne = true) {
+    $errors = [];
+    $clean = [];
+
+    if (!is_array($raw)) {
+        return [
+            'errors' => $requireAtLeastOne ? ['Select at least one payment method.'] : [],
+            'clean' => []
+        ];
+    }
+
+    $allowed = ['bank', 'phone', 'selcom'];
+    foreach ($raw as $method => $details) {
+        if (!in_array($method, $allowed, true) || !is_array($details)) continue;
+
+        if ($method === 'bank') {
+            $bankName = trim((string)($details['bank_name'] ?? ''));
+            $account = trim((string)($details['account_number'] ?? $details['bank_account_number'] ?? ''));
+            $branch = trim((string)($details['branch'] ?? $details['bank_branch'] ?? ''));
+            $currency = strtoupper(trim((string)($details['currency'] ?? 'TZS')));
+
+            if ($bankName === '') $errors[] = 'Bank name is required for bank payments.';
+            if (portal_text_length($bankName) > 100) $errors[] = 'Bank name must be 100 characters or less.';
+            if ($account === '') $errors[] = 'Bank account number is required for bank payments.';
+            elseif (!preg_match('/^[A-Za-z0-9 .\-\/]{5,50}$/', $account)) $errors[] = 'Bank account number format is invalid.';
+            if (portal_text_length($branch) > 100) $errors[] = 'Bank branch must be 100 characters or less.';
+            if (!in_array($currency, PORTAL_VALID_CURRENCIES, true)) $errors[] = 'Invalid bank currency.';
+
+            if ($bankName !== '' && $account !== '' && in_array($currency, PORTAL_VALID_CURRENCIES, true)) {
+                $clean['bank'] = [
+                    'bank_name' => $bankName,
+                    'account_number' => $account,
+                    'branch' => $branch,
+                    'currency' => $currency
+                ];
+            }
+        }
+
+        if ($method === 'phone') {
+            $phone = portal_normalize_phone($details['phone_number'] ?? $details['phone'] ?? '');
+            $provider = trim((string)($details['provider'] ?? ''));
+
+            if (!$phone) $errors[] = 'A valid payment phone number is required for mobile payments.';
+            if ($provider === '') $errors[] = 'Mobile payment provider is required.';
+            elseif (portal_text_length($provider) > 60) $errors[] = 'Mobile payment provider must be 60 characters or less.';
+
+            if ($phone && $provider !== '') {
+                $clean['phone'] = [
+                    'phone_number' => $phone,
+                    'provider' => $provider
+                ];
+            }
+        }
+
+        if ($method === 'selcom') {
+            $account = trim((string)($details['account_number'] ?? $details['account'] ?? ''));
+            $accountName = trim((string)($details['account_name'] ?? $details['name'] ?? ''));
+
+            if ($account === '') $errors[] = 'Selcom account number is required.';
+            elseif (portal_text_length($account) > 80) $errors[] = 'Selcom account number must be 80 characters or less.';
+            if ($accountName === '') $errors[] = 'Selcom account name is required.';
+            elseif (portal_text_length($accountName) > 120) $errors[] = 'Selcom account name must be 120 characters or less.';
+
+            if ($account !== '' && $accountName !== '') {
+                $clean['selcom'] = [
+                    'account_number' => $account,
+                    'account_name' => $accountName
+                ];
+            }
+        }
+    }
+
+    if ($requireAtLeastOne && empty($clean) && empty($errors)) {
+        $errors[] = 'Select at least one payment method.';
+    }
+
+    return ['errors' => array_values(array_unique($errors)), 'clean' => $clean];
+}
+
+/** Build a bank payment method from the legacy flat bank fields. */
+function portal_payment_methods_from_legacy($input) {
+    $bankName = trim((string)($input['bank_name'] ?? ''));
+    $account = trim((string)($input['bank_account_number'] ?? ''));
+    $branch = trim((string)($input['bank_branch'] ?? ''));
+    $currency = strtoupper(trim((string)($input['currency'] ?? 'TZS')));
+
+    if ($bankName === '' && $account === '' && $branch === '') return [];
+    if (!in_array($currency, PORTAL_VALID_CURRENCIES, true)) $currency = 'TZS';
+
+    return [
+        'bank' => [
+            'bank_name' => $bankName,
+            'account_number' => $account,
+            'branch' => $branch,
+            'currency' => $currency
+        ]
+    ];
+}
+
+function portal_decode_payment_methods($value) {
+    if (is_array($value)) return $value;
+    if (!is_string($value) || trim($value) === '') return [];
+    $decoded = json_decode($value, true);
+    return is_array($decoded) ? $decoded : [];
+}
+
 function portal_read_contact($db, $client) {
     $cols = portal_table_columns($db, 'clients');
     $security = new SecurityManager();
     $phone = $client['phone'] ?? null;
     $email = $client['email'] ?? null;
     $bankAccount = $client['bank_account_number'] ?? null;
+
     if (in_array('phone_encrypted', $cols, true) && !empty($client['phone_encrypted'])) {
         $d = $security->decryptSensitiveData($client['phone_encrypted']);
         if ($d) $phone = $d;
@@ -208,7 +337,28 @@ function portal_read_contact($db, $client) {
         $d = $security->decryptSensitiveData($client['bank_account_encrypted']);
         if ($d) $bankAccount = $d;
     }
-    return ['phone' => $phone, 'email' => $email, 'bank_account_number' => $bankAccount];
+
+    $current = [
+        'phone' => $phone,
+        'email' => $email,
+        'address' => $client['address'] ?? null,
+        'bank_name' => $client['bank_name'] ?? null,
+        'bank_account_number' => $bankAccount,
+        'bank_branch' => $client['bank_branch'] ?? null,
+        'currency' => $client['currency'] ?? 'TZS',
+        'payment_methods' => []
+    ];
+
+    if (in_array('payment_methods', $cols, true) && !empty($client['payment_methods'])) {
+        $current['payment_methods'] = portal_decode_payment_methods($client['payment_methods']);
+    }
+
+    // Existing customers can be pre-filled before the new JSON field has data.
+    if (empty($current['payment_methods']) && ($current['bank_name'] || $current['bank_account_number'] || $current['bank_branch'])) {
+        $current['payment_methods'] = portal_payment_methods_from_legacy($current);
+    }
+
+    return $current;
 }
 
 // ===========================================================================
@@ -216,12 +366,12 @@ function portal_read_contact($db, $client) {
 // ===========================================================================
 
 /**
- * Fuzzy name match percentage using Levenshtein distance.
- * Normalizes both names, then computes similarity based on
- * word-level matching combined with Levenshtein string distance.
+ * Flexible name comparison for the client portal.
  *
- * Weighted: 60% word overlap + 40% Levenshtein ratio.
- * This handles typos, missing middle names, and reversed order.
+ * The comparison is token-based rather than tied to first/middle/last-name
+ * positions: any two exact stored name parts should pass the default gate.
+ * String similarity still contributes a smaller score for ordinary typos and
+ * reordered names, while a single name alone is capped below the pass mark.
  */
 function portal_name_match_pct($stored, $input) {
     $norm = function ($s) {
@@ -233,32 +383,51 @@ function portal_name_match_pct($stored, $input) {
     if ($a === '' || $b === '') return 0;
     if ($a === $b) return 100;
 
-    // Word overlap (order-insensitive)
-    $wa = array_unique(explode(' ', $a));
-    $wb = array_unique(explode(' ', $b));
-    $wordScore = count($wa) > 0 && count($wb) > 0
-        ? count(array_intersect($wa, $wb)) / max(count($wa), count($wb))
-        : 0;
+    $wa = array_values(array_unique(array_filter(explode(' ', $a))));
+    $wb = array_values(array_unique(array_filter(explode(' ', $b))));
+    $intersection = array_intersect($wa, $wb);
+    $matched = count($intersection);
 
-    // Levenshtein string similarity
+    // The portal accepts any two (or more) correct name parts, not a specific
+    // first/middle/last-name slot. Weight coverage of what the client typed
+    // more strongly than coverage of every stored name part.
+    $inputCoverage = count($wb) > 0 ? $matched / count($wb) : 0;
+    $storedCoverage = count($wa) > 0 ? $matched / count($wa) : 0;
+
     $lev = levenshtein($a, $b);
-    $maxLen = max(mb_strlen($a), mb_strlen($b));
-    $levScore = $maxLen > 0 ? 1 - ($lev / $maxLen) : 0;
+    $maxLen = max(portal_text_length($a), portal_text_length($b));
+    $levScore = $maxLen > 0 ? max(0, 1 - ($lev / $maxLen)) : 0;
 
-    // Weighted combination
-    $pct = (int)round(($wordScore * 0.6 + $levScore * 0.4) * 100);
+    $pct = (int)round(($inputCoverage * 0.65 + $storedCoverage * 0.20 + $levScore * 0.15) * 100);
 
-    // Also check if any single input word is a substring of a stored word
-    // (handles Swahili name variations: e.g., "MBARAKA" vs "MBARAKA SAIDI")
+    // Any two exact stored name parts should comfortably pass the default
+    // 60% gate, even when the database contains three or four names.
+    if (count($wb) >= 2 && $matched === count($wb)) {
+        $pct = max($pct, min(96, 76 + min(20, (count($wb) - 2) * 8)));
+    }
+
+    // A single name on its own must not satisfy the comparison gate for a
+    // multi-part stored name. This keeps the gate useful while allowing any
+    // two names regardless of position/order.
+    if (count($wb) === 1 && count($wa) > 1) {
+        $pct = min($pct, 55);
+    }
+
+    // Give a small typo allowance when an input token is substantially the
+    // same as a stored token (e.g. one-character spelling variation).
     foreach ($wb as $iw) {
         foreach ($wa as $sw) {
-            if (mb_strlen($iw) >= 3 && mb_strpos($sw, $iw) !== false) {
-                $pct = max($pct, (int)round(($wordScore * 0.6 + $levScore * 0.4 + 0.15) * 100));
+            $longest = max(portal_text_length($iw), portal_text_length($sw));
+            if ($longest < 4) continue;
+            $distance = levenshtein($iw, $sw);
+            if ($distance === 1) {
+                $pct = min(100, $pct + 6);
+                break;
             }
         }
     }
 
-    return min(100, $pct);
+    return min(100, max(0, $pct));
 }
 
 /**
@@ -267,10 +436,10 @@ function portal_name_match_pct($stored, $input) {
 function portal_mask_name($name) {
     $name = trim((string)$name);
     if ($name === '') return '';
-    $len = mb_strlen($name);
+    $len = portal_text_length($name);
     if ($len <= 4) return $name;
     $stars = max(3, $len - 4);
-    return mb_substr($name, 0, 2) . str_repeat('*', $stars) . mb_substr($name, -2);
+    return portal_text_substr($name, 0, 2) . str_repeat('*', $stars) . portal_text_substr($name, -2);
 }
 
 /**

@@ -941,12 +941,33 @@ class ContractNotePDF extends TCPDF {
         $this->Cell(40, 6, '', 0, 0, 'L');
         $this->Cell(40, 6, number_format($net_amount, 2), 0, 1, 'R');
         
-        // Client payout account details (from KYC - bank/mobile)
-        $payout_bank = trim($trade['client_bank_name'] ?? '');
-        $payout_bank_acct = trim($trade['client_bank_account_number'] ?? '');
-        $payout_bank_branch = trim($trade['client_bank_branch'] ?? '');
-        $payout_phone = trim($trade['client_phone'] ?? '');
-        if (strlen($payout_bank) > 0 || strlen($payout_phone) > 0) {
+        // Client payout details selected through the client portal.
+        $payout_methods = [];
+        if (!empty($trade['client_payment_methods'])) {
+            $decoded_methods = json_decode($trade['client_payment_methods'], true);
+            if (is_array($decoded_methods)) $payout_methods = $decoded_methods;
+        }
+
+        // Backward compatibility for clients created before flexible payout methods.
+        if (empty($payout_methods)) {
+            $legacy_bank = trim($trade['client_bank_name'] ?? '');
+            $legacy_account = trim($trade['client_bank_account_number'] ?? '');
+            $legacy_branch = trim($trade['client_bank_branch'] ?? '');
+            if ($legacy_bank !== '' || $legacy_account !== '' || $legacy_branch !== '') {
+                $payout_methods['bank'] = [
+                    'bank_name' => $legacy_bank,
+                    'account_number' => $legacy_account,
+                    'branch' => $legacy_branch,
+                    'currency' => trim($trade['client_currency'] ?? '')
+                ];
+            }
+            $legacy_phone = trim($trade['client_phone'] ?? '');
+            if ($legacy_phone !== '') {
+                $payout_methods['phone'] = ['phone_number' => $legacy_phone, 'provider' => 'Mobile'];
+            }
+        }
+
+        if (!empty($payout_methods)) {
             $this->Ln(4);
             $this->SetFillColor(240, 244, 248);
             $this->SetTextColor(40, 60, 80);
@@ -954,15 +975,30 @@ class ContractNotePDF extends TCPDF {
             $this->Cell(0, 5, 'CLIENT PAYMENT ACCOUNT', 0, 1, 'L');
             $this->SetTextColor(0, 0, 0);
             $this->SetFont('helvetica', '', 8);
-            if (strlen($payout_bank) > 0) {
-                $payout_line = 'Bank: ' . $payout_bank;
-                if (strlen($payout_bank_branch) > 0) { $payout_line .= ' - ' . $payout_bank_branch; }
-                if (strlen($payout_bank_acct) > 0) { $payout_line .= '  (Account: ' . $payout_bank_acct . ')'; }
-                if (strlen($trade['client_currency'] ?? '') > 0) { $payout_line .= '  ' . $trade['client_currency']; }
-                $this->Cell(0, 5, $payout_line, 0, 1, 'L');
+
+            if (!empty($payout_methods['bank'])) {
+                $bank = $payout_methods['bank'];
+                $line = 'Bank: ' . trim($bank['bank_name'] ?? '');
+                if (!empty($bank['branch'])) $line .= ' - ' . trim($bank['branch']);
+                if (!empty($bank['account_number'])) $line .= '  (Account: ' . trim($bank['account_number']) . ')';
+                if (!empty($bank['currency'])) $line .= '  ' . trim($bank['currency']);
+                $this->Cell(0, 5, $line, 0, 1, 'L');
             }
-            if (strlen($payout_phone) > 0) {
-                $this->Cell(0, 5, 'Mobile: ' . $payout_phone, 0, 1, 'L');
+
+            if (!empty($payout_methods['phone'])) {
+                $mobile = $payout_methods['phone'];
+                $provider = trim($mobile['provider'] ?? 'Mobile');
+                $number = trim($mobile['phone_number'] ?? $mobile['phone'] ?? '');
+                $this->Cell(0, 5, $provider . ': ' . $number, 0, 1, 'L');
+            }
+
+            if (!empty($payout_methods['selcom'])) {
+                $selcom = $payout_methods['selcom'];
+                $account = trim($selcom['account_number'] ?? $selcom['account'] ?? '');
+                $account_name = trim($selcom['account_name'] ?? $selcom['name'] ?? '');
+                $line = 'Selcom: ' . $account;
+                if ($account_name !== '') $line .= ' (' . $account_name . ')';
+                $this->Cell(0, 5, $line, 0, 1, 'L');
             }
             $this->Ln(3);
         }
@@ -1198,6 +1234,7 @@ function generateContractNotePDF($trade_id, $contract_type = 'single') {
                cl.bank_branch as client_bank_branch,
                cl.bank_account_number as client_bank_account_number,
                cl.currency as client_currency,
+               cl.payment_methods as client_payment_methods,
                cl.phone as client_phone
         FROM trades t
         LEFT JOIN equities e ON t.security_id = e.security_id AND t.asset_class = 'equity'
@@ -1297,6 +1334,7 @@ function generateSummaryContractNote($cds_account, $trade_date, $trade_side, $se
                cl.bank_branch as client_bank_branch,
                cl.bank_account_number as client_bank_account_number,
                cl.currency as client_currency,
+               cl.payment_methods as client_payment_methods,
                cl.phone as client_phone
         FROM trades t
         LEFT JOIN equities e ON t.security_id = e.security_id AND t.asset_class = 'equity'
@@ -1425,6 +1463,7 @@ function generateDetailedContractNotes($cds_account, $trade_date, $trade_side, $
                cl.bank_branch as client_bank_branch,
                cl.bank_account_number as client_bank_account_number,
                cl.currency as client_currency,
+               cl.payment_methods as client_payment_methods,
                cl.phone as client_phone
         FROM trades t
         LEFT JOIN equities e ON t.security_id = e.security_id AND t.asset_class = 'equity'
@@ -1770,6 +1809,7 @@ cl.id as client_id,
            cl.bank_branch as client_bank_branch,
            cl.bank_account_number as client_bank_account_number,
            cl.currency as client_currency,
+           cl.payment_methods as client_payment_methods,
            cl.phone as client_phone
         FROM trades t
         LEFT JOIN equities e ON t.security_id = e.security_id AND t.asset_class = 'equity'

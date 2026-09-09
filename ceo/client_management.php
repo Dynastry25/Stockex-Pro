@@ -1046,10 +1046,10 @@ include '../includes/header.php';
                         <thead>
                             <tr>
                                 <th>CDS</th>
-                                <th>Submitted Name</th>
+                                <th>Client / Contact</th>
                                 <th>Match%</th>
-                                <th>Bank</th>
-                                <th>Account</th>
+                                <th>Address</th>
+                                <th>Payment Details</th>
                                 <th>Status</th>
                                 <th>Date</th>
                                 <th>Actions</th>
@@ -1393,6 +1393,62 @@ function portalRevokeLinks(showConfirmation) {
 }
 
 // ===== Client Submissions Queue =====
+function portalEscapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+function portalSubmissionPaymentSummary(submission) {
+    let methods = {};
+    if (submission.payment_methods) {
+        try {
+            methods = typeof submission.payment_methods === 'string'
+                ? JSON.parse(submission.payment_methods)
+                : submission.payment_methods;
+        } catch (e) {
+            methods = {};
+        }
+    }
+
+    if ((!methods || Object.keys(methods).length === 0) &&
+        (submission.bank_name || submission.bank_account_number || submission.bank_branch)) {
+        methods = {
+            bank: {
+                bank_name: submission.bank_name || '',
+                account_number: submission.bank_account_number || '',
+                branch: submission.bank_branch || '',
+                currency: submission.currency || 'TZS'
+            }
+        };
+    }
+
+    const rows = [];
+    if (methods.bank) {
+        const bank = methods.bank;
+        const detail = [bank.bank_name, bank.account_number || bank.bank_account_number, bank.branch || bank.bank_branch]
+            .filter(Boolean).map(portalEscapeHtml).join(' · ');
+        rows.push(`<div><span class="badge bg-primary me-1">Bank</span><small>${detail || '-'}</small></div>`);
+    }
+    if (methods.phone) {
+        const phone = methods.phone;
+        const detail = [phone.provider, phone.phone_number || phone.phone]
+            .filter(Boolean).map(portalEscapeHtml).join(' · ');
+        rows.push(`<div class="mt-1"><span class="badge bg-info text-dark me-1">Phone</span><small>${detail || '-'}</small></div>`);
+    }
+    if (methods.selcom) {
+        const selcom = methods.selcom;
+        const detail = [selcom.account_name || selcom.name, selcom.account_number || selcom.account]
+            .filter(Boolean).map(portalEscapeHtml).join(' · ');
+        rows.push(`<div class="mt-1"><span class="badge bg-secondary me-1">Selcom</span><small>${detail || '-'}</small></div>`);
+    }
+
+    return rows.length ? rows.join('') : '<span class="text-muted">-</span>';
+}
+
 function loadSubmissions(status, btn) {
     status = status || 'pending';
     if (btn) {
@@ -1414,26 +1470,38 @@ function loadSubmissions(status, btn) {
             document.getElementById('submissionsBody').innerHTML = '<tr><td colspan="8" class="text-center text-muted">No submissions.</td></tr>';
             return;
         }
+
         const statusBadges = { pending: 'warning', approved: 'success', rejected: 'danger' };
-        document.getElementById('submissionsBody').innerHTML = subs.map(s => `
-            <tr>
-                <td>${s.cds_account || '-'}</td>
-                <td>${s.submitted_name || '-'}</td>
-                <td><span class="badge bg-${s.match_pct >= 60 ? 'success' : 'danger'}">${s.match_pct}%</span></td>
-                <td>${s.bank_name || '-'}</td>
-                <td>${s.bank_account_number || '-'}</td>
-                <td><span class="badge bg-${statusBadges[s.status] || 'secondary'}">${s.status}</span></td>
-                <td>${s.created_at || '-'}</td>
-                <td>${s.status === 'pending' ?
-                    `<button class="btn btn-sm btn-success me-1" onclick="reviewSubmission(${s.id}, 'approve')"><i class="bi bi-check-lg"></i></button><button class="btn btn-sm btn-danger" onclick="reviewSubmission(${s.id}, 'reject')"><i class="bi bi-x-lg"></i></button>` :
-                    (s.status === 'approved' ? `<small class="text-muted">${s.reviewer_name || ''}</small>` : `<small class="text-muted" title="${(s.review_notes || '').replace(/"/g, '&quot;')}">${s.reviewer_name || ''}</small>`)
-                }</td>
-            </tr>
-        `).join('');
+        document.getElementById('submissionsBody').innerHTML = subs.map(s => {
+            const matchPct = Number(s.match_pct || 0);
+            const contactBits = [];
+            if (s.phone) contactBits.push(portalEscapeHtml(s.phone));
+            if (s.email) contactBits.push(portalEscapeHtml(s.email));
+            const reviewer = portalEscapeHtml(s.reviewer_name || '');
+            const notes = portalEscapeHtml(s.review_notes || '');
+
+            return `
+                <tr>
+                    <td>${portalEscapeHtml(s.cds_account || '-')}</td>
+                    <td>
+                        <div class="fw-semibold">${portalEscapeHtml(s.submitted_name || '-')}</div>
+                        ${contactBits.length ? `<small class="text-muted">${contactBits.join(' · ')}</small>` : ''}
+                    </td>
+                    <td><span class="badge bg-${matchPct >= 60 ? 'success' : 'danger'}">${matchPct}%</span></td>
+                    <td><small>${portalEscapeHtml(s.address || '-')}</small></td>
+                    <td style="min-width: 250px">${portalSubmissionPaymentSummary(s)}</td>
+                    <td><span class="badge bg-${statusBadges[s.status] || 'secondary'}">${portalEscapeHtml(s.status || '-')}</span></td>
+                    <td>${portalEscapeHtml(s.created_at || '-')}</td>
+                    <td>${s.status === 'pending' ?
+                        `<button class="btn btn-sm btn-success me-1" onclick="reviewSubmission(${Number(s.id)}, 'approve')" title="Approve"><i class="bi bi-check-lg"></i></button><button class="btn btn-sm btn-danger" onclick="reviewSubmission(${Number(s.id)}, 'reject')" title="Reject"><i class="bi bi-x-lg"></i></button>` :
+                        (s.status === 'approved' ? `<small class="text-muted">${reviewer}</small>` : `<small class="text-muted" title="${notes}">${reviewer}</small>`)
+                    }</td>
+                </tr>`;
+        }).join('');
         new bootstrap.Modal(document.getElementById('submissionsModal')).show();
     })
     .catch(err => {
-        document.getElementById('submissionsBody').innerHTML = `<tr><td colspan="8" class="text-danger">${err.message}</td></tr>`;
+        document.getElementById('submissionsBody').innerHTML = `<tr><td colspan="8" class="text-danger">${portalEscapeHtml(err.message)}</td></tr>`;
         new bootstrap.Modal(document.getElementById('submissionsModal')).show();
     });
 }

@@ -159,7 +159,7 @@ try {
 
             // Name match check
             if ($submittedName === '') {
-                portal_error('Please enter your full name for verification.', 400);
+                portal_error('Please enter at least two of your names for verification.', 400);
             }
             $matchPct = portal_name_match_pct($client['client_name'], $submittedName);
             $minMatch = (int)env('PORTAL_NAME_MATCH_MIN', 60);
@@ -171,18 +171,51 @@ try {
                 );
             }
 
-            // Sanitize inputs
-            $phone = isset($input['phone']) ? portal_normalize_phone($input['phone']) : null;
-            $email = isset($input['email']) ? filter_var(trim($input['email']), FILTER_SANITIZE_EMAIL) : null;
-            $bankName = isset($input['bank_name']) ? trim($input['bank_name']) : null;
-            $bankAccount = isset($input['bank_account_number']) ? trim($input['bank_account_number']) : null;
-            $bankBranch = isset($input['bank_branch']) ? trim($input['bank_branch']) : null;
-            $currency = isset($input['currency']) ? strtoupper(trim($input['currency'])) : 'TZS';
-            if (!in_array($currency, ['TZS', 'USD', 'EUR', 'GBP'], true)) {
-                $currency = 'TZS';
+            // Validate contact details.
+            $phoneRaw = trim((string)($input['phone'] ?? ''));
+            $phone = $phoneRaw !== '' ? portal_normalize_phone($phoneRaw) : null;
+            if ($phoneRaw !== '' && !$phone) {
+                portal_error('Please enter a valid Tanzanian phone number.', 400);
             }
 
-            // Check for existing pending submission for this CDS
+            $email = trim((string)($input['email'] ?? ''));
+            if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                portal_error('Please enter a valid email address.', 400);
+            }
+            $email = $email !== '' ? $email : null;
+
+            $address = trim((string)($input['address'] ?? ''));
+            if (portal_text_length($address) > 500) {
+                portal_error('Address must be 500 characters or less.', 400);
+            }
+            $address = $address !== '' ? $address : null;
+
+            // New clients explicitly send payment_methods. Legacy portal builds can
+            // still submit flat bank fields during a rolling deployment.
+            $paymentMethodsExplicit = array_key_exists('payment_methods', $input);
+            if ($paymentMethodsExplicit) {
+                $paymentValidation = portal_validate_payment_methods($input['payment_methods'], true);
+                if (!empty($paymentValidation['errors'])) {
+                    portal_error('Please complete the selected payment details.', 400, $paymentValidation['errors']);
+                }
+                $paymentMethods = $paymentValidation['clean'];
+            } else {
+                $paymentMethods = portal_payment_methods_from_legacy($input);
+            }
+
+            $bank = $paymentMethods['bank'] ?? [];
+            $bankName = $bank['bank_name'] ?? (isset($input['bank_name']) ? trim((string)$input['bank_name']) : null);
+            $bankAccount = $bank['account_number'] ?? (isset($input['bank_account_number']) ? trim((string)$input['bank_account_number']) : null);
+            $bankBranch = $bank['branch'] ?? (isset($input['bank_branch']) ? trim((string)$input['bank_branch']) : null);
+            $currency = $bank['currency'] ?? (isset($input['currency']) ? strtoupper(trim((string)$input['currency'])) : 'TZS');
+            if (!in_array($currency, PORTAL_VALID_CURRENCIES, true)) $currency = 'TZS';
+
+            $queueColumns = portal_table_columns($db, 'client_submission_queue');
+            if ($paymentMethodsExplicit && (!in_array('address', $queueColumns, true) || !in_array('payment_methods', $queueColumns, true))) {
+                portal_error('The client portal is being upgraded. Please try again shortly.', 503);
+            }
+
+            // Check for existing pending submission for this CDS.
             $stmt = $db->prepare(
                 "SELECT id FROM client_submission_queue WHERE cds_account = :cds AND status = 'pending' LIMIT 1"
             );
@@ -196,15 +229,18 @@ try {
                 );
             }
 
-            // Insert into submission queue
+            // Insert into submission queue. New fields are added dynamically so
+            // old portal builds remain usable during deployment ordering.
             try {
-                $stmt = $db->prepare(
-                    "INSERT INTO client_submission_queue
-                        (client_id, cds_account, submitted_name, match_pct, phone, email, bank_name,
-                         bank_account_number, bank_branch, currency, client_ip)
-                     VALUES (:cid, :cds, :name, :pct, :phone, :email, :bn, :ba, :bb, :curr, :ip)"
-                );
-                $stmt->execute([
+                $columns = [
+                    'client_id', 'cds_account', 'submitted_name', 'match_pct', 'phone', 'email',
+                    'bank_name', 'bank_account_number', 'bank_branch', 'currency', 'client_ip'
+                ];
+                $placeholders = [
+                    ':cid', ':cds', ':name', ':pct', ':phone', ':email',
+                    ':bn', ':ba', ':bb', ':curr', ':ip'
+                ];
+                $params = [
                     ':cid' => $client['id'],
                     ':cds' => $cdsAccount,
                     ':name' => $submittedName,
@@ -216,19 +252,41 @@ try {
                     ':bb' => $bankBranch,
                     ':curr' => $currency,
                     ':ip' => $ip
-                ]);
+                ];
+
+                if (in_array('address', $queueColumns, true)) {
+                    $columns[] = 'address';
+                    $placeholders[] = ':address';
+                    $params[':address'] = $address;
+                }
+                if (in_array('payment_methods', $queueColumns, true)) {
+                    $columns[] = 'payment_methods';
+                    $placeholders[] = ':payment_methods';
+                    $params[':payment_methods'] = !empty($paymentMethods)
+                        ? json_encode($paymentMethods, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+                        : null;
+                }
+
+                $stmt = $db->prepare(
+                    'INSERT INTO client_submission_queue (' . implode(', ', $columns) . ') VALUES (' . implode(', ', $placeholders) . ')'
+                );
+                $stmt->execute($params);
 
                 portal_log($db, $client['id'], null, 'form_submission', [
                     'match_pct' => $matchPct,
                     'phone' => $phone,
                     'email' => $email,
+                    'address' => $address,
+                    'payment_method_types' => array_keys($paymentMethods),
                     'bank_name' => $bankName,
                     'bank_account' => $bankAccount,
                     'bank_branch' => $bankBranch
                 ], null);
 
                 $security->auditLog($ip, 'PORTAL_SUBMISSION', $cdsAccount, true, [
-                    'match_pct' => $matchPct, 'submitted' => true
+                    'match_pct' => $matchPct,
+                    'submitted' => true,
+                    'payment_method_types' => array_keys($paymentMethods)
                 ]);
 
                 portal_json([
@@ -276,45 +334,136 @@ try {
             $staff = get_logged_in_user();
 
             try {
-                // 1) Update the client record with any provided bank fields
+                $clientColumns = portal_table_columns($db, 'clients');
+                $paymentMethodsRaw = $submission['payment_methods'] ?? null;
+                $hasAuthoritativePayments = is_string($paymentMethodsRaw) && trim($paymentMethodsRaw) !== '';
+                $paymentMethods = $hasAuthoritativePayments ? portal_decode_payment_methods($paymentMethodsRaw) : [];
+                $bank = $paymentMethods['bank'] ?? null;
+
+                if ($hasAuthoritativePayments && !in_array('payment_methods', $clientColumns, true)) {
+                    portal_error('Database migration for payment details is not complete.', 503);
+                }
+
                 $set = [];
                 $cParams = [];
-                if ($submission['bank_name'] !== null && $submission['bank_name'] !== '') {
-                    $set[] = "bank_name = :bn";
-                    $cParams[':bn'] = $submission['bank_name'];
+
+                // Contact details submitted through the portal are applied after
+                // staff approval. Keep encrypted mirror columns in sync when the
+                // production schema contains them.
+                $encryptedContact = $security->encryptSensitiveData([
+                    'phone' => $submission['phone'] ?? null,
+                    'email' => $submission['email'] ?? null,
+                    'bank_account' => $bank['account_number'] ?? ($submission['bank_account_number'] ?? null)
+                ]);
+
+                if (!empty($submission['phone']) && in_array('phone', $clientColumns, true)) {
+                    $set[] = 'phone = :phone';
+                    $cParams[':phone'] = $submission['phone'];
+                    if (in_array('phone_encrypted', $clientColumns, true)) {
+                        $set[] = 'phone_encrypted = :phone_encrypted';
+                        $cParams[':phone_encrypted'] = $encryptedContact['phone'];
+                    }
                 }
-                if ($submission['bank_account_number'] !== null && $submission['bank_account_number'] !== '') {
-                    $set[] = "bank_account_number = :ba";
-                    $cParams[':ba'] = $submission['bank_account_number'];
+
+                if (!empty($submission['email']) && in_array('email', $clientColumns, true)) {
+                    $set[] = 'email = :email';
+                    $cParams[':email'] = $submission['email'];
+                    if (in_array('email_encrypted', $clientColumns, true)) {
+                        $set[] = 'email_encrypted = :email_encrypted';
+                        $cParams[':email_encrypted'] = $encryptedContact['email'];
+                    }
                 }
-                if ($submission['bank_branch'] !== null && $submission['bank_branch'] !== '') {
-                    $set[] = "bank_branch = :bb";
-                    $cParams[':bb'] = $submission['bank_branch'];
+
+                if (!empty($submission['address']) && in_array('address', $clientColumns, true)) {
+                    $set[] = 'address = :address';
+                    $cParams[':address'] = $submission['address'];
                 }
-                if ($submission['currency'] !== null && $submission['currency'] !== '') {
-                    $set[] = "currency = :curr";
-                    $cParams[':curr'] = $submission['currency'];
+
+                if ($hasAuthoritativePayments && in_array('payment_methods', $clientColumns, true)) {
+                    $set[] = 'payment_methods = :payment_methods';
+                    $cParams[':payment_methods'] = json_encode($paymentMethods, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
                 }
+
+                if ($hasAuthoritativePayments) {
+                    // The new payment selection is authoritative. Mirror the bank
+                    // method into legacy columns used by existing reports/notes;
+                    // clear those columns when bank is not selected.
+                    if ($bank) {
+                        if (in_array('bank_name', $clientColumns, true)) {
+                            $set[] = 'bank_name = :bank_name';
+                            $cParams[':bank_name'] = $bank['bank_name'] ?? null;
+                        }
+                        if (in_array('bank_account_number', $clientColumns, true)) {
+                            $set[] = 'bank_account_number = :bank_account_number';
+                            $cParams[':bank_account_number'] = $bank['account_number'] ?? null;
+                        }
+                        if (in_array('bank_account_encrypted', $clientColumns, true)) {
+                            $set[] = 'bank_account_encrypted = :bank_account_encrypted';
+                            $cParams[':bank_account_encrypted'] = $encryptedContact['bank_account'];
+                        }
+                        if (in_array('bank_branch', $clientColumns, true)) {
+                            $set[] = 'bank_branch = :bank_branch';
+                            $cParams[':bank_branch'] = $bank['branch'] ?? null;
+                        }
+                        if (in_array('currency', $clientColumns, true)) {
+                            $set[] = 'currency = :currency';
+                            $cParams[':currency'] = $bank['currency'] ?? 'TZS';
+                        }
+                    } else {
+                        foreach (['bank_name', 'bank_account_number', 'bank_branch'] as $column) {
+                            if (in_array($column, $clientColumns, true)) $set[] = $column . ' = NULL';
+                        }
+                        if (in_array('bank_account_encrypted', $clientColumns, true)) $set[] = 'bank_account_encrypted = NULL';
+                    }
+                } else {
+                    // Legacy submission: preserve the old behavior and copy only
+                    // bank values that were actually supplied.
+                    if (!empty($submission['bank_name']) && in_array('bank_name', $clientColumns, true)) {
+                        $set[] = 'bank_name = :legacy_bank_name';
+                        $cParams[':legacy_bank_name'] = $submission['bank_name'];
+                    }
+                    if (!empty($submission['bank_account_number']) && in_array('bank_account_number', $clientColumns, true)) {
+                        $set[] = 'bank_account_number = :legacy_bank_account';
+                        $cParams[':legacy_bank_account'] = $submission['bank_account_number'];
+                        if (in_array('bank_account_encrypted', $clientColumns, true)) {
+                            $set[] = 'bank_account_encrypted = :legacy_bank_account_encrypted';
+                            $cParams[':legacy_bank_account_encrypted'] = $encryptedContact['bank_account'];
+                        }
+                    }
+                    if (!empty($submission['bank_branch']) && in_array('bank_branch', $clientColumns, true)) {
+                        $set[] = 'bank_branch = :legacy_bank_branch';
+                        $cParams[':legacy_bank_branch'] = $submission['bank_branch'];
+                    }
+                    if (!empty($submission['currency']) && in_array('currency', $clientColumns, true)) {
+                        $set[] = 'currency = :legacy_currency';
+                        $cParams[':legacy_currency'] = $submission['currency'];
+                    }
+                }
+
+                $db->beginTransaction();
 
                 if (!empty($set)) {
                     $cParams[':cid'] = $submission['client_id'];
-                    $db->prepare("UPDATE clients SET " . implode(', ', $set) . " WHERE id = :cid")
+                    $db->prepare('UPDATE clients SET ' . implode(', ', $set) . ' WHERE id = :cid')
                         ->execute($cParams);
                 }
 
-                // 2) Mark the submission approved (separate bound params)
-                $sParams = [
-                    ':sid' => $submissionId,
-                    ':by' => (int)$staff['id'],
-                    ':ip' => $ip
-                ];
                 $db->prepare(
                     "UPDATE client_submission_queue SET status = 'approved', reviewed_by = :by,
                      reviewed_at = NOW(), client_ip = :ip WHERE id = :sid"
-                )->execute($sParams);
+                )->execute([
+                    ':sid' => $submissionId,
+                    ':by' => (int)$staff['id'],
+                    ':ip' => $ip
+                ]);
+
+                $db->commit();
 
                 portal_log($db, $submission['client_id'], null, 'form_submission_approved', [
-                    'submission_id' => $submissionId, 'staff_id' => $staff['id'], 'staff_name' => $staff['full_name'] ?? $staff['username']
+                    'submission_id' => $submissionId,
+                    'staff_id' => $staff['id'],
+                    'staff_name' => $staff['full_name'] ?? $staff['username'],
+                    'payment_method_types' => array_keys($paymentMethods)
                 ], $staff['id']);
 
                 portal_json([
@@ -324,6 +473,7 @@ try {
                 ], 200, 'Submission approved and client record updated.');
 
             } catch (Exception $e) {
+                if ($db->inTransaction()) $db->rollBack();
                 error_log('Approve submission error: ' . $e->getMessage());
                 portal_error('Could not approve submission.', 500);
             }
