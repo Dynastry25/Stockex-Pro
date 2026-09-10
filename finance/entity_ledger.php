@@ -225,6 +225,22 @@ function getEntityTransactions($db, $entity_type, $entity_id, $start_date = null
         $transactions[] = $row;
     };
 
+    $pushClientTrade = function (array $row) use (&$transactions) {
+        $amount = (float)($row['amount'] ?? 0);
+        $side = strtolower((string)($row['trade_side'] ?? ''));
+        if ($amount <= 0 || ($side !== 'buy' && $side !== 'sell')) {
+            return;
+        }
+
+        // Client ledgers must show trade consideration only. Fees, VAT and other
+        // accounting postings belong to the GL and are intentionally excluded here.
+        // BUY = client owes us (debit); SELL = we owe client (credit).
+        $row['amount'] = $amount;
+        $row['debit'] = $side === 'buy' ? $amount : 0.0;
+        $row['credit'] = $side === 'sell' ? $amount : 0.0;
+        $transactions[] = $row;
+    };
+
     $pushCustodianTrade = function (array $row) use (&$transactions) {
         $amount = (float)($row['amount'] ?? 0);
         $side = strtolower((string)($row['trade_side'] ?? ''));
@@ -308,7 +324,7 @@ function getEntityTransactions($db, $entity_type, $entity_id, $start_date = null
                 error_log("Entity ledger bank payments id={$entity_id}: " . $e->getMessage());
             }
         }
-    } elseif ($entity_type !== 'chart_account') {
+    } elseif ($entity_type !== 'chart_account' && $entity_type !== 'client') {
         // These two queries are deliberately the same source rules used by debtors.php.
         // In particular, no extra status condition is added here: adding one caused the
         // list to show a balance while the detail page showed zero transactions.
@@ -372,6 +388,86 @@ function getEntityTransactions($db, $entity_type, $entity_id, $start_date = null
             }
         } catch (Throwable $e) {
             error_log("Entity ledger payments type={$entity_type}, id={$entity_id}: " . $e->getMessage());
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Client trade ledger: use the canonical trades table directly.
+    // Do not expand trade references into general_ledger rows because that exposes
+    // VAT, brokerage/commission and other fee postings that are not client trades.
+    // ------------------------------------------------------------------
+    if ($entity_type === 'client') {
+        $clientCds = trim((string)($entity['cds_account'] ?? $entity['code'] ?? ''));
+        $clientName = trim((string)($entity['name'] ?? ''));
+
+        if ($clientCds !== '' || $clientName !== '') {
+            try {
+                $where = [];
+                $params = [];
+                if ($clientCds !== '') {
+                    $where[] = 't.client_cds_account = ?';
+                    $params[] = $clientCds;
+                }
+                if ($clientName !== '') {
+                    $where[] = 't.client_name = ?';
+                    $params[] = $clientName;
+                }
+
+                $sql = "SELECT t.trade_date AS transaction_date,
+                               'client_trade' AS transaction_type,
+                               t.trade_reference AS reference,
+                               t.exchange_reference AS related_reference,
+                               '' AS description,
+                               t.consideration AS amount,
+                               t.trade_side,
+                               COALESCE(t.currency, 'TZS') AS currency,
+                               t.security_id AS account,
+                               t.security_name AS account_name,
+                               'trades' AS source_table,
+                               t.id AS source_id,
+                               t.created_at,
+                               t.uploaded_by AS created_by,
+                               'Trade' AS source_label,
+                               t.asset_class,
+                               t.security_name,
+                               t.security_id,
+                               t.quantity,
+                               t.price,
+                               t.rate,
+                               t.settlement_date
+                        FROM trades t
+                        WHERE (" . implode(' OR ', $where) . ")
+                          AND COALESCE(t.consideration, 0) <> 0
+                          AND (t.status IS NULL OR t.status <> 'cancelled')";
+                $addDateScope($sql, $params, 't.trade_date');
+                $addSearch($sql, $params, [
+                    't.trade_reference', 't.exchange_reference', 't.security_id',
+                    't.security_name', 't.client_name', 't.client_cds_account'
+                ]);
+                $sql .= ' ORDER BY t.trade_date ASC, t.id ASC';
+                $stmt = $db->prepare($sql);
+                $stmt->execute($params);
+
+                foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                    $security = trim((string)($row['security_name'] ?? ''));
+                    if ($security === '') {
+                        $security = trim((string)($row['security_id'] ?? ''));
+                    }
+                    $side = strtoupper((string)($row['trade_side'] ?? ''));
+                    $settlementDate = trim((string)($row['settlement_date'] ?? ''));
+                    $description = $side . ' trade';
+                    if ($security !== '') {
+                        $description .= ' - ' . $security;
+                    }
+                    if ($settlementDate !== '') {
+                        $description .= ' (settles ' . $settlementDate . ')';
+                    }
+                    $row['description'] = $description;
+                    $pushClientTrade($row);
+                }
+            } catch (Throwable $e) {
+                error_log("Entity ledger client trades id={$entity_id}: " . $e->getMessage());
+            }
         }
     }
 
@@ -477,51 +573,8 @@ function getEntityTransactions($db, $entity_type, $entity_id, $start_date = null
                 $pushGl($row);
             }
         } elseif ($entity_type === 'client') {
-            $cds = trim((string)($entity['cds_account'] ?? $entity['code'] ?? ''));
-            if ($cds !== '' || $entity_name !== '') {
-                $tradeStmt = $db->prepare("SELECT trade_reference FROM trades WHERE client_cds_account = ? OR client_name = ?");
-                $tradeStmt->execute([$cds, $entity_name]);
-                $tradeRefs = array_values(array_filter($tradeStmt->fetchAll(PDO::FETCH_COLUMN), static function ($ref) {
-                    return trim((string)$ref) !== '';
-                }));
-
-                if ($tradeRefs) {
-                    $placeholders = implode(',', array_fill(0, count($tradeRefs), '?'));
-                    $sql = "SELECT gl.transaction_date,
-                                   'gl_entry' AS transaction_type,
-                                   gl.reference_no AS reference,
-                                   NULL AS related_reference,
-                                   gl.description,
-                                   gl.debit_amount,
-                                   gl.credit_amount,
-                                   COALESCE(gl.currency, 'TSH') AS currency,
-                                   gl.account_code AS account,
-                                   COALESCE(coa.account_name, gl.account_name, gl.account_code) AS account_name,
-                                   'general_ledger' AS source_table,
-                                   gl.id AS source_id,
-                                   gl.created_at,
-                                   gl.created_by,
-                                   'GL Entry' AS source_label
-                            FROM general_ledger gl
-                            LEFT JOIN chart_of_accounts coa ON gl.account_code = coa.account_code
-                            WHERE gl.reference_no IN ({$placeholders})";
-                    $params = $tradeRefs;
-                    // debtors.php historically applies no as-of filter to client GL rows.
-                    // Preserve that behavior unless the user explicitly selects a date range.
-                    if ($start_date && $end_date) {
-                        $sql .= ' AND gl.transaction_date BETWEEN ? AND ?';
-                        $params[] = $start_date;
-                        $params[] = $end_date;
-                    }
-                    $addSearch($sql, $params, ['gl.reference_no', 'gl.description']);
-                    $sql .= ' ORDER BY gl.transaction_date ASC, gl.id ASC';
-                    $stmt = $db->prepare($sql);
-                    $stmt->execute($params);
-                    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-                        $pushGl($row);
-                    }
-                }
-            }
+            // Client detail is trade-only. General-ledger rows include VAT, fees and
+            // other accounting postings, so they must never appear in this ledger.
         } elseif ($entity_type !== 'bank_account') {
             $sql = "SELECT gl.transaction_date,
                            'gl_entry' AS transaction_type,
@@ -1315,6 +1368,7 @@ include '../includes/header.php';
             color: #3730A3;
         }
 
+        .source-badge.client_trade,
         .source-badge.custodian_trade {
             background: #CFFAFE;
             color: #155E75;
@@ -1751,6 +1805,7 @@ include '../includes/header.php';
                                 $source_class = 'gl_entry';
                                 if ($source === 'Receipt') $source_class = 'receipt';
                                 elseif ($source === 'Payment') $source_class = 'payment';
+                                elseif ($source === 'Trade') $source_class = 'client_trade';
                                 elseif ($source === 'Custodian Trade') $source_class = 'custodian_trade';
                                 
                                 $debit = isset($transaction['debit']) && $transaction['debit'] > 0 ? $transaction['debit'] : 0;

@@ -309,6 +309,56 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
             $payments_stmt->execute($payments_params);
             $payments = $payments_stmt->fetchAll();
 
+            // Client inflow/outflow must be based on trade consideration only.
+            // Do not derive client balances from general_ledger because each trade can
+            // generate additional VAT, brokerage/commission and fee postings.
+            $client_trades = [];
+            if ($entity_type === 'client') {
+                $client_cds = trim((string)($entity['cds_account'] ?? $entity['code'] ?? ''));
+                $client_name = trim((string)($entity['name'] ?? ''));
+                if ($client_cds !== '' || $client_name !== '') {
+                    try {
+                        $client_where = [];
+                        $client_trade_params = [];
+                        if ($client_cds !== '') {
+                            $client_where[] = 'client_cds_account = ?';
+                            $client_trade_params[] = $client_cds;
+                        }
+                        if ($client_name !== '') {
+                            $client_where[] = 'client_name = ?';
+                            $client_trade_params[] = $client_name;
+                        }
+
+                        $client_trade_query = "SELECT id, trade_reference, exchange_reference,
+                                                     asset_class, security_id, security_name,
+                                                     client_cds_account, client_name, trade_side,
+                                                     consideration, currency, trade_date,
+                                                     settlement_date, created_at, uploaded_by
+                                              FROM trades
+                                              WHERE (" . implode(' OR ', $client_where) . ")
+                                                AND COALESCE(consideration, 0) <> 0
+                                                AND (status IS NULL OR status <> 'cancelled')";
+
+                        if ($start_date && $end_date) {
+                            $client_trade_query .= " AND trade_date BETWEEN ? AND ?";
+                            $client_trade_params[] = $start_date;
+                            $client_trade_params[] = $end_date;
+                        } elseif ($as_of_date) {
+                            $client_trade_query .= " AND trade_date <= ?";
+                            $client_trade_params[] = $as_of_date;
+                        }
+
+                        $client_trade_query .= " ORDER BY trade_date ASC, id ASC";
+                        $client_trade_stmt = $db->prepare($client_trade_query);
+                        $client_trade_stmt->execute($client_trade_params);
+                        $client_trades = $client_trade_stmt->fetchAll(PDO::FETCH_ASSOC);
+                    } catch (Throwable $e) {
+                        error_log("Error getting client trades for entity {$entity_id}: " . $e->getMessage());
+                        $client_trades = [];
+                    }
+                }
+            }
+
             // Custodian cash-flow transactions are stored canonically in trades.sca_code.
             // The legacy custodians_trades table is not reliable in older production schemas
             // (historical uploads can exist in trades while that derived table is empty).
@@ -374,26 +424,9 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
                     $gl_stmt->execute($gl_params);
                     $gl_entries = $gl_stmt->fetchAll();
                 } elseif ($entity_type === 'client') {
-                    $cds = $entity['cds_account'] ?? '';
-                    $name = $entity['name'] ?? '';
-                    if (!empty($cds) || !empty($name)) {
-                        $trade_stmt = $db->prepare("SELECT trade_reference FROM trades WHERE client_cds_account = ? OR client_name = ?");
-                        $trade_stmt->execute([$cds, $name]);
-                        $trade_refs = $trade_stmt->fetchAll(PDO::FETCH_COLUMN);
-                        if (!empty($trade_refs)) {
-                            $placeholders = implode(',', array_fill(0, count($trade_refs), '?'));
-                            $gl_query = "SELECT gl.transaction_date, gl.description, gl.reference_no,
-                                         gl.debit_amount, gl.credit_amount, gl.account_code,
-                                         coa.account_name
-                                         FROM general_ledger gl
-                                         LEFT JOIN chart_of_accounts coa ON gl.account_code = coa.account_code
-                                         WHERE gl.reference_no IN ($placeholders)
-                                         ORDER BY gl.transaction_date ASC";
-                            $gl_stmt = $db->prepare($gl_query);
-                            $gl_stmt->execute($trade_refs);
-                            $gl_entries = $gl_stmt->fetchAll();
-                        }
-                    }
+                    // Client totals are trade-only. GL rows contain VAT, commission and
+                    // fee postings and are intentionally excluded.
+                    $gl_entries = [];
                 } else {
                     // For custodian, agent, broker, employee, supplier - search by entity_id or entity_name
                     $entity_name = $entity['name'] ?? '';
@@ -435,6 +468,20 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
                 }
             }
             
+            $client_receipts_total = 0;
+            $client_payments_total = 0;
+            foreach ($client_trades as $client_trade) {
+                $client_amount = (float)($client_trade['consideration'] ?? 0);
+                $client_side = strtolower((string)($client_trade['trade_side'] ?? ''));
+                // From VFSL's cash-flow perspective: a client BUY is an inflow
+                // (client owes/pays us); a client SELL is an outflow (we owe/pay client).
+                if ($client_side === 'buy') {
+                    $client_receipts_total += $client_amount;
+                } elseif ($client_side === 'sell') {
+                    $client_payments_total += $client_amount;
+                }
+            }
+
             // Custodian trade-side totals use the same direction as the custodian settlement
             // report: BUY => money payable to the custodian, SELL => money receivable.
             $custodian_receipts_total = 0;
@@ -448,9 +495,15 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
                 }
             }
 
-            // Calculate totals
-            $total_receipts = array_sum(array_column($receipts, 'amount')) + $gl_receipts_total + $custodian_receipts_total;
-            $total_payments = array_sum(array_column($payments, 'amount')) + $gl_payments_total + $custodian_payments_total;
+            // Calculate totals. Client rows intentionally use trades only so VAT,
+            // commissions and other fee postings never inflate the client balance.
+            if ($entity_type === 'client') {
+                $total_receipts = $client_receipts_total;
+                $total_payments = $client_payments_total;
+            } else {
+                $total_receipts = array_sum(array_column($receipts, 'amount')) + $gl_receipts_total + $custodian_receipts_total;
+                $total_payments = array_sum(array_column($payments, 'amount')) + $gl_payments_total + $custodian_payments_total;
+            }
             
             // For bank accounts, use current_balance as authoritative
             if ($entity_type === 'bank_account') {
@@ -469,32 +522,61 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
             
             // Combine transactions
             $transactions = [];
-            foreach ($receipts as $receipt) {
+            if ($entity_type !== 'client') {
+                foreach ($receipts as $receipt) {
+                    $transactions[] = [
+                        'date' => $receipt['receipt_date'],
+                        'type' => 'receipt',
+                        'description' => $receipt['narration'] ?: 'Money received',
+                        'reference' => $receipt['receipt_no'],
+                        'amount' => $entity_type === 'bank_account' ? $receipt['amount'] : -$receipt['amount'],
+                        'currency' => $receipt['currency'],
+                        'bank_account' => $receipt['bank_account'],
+                        'running_balance' => 0
+                    ];
+                }
+
+                foreach ($payments as $payment) {
+                    $transactions[] = [
+                        'date' => $payment['payment_date'],
+                        'type' => 'payment',
+                        'description' => $payment['narration'] ?: 'Money paid',
+                        'reference' => $payment['payment_no'],
+                        'amount' => $entity_type === 'bank_account' ? -$payment['amount'] : $payment['amount'],
+                        'currency' => $payment['currency'],
+                        'bank_account' => $payment['bank_account'],
+                        'running_balance' => 0
+                    ];
+                }
+            }
+
+            foreach ($client_trades as $client_trade) {
+                $client_amount = (float)($client_trade['consideration'] ?? 0);
+                $trade_side = strtolower((string)($client_trade['trade_side'] ?? ''));
+                if ($trade_side !== 'buy' && $trade_side !== 'sell') {
+                    continue;
+                }
+                $security = trim((string)($client_trade['security_name'] ?? '')) ?: trim((string)($client_trade['security_id'] ?? ''));
+                $settlement_date = trim((string)($client_trade['settlement_date'] ?? ''));
+                $description = 'Client ' . strtoupper($trade_side) . ' trade';
+                if ($security !== '') {
+                    $description .= ' - ' . $security;
+                }
+                if ($settlement_date !== '') {
+                    $description .= ' (settles ' . $settlement_date . ')';
+                }
                 $transactions[] = [
-                    'date' => $receipt['receipt_date'],
-                    'type' => 'receipt',
-                    'description' => $receipt['narration'] ?: 'Money received',
-                    'reference' => $receipt['receipt_no'],
-                    'amount' => $entity_type === 'bank_account' ? $receipt['amount'] : -$receipt['amount'],
-                    'currency' => $receipt['currency'],
-                    'bank_account' => $receipt['bank_account'],
+                    'date' => $client_trade['trade_date'],
+                    'type' => 'client_trade',
+                    'description' => $description,
+                    'reference' => $client_trade['trade_reference'],
+                    'amount' => $trade_side === 'sell' ? $client_amount : -$client_amount,
+                    'currency' => $client_trade['currency'] ?: 'TZS',
+                    'bank_account' => trim((string)($client_trade['security_id'] ?? '')),
                     'running_balance' => 0
                 ];
             }
-            
-            foreach ($payments as $payment) {
-                $transactions[] = [
-                    'date' => $payment['payment_date'],
-                    'type' => 'payment',
-                    'description' => $payment['narration'] ?: 'Money paid',
-                    'reference' => $payment['payment_no'],
-                    'amount' => $entity_type === 'bank_account' ? -$payment['amount'] : $payment['amount'],
-                    'currency' => $payment['currency'],
-                    'bank_account' => $payment['bank_account'],
-                    'running_balance' => 0
-                ];
-            }
-            
+
             foreach ($custodian_trades as $custodian_trade) {
                 $custodian_amount = (float)($custodian_trade['consideration'] ?? 0);
                 $trade_side = strtolower((string)($custodian_trade['trade_side'] ?? ''));
@@ -531,7 +613,8 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
                 ];
             }
 
-            // Add GL entries as transactions
+            // Add GL entries as transactions for non-client entities only. Client
+            // transaction history is deliberately trade-only.
             foreach ($gl_entries as $gl) {
                 $gl_amount = 0;
                 if ((float)$gl['debit_amount'] > 0) {
