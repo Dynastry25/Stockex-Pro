@@ -809,30 +809,65 @@ if (isset($_GET['ajax_action'])) {
     header('Content-Type: application/json');
     
     if ($_GET['ajax_action'] === 'get_securities') {
-        $asset_class = $_GET['asset_class'] ?? 'equity';
-        $search = $_GET['search'] ?? '';
+        $asset_class = strtolower(trim((string)($_GET['asset_class'] ?? 'equity')));
+        $search = trim((string)($_GET['search'] ?? ''));
+
+        // Normalise the label used by older records/UI variants.
+        if ($asset_class === 'exchange traded funds') {
+            $asset_class = 'etf';
+        }
         
         try {
+            $params = [];
+            $like = '%' . $search . '%';
+
             if ($asset_class === 'equity') {
-                $sql = "SELECT security_id, stock_name as security_name, company_name, sector FROM equities WHERE status = 'active'";
-                if ($search) $sql .= " AND (security_id LIKE :search OR stock_name LIKE :search)";
-                $sql .= " LIMIT 50";
+                $sql = "SELECT security_id,
+                               COALESCE(NULLIF(stock_name, ''), NULLIF(company_name, ''), security_id) AS security_name,
+                               company_name,
+                               sector
+                        FROM equities
+                        WHERE status = 'active'";
+                if ($search !== '') {
+                    // Use a positional placeholder for every occurrence. Reusing one named
+                    // placeholder more than once can fail with native PDO MySQL prepares.
+                    $sql .= " AND (security_id LIKE ? OR stock_name LIKE ? OR company_name LIKE ?)";
+                    $params = [$like, $like, $like];
+                }
+                $sql .= " ORDER BY security_id ASC LIMIT 50";
             } elseif ($asset_class === 'bond') {
-                $sql = "SELECT security_id, bond_name as security_name, issuer, coupon_rate, maturity_date FROM bonds WHERE status = 'active'";
-                if ($search) $sql .= " AND (security_id LIKE :search OR bond_name LIKE :search)";
-                $sql .= " LIMIT 50";
+                $sql = "SELECT security_id,
+                               COALESCE(NULLIF(bond_name, ''), NULLIF(issuer, ''), security_id) AS security_name,
+                               issuer,
+                               coupon_rate,
+                               maturity_date
+                        FROM bonds
+                        WHERE status = 'active'";
+                if ($search !== '') {
+                    $sql .= " AND (security_id LIKE ? OR bond_name LIKE ? OR issuer LIKE ?)";
+                    $params = [$like, $like, $like];
+                }
+                $sql .= " ORDER BY security_id ASC LIMIT 50";
+            } elseif ($asset_class === 'etf') {
+                // The ETF master table has no status column in the current StockEx schema.
+                $sql = "SELECT etf_code AS security_id, name AS security_name FROM etf";
+                if ($search !== '') {
+                    $sql .= " WHERE (etf_code LIKE ? OR name LIKE ?)";
+                    $params = [$like, $like];
+                }
+                $sql .= " ORDER BY etf_code ASC LIMIT 50";
             } else {
-                $sql = "SELECT etf_code as security_id, name as security_name FROM etf WHERE status = 'active'";
-                if ($search) $sql .= " AND (etf_code LIKE :search OR name LIKE :search)";
-                $sql .= " LIMIT 50";
+                echo json_encode([]);
+                exit;
             }
             
             $stmt = $db->prepare($sql);
-            if ($search) $stmt->bindValue(':search', "%$search%");
-            $stmt->execute();
-            echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
-        } catch (Exception $e) {
-            echo json_encode([]);
+            $stmt->execute($params);
+            echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC), JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) {
+            error_log('Order sheet security lookup failed [' . $asset_class . ']: ' . $e->getMessage());
+            http_response_code(500);
+            echo json_encode(['error' => 'Unable to load securities. Please try again.']);
         }
         exit;
     }
@@ -1510,44 +1545,121 @@ document.getElementById('client_search')?.addEventListener('input', function() {
 });
 
 // Security search
-document.getElementById('security_search')?.addEventListener('input', function() {
-    const search = this.value;
-    const assetClass = document.getElementById('asset_class').value;
-    if (search.length < 2) { 
-        document.getElementById('security_search_dropdown').style.display = 'none'; 
-        return; 
+function buildOrderSheetAjaxUrl(action, params = {}) {
+    // Call the same clean URL that rendered this page. This avoids a .php -> extensionless
+    // redirect during fetch requests and works on both the local router and production rewrite.
+    const url = new URL(window.location.href);
+    url.hash = '';
+    url.search = '';
+    url.searchParams.set('ajax_action', action);
+    Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
+    return url.toString();
+}
+
+async function fetchOrderSheetJson(url) {
+    const response = await fetch(url, {
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        credentials: 'same-origin'
+    });
+    const text = await response.text();
+    let data;
+    try {
+        data = JSON.parse(text);
+    } catch (e) {
+        throw new Error('Security lookup returned an invalid response.');
     }
-    fetch('order_sheet.php?ajax_action=get_securities&asset_class=' + encodeURIComponent(assetClass) + '&search=' + encodeURIComponent(search))
-        .then(r => r.json()).then(data => {
-            const dropdown = document.getElementById('security_search_dropdown');
-            dropdown.innerHTML = '';
-            if (data.length) {
-                data.forEach(s => {
-                    const div = document.createElement('div');
-                    div.innerHTML = `<strong>${escapeHtml(s.security_id)}</strong> - ${escapeHtml(s.security_name)}`;
-                    div.onclick = () => {
-                        document.getElementById('security_id').value = s.security_id;
-                        document.getElementById('security_name').value = s.security_name;
-                        document.getElementById('security_search').value = s.security_name;
-                        dropdown.style.display = 'none';
-                        let info = '';
-                        if (s.company_name) info += `<strong>Company:</strong> ${escapeHtml(s.company_name)}<br>`;
-                        if (s.coupon_rate) info += `<strong>Coupon:</strong> ${s.coupon_rate}%<br>`;
-                        document.getElementById('security_info').innerHTML = info;
-                    };
-                    dropdown.appendChild(div);
-                });
-                dropdown.style.display = 'block';
-            } else {
-                const div = document.createElement('div');
-                div.innerHTML = '<span class="text-muted">No securities found</span>';
-                div.style.cursor = 'default';
-                dropdown.appendChild(div);
-                dropdown.style.display = 'block';
-            }
-        }).catch(() => {
-            document.getElementById('security_search_dropdown').style.display = 'none';
+    if (!response.ok) {
+        throw new Error(data?.error || 'Unable to load securities.');
+    }
+    return data;
+}
+
+function renderSecurityDropdown(items, errorMessage = '') {
+    const dropdown = document.getElementById('security_search_dropdown');
+    if (!dropdown) return;
+    dropdown.innerHTML = '';
+
+    if (errorMessage) {
+        const div = document.createElement('div');
+        div.innerHTML = `<span class="text-danger">${escapeHtml(errorMessage)}</span>`;
+        div.style.cursor = 'default';
+        dropdown.appendChild(div);
+        dropdown.style.display = 'block';
+        return;
+    }
+
+    if (Array.isArray(items) && items.length) {
+        items.forEach(s => {
+            const div = document.createElement('div');
+            div.innerHTML = `<strong>${escapeHtml(s.security_id)}</strong> - ${escapeHtml(s.security_name)}`;
+            div.onclick = () => {
+                document.getElementById('security_id').value = s.security_id || '';
+                document.getElementById('security_name').value = s.security_name || '';
+                document.getElementById('security_search').value = s.security_name || s.security_id || '';
+                dropdown.style.display = 'none';
+                let info = '';
+                if (s.company_name) info += `<strong>Company:</strong> ${escapeHtml(s.company_name)}<br>`;
+                if (s.issuer) info += `<strong>Issuer:</strong> ${escapeHtml(s.issuer)}<br>`;
+                if (s.coupon_rate) info += `<strong>Coupon:</strong> ${escapeHtml(String(s.coupon_rate))}%<br>`;
+                document.getElementById('security_info').innerHTML = info;
+            };
+            dropdown.appendChild(div);
         });
+    } else {
+        const div = document.createElement('div');
+        div.innerHTML = '<span class="text-muted">No securities found</span>';
+        div.style.cursor = 'default';
+        dropdown.appendChild(div);
+    }
+    dropdown.style.display = 'block';
+}
+
+let securitySearchRequest = 0;
+async function loadSecurityOptions() {
+    const searchInput = document.getElementById('security_search');
+    const assetClassInput = document.getElementById('asset_class');
+    if (!searchInput || !assetClassInput) return;
+
+    const requestId = ++securitySearchRequest;
+    const search = searchInput.value.trim();
+    const assetClass = assetClassInput.value;
+
+    try {
+        const url = buildOrderSheetAjaxUrl('get_securities', {
+            asset_class: assetClass,
+            search: search
+        });
+        const data = await fetchOrderSheetJson(url);
+        if (requestId !== securitySearchRequest) return;
+        if (!Array.isArray(data)) {
+            throw new Error(data?.error || 'Unable to load securities.');
+        }
+        renderSecurityDropdown(data);
+    } catch (error) {
+        if (requestId !== securitySearchRequest) return;
+        console.error('Order sheet security lookup failed:', error);
+        renderSecurityDropdown([], error.message || 'Unable to load securities.');
+    }
+}
+
+const securitySearchInput = document.getElementById('security_search');
+securitySearchInput?.addEventListener('input', function() {
+    // The typed value is no longer a confirmed selection.
+    document.getElementById('security_id').value = '';
+    document.getElementById('security_name').value = '';
+    document.getElementById('security_info').innerHTML = '';
+    loadSecurityOptions();
+});
+
+// Show the first available securities even before the user types.
+securitySearchInput?.addEventListener('focus', loadSecurityOptions);
+
+document.getElementById('asset_class')?.addEventListener('change', function() {
+    document.getElementById('security_id').value = '';
+    document.getElementById('security_name').value = '';
+    document.getElementById('security_search').value = '';
+    document.getElementById('security_info').innerHTML = '';
+    loadSecurityOptions();
 });
 
 // Form submit
