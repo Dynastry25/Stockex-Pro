@@ -25,11 +25,12 @@ $db = getDBConnection();
 $error_message = '';
 
 // Get entity parameters
-$entity_type = isset($_GET['type']) ? $_GET['type'] : null;
-$entity_id = isset($_GET['id']) ? $_GET['id'] : null;
+$entity_type = strtolower(trim((string)($_GET['type'] ?? '')));
+$entity_id = trim((string)($_GET['id'] ?? ''));
+$allowed_entity_types = ['client', 'custodian', 'employee', 'agent', 'broker', 'supplier', 'chart_account', 'bank_account'];
 
-if (!$entity_type || !$entity_id) {
-    header('Location: debtors.php?error=Invalid entity parameters');
+if ($entity_id === '' || !in_array($entity_type, $allowed_entity_types, true)) {
+    header('Location: ' . BASE_URL . 'finance/debtors?error=' . rawurlencode('Invalid entity parameters'));
     exit;
 }
 
@@ -71,584 +72,540 @@ function getLedgerCode($entity_type) {
     return $mapping[$entity_type] ?? 'O';
 }
 
-// Get entity details
+// Entity metadata is deliberately defined in PHP and the row is loaded with SELECT *.
+// This avoids the ledger page failing when an environment has an older/newer schema where
+// optional columns (for example status/created_at) differ from the debtors page schema.
+function getEntityDefinition($entity_type) {
+    $definitions = [
+        'client' => [
+            'table' => 'clients', 'id_column' => 'id', 'name_column' => 'client_name', 'code_column' => 'cds_account',
+            'type_label' => 'Client', 'code_label' => 'CDS Account', 'icon' => 'bi-person-badge', 'color' => '#4F46E5'
+        ],
+        'custodian' => [
+            'table' => 'custodians', 'id_column' => 'id', 'name_column' => 'custodian_name', 'code_column' => 'custodian_code',
+            'type_label' => 'Custodian', 'code_label' => 'Custodian Code', 'icon' => 'bi-shield-check', 'color' => '#0891B2'
+        ],
+        'employee' => [
+            'table' => 'users', 'id_column' => 'id', 'name_column' => 'full_name', 'code_column' => 'username',
+            'type_label' => 'Employee', 'code_label' => 'Username', 'icon' => 'bi-person-workspace', 'color' => '#059669'
+        ],
+        'agent' => [
+            'table' => 'agents', 'id_column' => 'id', 'name_column' => 'name', 'code_column' => 'agent_code',
+            'type_label' => 'Agent', 'code_label' => 'Agent Code', 'icon' => 'bi-person-rolodex', 'color' => '#D97706'
+        ],
+        'broker' => [
+            'table' => 'brokers', 'id_column' => 'id', 'name_column' => 'broker_name', 'code_column' => 'broker_code',
+            'type_label' => 'Broker', 'code_label' => 'Broker Code', 'icon' => 'bi-graph-up', 'color' => '#DC2626'
+        ],
+        'supplier' => [
+            'table' => 'suppliers', 'id_column' => 'id', 'name_column' => 'name', 'code_column' => 'supplier_code',
+            'type_label' => 'Supplier', 'code_label' => 'Supplier Code', 'icon' => 'bi-truck', 'color' => '#7C3AED'
+        ],
+        'chart_account' => [
+            'table' => 'chart_of_accounts', 'id_column' => 'account_code', 'name_column' => 'account_name', 'code_column' => 'account_code',
+            'type_label' => 'Chart Account', 'code_label' => 'Account Code', 'icon' => 'bi-journal-bookmark', 'color' => '#6D28D9'
+        ],
+        'bank_account' => [
+            'table' => 'banks_accounts', 'id_column' => 'id', 'name_column' => 'account_name', 'code_column' => 'account_number',
+            'type_label' => 'Bank Account', 'code_label' => 'Account Number', 'icon' => 'bi-bank', 'color' => '#0D9488'
+        ],
+    ];
+
+    return $definitions[$entity_type] ?? null;
+}
+
 function getEntityDetails($db, $entity_type, $entity_id) {
+    $definition = getEntityDefinition($entity_type);
+    if (!$definition || $entity_id === null || trim((string)$entity_id) === '') {
+        return null;
+    }
+
     try {
-        switch ($entity_type) {
-            case 'client':
-                $stmt = $db->prepare("SELECT id, client_name as name, cds_account as code, phone, email, client_type, status, is_active, created_at FROM clients WHERE id = ?");
-                $stmt->execute([$entity_id]);
-                $entity = $stmt->fetch(PDO::FETCH_ASSOC);
-                if ($entity) {
-                    $entity['type_label'] = 'Client';
-                    $entity['code_label'] = 'CDS Account';
-                    $entity['icon'] = 'bi-person-badge';
-                    $entity['color'] = '#4F46E5';
-                }
-                return $entity;
-                
-            case 'custodian':
-                $stmt = $db->prepare("SELECT id, custodian_name as name, custodian_code as code, contact_person, phone, email, status, is_active, created_at FROM custodians WHERE id = ?");
-                $stmt->execute([$entity_id]);
-                $entity = $stmt->fetch(PDO::FETCH_ASSOC);
-                if ($entity) {
-                    $entity['type_label'] = 'Custodian';
-                    $entity['code_label'] = 'Custodian Code';
-                    $entity['icon'] = 'bi-shield-check';
-                    $entity['color'] = '#0891B2';
-                }
-                return $entity;
-                
-            case 'employee':
-                $stmt = $db->prepare("SELECT id, full_name as name, username as code, email, phone, role, status, is_active, created_at FROM users WHERE id = ?");
-                $stmt->execute([$entity_id]);
-                $entity = $stmt->fetch(PDO::FETCH_ASSOC);
-                if ($entity) {
-                    $entity['type_label'] = 'Employee';
-                    $entity['code_label'] = 'Username';
-                    $entity['icon'] = 'bi-person-workspace';
-                    $entity['color'] = '#059669';
-                }
-                return $entity;
-                
-            case 'agent':
-                $stmt = $db->prepare("SELECT id, name, agent_code as code, contact_person, phone, email, status, is_active, created_at FROM agents WHERE id = ?");
-                $stmt->execute([$entity_id]);
-                $entity = $stmt->fetch(PDO::FETCH_ASSOC);
-                if ($entity) {
-                    $entity['type_label'] = 'Agent';
-                    $entity['code_label'] = 'Agent Code';
-                    $entity['icon'] = 'bi-person-rolodex';
-                    $entity['color'] = '#D97706';
-                }
-                return $entity;
-                
-            case 'broker':
-                $stmt = $db->prepare("SELECT id, broker_name as name, broker_code as code, contact_person, phone, email, status, is_active, created_at FROM brokers WHERE id = ?");
-                $stmt->execute([$entity_id]);
-                $entity = $stmt->fetch(PDO::FETCH_ASSOC);
-                if ($entity) {
-                    $entity['type_label'] = 'Broker';
-                    $entity['code_label'] = 'Broker Code';
-                    $entity['icon'] = 'bi-graph-up';
-                    $entity['color'] = '#DC2626';
-                }
-                return $entity;
-                
-            case 'supplier':
-                $stmt = $db->prepare("SELECT id, name, supplier_code as code, contact_person, phone, email, status, is_active, created_at FROM suppliers WHERE id = ?");
-                $stmt->execute([$entity_id]);
-                $entity = $stmt->fetch(PDO::FETCH_ASSOC);
-                if ($entity) {
-                    $entity['type_label'] = 'Supplier';
-                    $entity['code_label'] = 'Supplier Code';
-                    $entity['icon'] = 'bi-truck';
-                    $entity['color'] = '#7C3AED';
-                }
-                return $entity;
-                
-            case 'chart_account':
-                $stmt = $db->prepare("SELECT account_code as id, account_name as name, account_code as code, account_type, level, is_active, created_at FROM chart_of_accounts WHERE account_code = ?");
-                $stmt->execute([$entity_id]);
-                $entity = $stmt->fetch(PDO::FETCH_ASSOC);
-                if ($entity) {
-                    $entity['type_label'] = 'Chart Account';
-                    $entity['code_label'] = 'Account Code';
-                    $entity['icon'] = 'bi-journal-bookmark';
-                    $entity['color'] = '#6D28D9';
-                }
-                return $entity;
-                
-            case 'bank_account':
-                $stmt = $db->prepare("SELECT id, account_name as name, account_number as code, bank_name, currency, current_balance, status, is_active, created_at FROM banks_accounts WHERE id = ?");
-                $stmt->execute([$entity_id]);
-                $entity = $stmt->fetch(PDO::FETCH_ASSOC);
-                if ($entity) {
-                    $entity['type_label'] = 'Bank Account';
-                    $entity['code_label'] = 'Account Number';
-                    $entity['icon'] = 'bi-bank';
-                    $entity['color'] = '#0D9488';
-                }
-                return $entity;
-                
-            default:
-                return null;
+        // Table/column identifiers come only from the hard-coded whitelist above.
+        $sql = "SELECT * FROM {$definition['table']} WHERE {$definition['id_column']} = ? LIMIT 1";
+        $stmt = $db->prepare($sql);
+        $stmt->execute([$entity_id]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$row) {
+            error_log("Entity ledger: entity not found type={$entity_type}, id={$entity_id}");
+            return null;
         }
-    } catch (Exception $e) {
-        error_log("Error getting entity details: " . $e->getMessage());
+
+        $row['id'] = $row[$definition['id_column']] ?? $entity_id;
+        $row['name'] = $row[$definition['name_column']] ?? '';
+        $row['code'] = $row[$definition['code_column']] ?? $row['id'];
+        $row['type_label'] = $definition['type_label'];
+        $row['code_label'] = $definition['code_label'];
+        $row['icon'] = $definition['icon'];
+        $row['color'] = $definition['color'];
+
+        // Keep the UI stable across schema versions where these columns may be absent.
+        if (!array_key_exists('is_active', $row)) {
+            $row['is_active'] = 1;
+        }
+        if (!array_key_exists('status', $row) || trim((string)$row['status']) === '') {
+            $row['status'] = ((string)$row['is_active'] === '1') ? 'active' : 'inactive';
+        }
+        if (!array_key_exists('created_at', $row)) {
+            $row['created_at'] = null;
+        }
+
+        return $row;
+    } catch (Throwable $e) {
+        error_log("Entity ledger: failed to load entity type={$entity_type}, id={$entity_id}: " . $e->getMessage());
         return null;
     }
 }
 
-// Get all transactions for an entity
-function getEntityTransactions($db, $entity_type, $entity_id, $start_date = null, $end_date = null, $search = '') {
+// Get all transactions for an entity.
+// IMPORTANT: the source-selection rules below intentionally mirror finance/debtors.php.
+// The list view and this detail view must be two representations of the same ledger data;
+// do not add status/source filters here unless the same rule is also applied in debtors.php.
+function getEntityTransactions($db, $entity_type, $entity_id, $start_date = null, $end_date = null, $search = '', $entity = null, $as_of_date = null) {
     $transactions = [];
+    $entity = $entity ?: getEntityDetails($db, $entity_type, $entity_id);
+
+    if (!$entity) {
+        return ['transactions' => [], 'debit_total' => 0, 'credit_total' => 0, 'balance' => 0];
+    }
+
     $ledger_code = getLedgerCode($entity_type);
-    
-    // ============================================================
-    // For CLIENTS: Get receipts, payments, and GL entries
-    // ============================================================
-    if ($entity_type === 'client') {
-        // Get client details to get name
-        $stmt = $db->prepare("SELECT client_name, cds_account FROM clients WHERE id = ?");
-        $stmt->execute([$entity_id]);
-        $client = $stmt->fetch(PDO::FETCH_ASSOC);
-        $client_name = $client['client_name'] ?? '';
-        $cds_account = $client['cds_account'] ?? '';
-        
-        // 1. GET RECEIPTS for this client (Credit - money received)
-        $receipt_query = "SELECT 
-                            r.receipt_date as transaction_date, 
-                            'receipt' as transaction_type,
-                            r.receipt_no as reference, 
-                            r.narration as description,
-                            r.amount as debit_amount, 
-                            0 as credit_amount, 
-                            r.currency,
-                            r.account_no as account,
-                            'receipts' as source_table, 
-                            r.id as source_id,
-                            r.created_at, 
-                            r.created_by,
-                            'Receipt' as source_label
-                         FROM receipts r
-                         WHERE r.name_id = ?
-                         AND r.account_of = 'C'
-                         AND r.record_in_financial = 'yes'
-                         AND r.status != 'cancelled'";
-        $params = [$entity_id];
-        
+    $entity_name = trim((string)($entity['name'] ?? ''));
+    $search = trim((string)$search);
+
+    $addDateScope = function (&$sql, &$params, $column, $useAsOf = true) use ($start_date, $end_date, $as_of_date) {
         if ($start_date && $end_date) {
-            $receipt_query .= " AND r.receipt_date BETWEEN ? AND ?";
+            $sql .= " AND {$column} BETWEEN ? AND ?";
             $params[] = $start_date;
             $params[] = $end_date;
+        } elseif ($useAsOf && $as_of_date) {
+            $sql .= " AND {$column} <= ?";
+            $params[] = $as_of_date;
         }
-        
-        if (!empty($search)) {
-            $receipt_query .= " AND (r.receipt_no LIKE ? OR r.narration LIKE ?)";
-            $search_param = "%$search%";
-            $params[] = $search_param;
-            $params[] = $search_param;
+    };
+
+    $addSearch = function (&$sql, &$params, array $columns) use ($search) {
+        if ($search === '') {
+            return;
         }
-        
-        $receipt_stmt = $db->prepare($receipt_query);
-        $receipt_stmt->execute($params);
-        $receipts = $receipt_stmt->fetchAll(PDO::FETCH_ASSOC);
-        
-        foreach ($receipts as $r) {
-            $r['amount_type'] = 'credit';
-            $r['debit'] = 0;
-            $r['credit'] = (float)$r['debit_amount'];
-            $r['amount'] = (float)$r['debit_amount'];
-            $r['account_name'] = 'Receipt';
-            $transactions[] = $r;
+        $needle = '%' . $search . '%';
+        $parts = [];
+        foreach ($columns as $column) {
+            $parts[] = "{$column} LIKE ?";
+            $params[] = $needle;
         }
-        
-        // 2. GET PAYMENTS for this client (Debit - money paid)
-        $payment_query = "SELECT 
-                            p.payment_date as transaction_date, 
-                            'payment' as transaction_type,
-                            p.payment_no as reference, 
-                            p.narration as description,
-                            0 as debit_amount, 
-                            p.amount as credit_amount, 
-                            p.currency,
-                            p.account_no as account,
-                            'payments' as source_table, 
-                            p.id as source_id,
-                            p.created_at, 
-                            p.created_by,
-                            'Payment' as source_label
-                         FROM payments p
-                         WHERE p.name_id = ?
-                         AND p.paid_to = 'C'
-                         AND p.record_in_financial = 'yes'
-                         AND p.status != 'cancelled'";
-        $params = [$entity_id];
-        
-        if ($start_date && $end_date) {
-            $payment_query .= " AND p.payment_date BETWEEN ? AND ?";
-            $params[] = $start_date;
-            $params[] = $end_date;
+        $sql .= ' AND (' . implode(' OR ', $parts) . ')';
+    };
+
+    $pushReceipt = function (array $row) use (&$transactions) {
+        $amount = (float)($row['amount'] ?? 0);
+        $row['amount'] = $amount;
+        // Same accounting direction as debtors.php: receipts reduce what we owe.
+        $row['debit'] = $amount;
+        $row['credit'] = 0.0;
+        $row['account_name'] = $row['account_name'] ?? ($row['account'] ?: 'Receipt');
+        $transactions[] = $row;
+    };
+
+    $pushPayment = function (array $row) use (&$transactions) {
+        $amount = (float)($row['amount'] ?? 0);
+        $row['amount'] = $amount;
+        // Same accounting direction as debtors.php: payments increase the credit balance.
+        $row['debit'] = 0.0;
+        $row['credit'] = $amount;
+        $row['account_name'] = $row['account_name'] ?? ($row['account'] ?: 'Payment');
+        $transactions[] = $row;
+    };
+
+    $pushGl = function (array $row) use (&$transactions) {
+        $row['debit'] = (float)($row['debit_amount'] ?? 0);
+        $row['credit'] = (float)($row['credit_amount'] ?? 0);
+        $row['amount'] = max($row['debit'], $row['credit']);
+        $transactions[] = $row;
+    };
+
+    $pushCustodianTrade = function (array $row) use (&$transactions) {
+        $amount = (float)($row['amount'] ?? 0);
+        $side = strtolower((string)($row['trade_side'] ?? ''));
+        if ($amount <= 0 || ($side !== 'buy' && $side !== 'sell')) {
+            return;
         }
-        
-        if (!empty($search)) {
-            $payment_query .= " AND (p.payment_no LIKE ? OR p.narration LIKE ?)";
-            $search_param = "%$search%";
-            $params[] = $search_param;
-            $params[] = $search_param;
-        }
-        
-        $payment_stmt = $db->prepare($payment_query);
-        $payment_stmt->execute($params);
-        $payments = $payment_stmt->fetchAll(PDO::FETCH_ASSOC);
-        
-        foreach ($payments as $p) {
-            $p['amount_type'] = 'debit';
-            $p['debit'] = (float)$p['credit_amount'];
-            $p['credit'] = 0;
-            $p['amount'] = (float)$p['credit_amount'];
-            $p['account_name'] = 'Payment';
-            $transactions[] = $p;
-        }
-        
-        // 3. GET GL ENTRIES for this client (from trades and other sources)
-        $gl_query = "SELECT 
-                        gl.transaction_date, 
-                        'gl_entry' as transaction_type,
-                        gl.reference_no as reference, 
-                        gl.description,
-                        gl.debit_amount, 
-                        gl.credit_amount, 
-                        'TZS' as currency,
-                        gl.account_code as account,
-                        'general_ledger' as source_table, 
-                        gl.id as source_id,
-                        gl.created_at, 
-                        gl.created_by,
-                        'GL Entry' as source_label
-                     FROM general_ledger gl
-                     WHERE (gl.entity_name = ? OR gl.reference_no IN (SELECT trade_reference FROM trades WHERE client_name = ? OR client_cds_account = ?))
-                     AND gl.status = 'active'";
-        $gl_params = [$client_name, $client_name, $cds_account];
-        
-        if ($start_date && $end_date) {
-            $gl_query .= " AND gl.transaction_date BETWEEN ? AND ?";
-            $gl_params[] = $start_date;
-            $gl_params[] = $end_date;
-        }
-        
-        if (!empty($search)) {
-            $gl_query .= " AND (gl.reference_no LIKE ? OR gl.description LIKE ?)";
-            $search_param = "%$search%";
-            $gl_params[] = $search_param;
-            $gl_params[] = $search_param;
-        }
-        
-        $gl_query .= " ORDER BY gl.transaction_date DESC, gl.id DESC";
-        
-        try {
-            $gl_stmt = $db->prepare($gl_query);
-            $gl_stmt->execute($gl_params);
-            $gl_entries = $gl_stmt->fetchAll(PDO::FETCH_ASSOC);
-            
-            foreach ($gl_entries as $gl) {
-                if ((float)$gl['debit_amount'] > 0) {
-                    $gl['amount'] = (float)$gl['debit_amount'];
-                    $gl['amount_type'] = 'debit';
-                    $gl['debit'] = (float)$gl['debit_amount'];
-                    $gl['credit'] = 0;
-                } elseif ((float)$gl['credit_amount'] > 0) {
-                    $gl['amount'] = (float)$gl['credit_amount'];
-                    $gl['amount_type'] = 'credit';
-                    $gl['debit'] = 0;
-                    $gl['credit'] = (float)$gl['credit_amount'];
-                } else {
-                    $gl['amount'] = 0;
-                    $gl['amount_type'] = 'none';
-                    $gl['debit'] = 0;
-                    $gl['credit'] = 0;
-                }
-                
-                // Map account name
-                try {
-                    $acc_stmt = $db->prepare("SELECT account_name FROM chart_of_accounts WHERE account_code = ?");
-                    $acc_stmt->execute([$gl['account']]);
-                    $acc = $acc_stmt->fetch(PDO::FETCH_ASSOC);
-                    $gl['account_name'] = $acc ? $acc['account_name'] : $gl['account'];
-                } catch (Exception $e) {
-                    $gl['account_name'] = $gl['account'];
-                }
-                
-                $transactions[] = $gl;
-            }
-        } catch (Exception $e) {
-            error_log("Error getting GL entries for client: " . $e->getMessage());
-        }
-        
-    } else {
-        // ============================================================
-        // For OTHER ENTITIES: Get GL entries only
-        // ============================================================
-        $gl_query = "";
-        $gl_params = [];
-        
-        if ($entity_type === 'chart_account') {
-            $gl_query = "SELECT 
-                            gl.transaction_date, 
-                            'gl_entry' as transaction_type,
-                            gl.reference_no as reference, 
-                            gl.description,
-                            gl.debit_amount, 
-                            gl.credit_amount, 
-                            'TZS' as currency,
-                            gl.account_code as account,
-                            'general_ledger' as source_table, 
-                            gl.id as source_id,
-                            gl.created_at, 
-                            gl.created_by,
-                            'GL Entry' as source_label
-                         FROM general_ledger gl
-                         WHERE gl.account_code = ?
-                         AND gl.status = 'active'";
-            $gl_params = [$entity_id];
-            
-        } elseif ($entity_type === 'bank_account') {
-            $gl_query = "SELECT 
-                            gl.transaction_date, 
-                            'gl_entry' as transaction_type,
-                            gl.reference_no as reference, 
-                            gl.description,
-                            gl.debit_amount, 
-                            gl.credit_amount, 
-                            'TZS' as currency,
-                            gl.account_code as account,
-                            'general_ledger' as source_table, 
-                            gl.id as source_id,
-                            gl.created_at, 
-                            gl.created_by,
-                            'GL Entry' as source_label
-                         FROM general_ledger gl
-                         WHERE gl.entity_name = ? 
-                         AND gl.status = 'active'";
-            $gl_params = [$entity_id];
-            
-        } else {
-            // For other entities (agent, broker, custodian, employee, supplier)
-            $entity_name = $entity['name'] ?? '';
-            $gl_query = "SELECT 
-                            gl.transaction_date, 
-                            'gl_entry' as transaction_type,
-                            gl.reference_no as reference, 
-                            gl.description,
-                            gl.debit_amount, 
-                            gl.credit_amount, 
-                            'TZS' as currency,
-                            gl.account_code as account,
-                            'general_ledger' as source_table, 
-                            gl.id as source_id,
-                            gl.created_at, 
-                            gl.created_by,
-                            'GL Entry' as source_label
-                         FROM general_ledger gl
-                         WHERE ((gl.entity_id = ? AND gl.entity_type = ?) OR (gl.entity_name != '' AND gl.entity_name IS NOT NULL AND gl.entity_name LIKE ? AND gl.entity_type = ?))
-                         AND gl.status = 'active'";
-            $gl_params = [$entity_id, $entity_type, '%' . $entity_name . '%', $entity_type];
-        }
-        
-        // Add date filters
-        if ($start_date && $end_date) {
-            $gl_query .= " AND gl.transaction_date BETWEEN ? AND ?";
-            $gl_params[] = $start_date;
-            $gl_params[] = $end_date;
-        }
-        
-        // Add search filter
-        if (!empty($search)) {
-            $gl_query .= " AND (gl.reference_no LIKE ? OR gl.description LIKE ?)";
-            $search_param = "%$search%";
-            $gl_params[] = $search_param;
-            $gl_params[] = $search_param;
-        }
-        
-        $gl_query .= " ORDER BY gl.transaction_date DESC, gl.id DESC";
-        
-        try {
-            $gl_stmt = $db->prepare($gl_query);
-            $gl_stmt->execute($gl_params);
-            $gl_entries = $gl_stmt->fetchAll(PDO::FETCH_ASSOC);
-            
-            foreach ($gl_entries as $gl) {
-                if ((float)$gl['debit_amount'] > 0) {
-                    $gl['amount'] = (float)$gl['debit_amount'];
-                    $gl['amount_type'] = 'debit';
-                    $gl['debit'] = (float)$gl['debit_amount'];
-                    $gl['credit'] = 0;
-                } elseif ((float)$gl['credit_amount'] > 0) {
-                    $gl['amount'] = (float)$gl['credit_amount'];
-                    $gl['amount_type'] = 'credit';
-                    $gl['debit'] = 0;
-                    $gl['credit'] = (float)$gl['credit_amount'];
-                } else {
-                    $gl['amount'] = 0;
-                    $gl['amount_type'] = 'none';
-                    $gl['debit'] = 0;
-                    $gl['credit'] = 0;
-                }
-                
-                // Map account name
-                try {
-                    $acc_stmt = $db->prepare("SELECT account_name FROM chart_of_accounts WHERE account_code = ?");
-                    $acc_stmt->execute([$gl['account']]);
-                    $acc = $acc_stmt->fetch(PDO::FETCH_ASSOC);
-                    $gl['account_name'] = $acc ? $acc['account_name'] : $gl['account'];
-                } catch (Exception $e) {
-                    $gl['account_name'] = $gl['account'];
-                }
-                
-                $transactions[] = $gl;
-            }
-        } catch (Exception $e) {
-            error_log("Error getting GL entries: " . $e->getMessage());
-        }
-        
-        // Include payroll entries for employees
-        if ($entity_type === 'employee') {
+
+        // Keep this identical to finance/debtors.php:
+        // BUY = amount payable to custodian (credit); SELL = amount receivable (debit).
+        $row['amount'] = $amount;
+        $row['debit'] = $side === 'sell' ? $amount : 0.0;
+        $row['credit'] = $side === 'buy' ? $amount : 0.0;
+        $transactions[] = $row;
+    };
+
+    // ------------------------------------------------------------------
+    // Receipts / payments
+    // ------------------------------------------------------------------
+    if ($entity_type === 'bank_account') {
+        // Bank accounts are identified by the physical account number. This is safer
+        // than the generic entity code because multiple banks can share GL controls.
+        $account_number = trim((string)($entity['code'] ?? ''));
+        if ($account_number !== '') {
             try {
-                $payroll_query = "SELECT 
-                                    transaction_date, 
-                                    'gl_entry' as transaction_type,
-                                    reference_no as reference, 
-                                    description,
-                                    debit_amount, 
-                                    credit_amount, 
-                                    'TZS' as currency,
-                                    account_code as account,
-                                    'general_ledger' as source_table, 
-                                    id as source_id,
-                                    created_at, 
-                                    created_by,
-                                    'Payroll' as source_label
-                                 FROM general_ledger 
-                                 WHERE reference_type IN ('payroll', 'salary_payment')
-                                 AND entity_id = ?
-                                 AND status = 'active'";
-                
-                $payroll_params = [$entity_id];
-                
-                if ($start_date && $end_date) {
-                    $payroll_query .= " AND transaction_date BETWEEN ? AND ?";
-                    $payroll_params[] = $start_date;
-                    $payroll_params[] = $end_date;
+                $sql = "SELECT r.receipt_date AS transaction_date,
+                               'receipt' AS transaction_type,
+                               r.receipt_no AS reference,
+                               NULL AS related_reference,
+                               r.narration AS description,
+                               r.amount,
+                               r.currency,
+                               COALESCE(NULLIF(r.account_no, ''), r.bank_account_number) AS account,
+                               COALESCE(NULLIF(r.account_no, ''), r.bank_account_number) AS account_name,
+                               'receipts' AS source_table,
+                               r.id AS source_id,
+                               r.created_at,
+                               r.created_by,
+                               'Receipt' AS source_label
+                        FROM receipts r
+                        WHERE r.record_in_financial = 'yes'
+                          AND (r.account_no = ? OR r.bank_account_number = ?)";
+                $params = [$account_number, $account_number];
+                $addDateScope($sql, $params, 'r.receipt_date');
+                $addSearch($sql, $params, ['r.receipt_no', 'r.narration', 'r.name']);
+                $stmt = $db->prepare($sql);
+                $stmt->execute($params);
+                foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                    $pushReceipt($row);
                 }
-                
-                if (!empty($search)) {
-                    $payroll_query .= " AND (reference_no LIKE ? OR description LIKE ?)";
-                    $search_param = "%$search%";
-                    $payroll_params[] = $search_param;
-                    $payroll_params[] = $search_param;
+            } catch (Throwable $e) {
+                error_log("Entity ledger bank receipts id={$entity_id}: " . $e->getMessage());
+            }
+
+            try {
+                $sql = "SELECT p.payment_date AS transaction_date,
+                               'payment' AS transaction_type,
+                               p.payment_no AS reference,
+                               p.trade_reference AS related_reference,
+                               p.narration AS description,
+                               p.amount,
+                               p.currency,
+                               COALESCE(NULLIF(p.account_no, ''), p.bank_account_number) AS account,
+                               COALESCE(NULLIF(p.account_no, ''), p.bank_account_number) AS account_name,
+                               'payments' AS source_table,
+                               p.id AS source_id,
+                               p.created_at,
+                               p.created_by,
+                               'Payment' AS source_label
+                        FROM payments p
+                        WHERE p.record_in_financial = 'yes'
+                          AND (p.account_no = ? OR p.bank_account_number = ?)";
+                $params = [$account_number, $account_number];
+                $addDateScope($sql, $params, 'p.payment_date');
+                $addSearch($sql, $params, ['p.payment_no', 'p.narration', 'p.name', 'p.trade_reference']);
+                $stmt = $db->prepare($sql);
+                $stmt->execute($params);
+                foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                    $pushPayment($row);
                 }
-                
-                $payroll_query .= " ORDER BY transaction_date DESC, id DESC";
-                
-                $payroll_stmt = $db->prepare($payroll_query);
-                $payroll_stmt->execute($payroll_params);
-                $payroll_entries = $payroll_stmt->fetchAll(PDO::FETCH_ASSOC);
-                
-                foreach ($payroll_entries as $pe) {
-                    if ((float)$pe['debit_amount'] > 0) {
-                        $pe['amount'] = (float)$pe['debit_amount'];
-                        $pe['amount_type'] = 'debit';
-                        $pe['debit'] = (float)$pe['debit_amount'];
-                        $pe['credit'] = 0;
-                    } elseif ((float)$pe['credit_amount'] > 0) {
-                        $pe['amount'] = (float)$pe['credit_amount'];
-                        $pe['amount_type'] = 'credit';
-                        $pe['debit'] = 0;
-                        $pe['credit'] = (float)$pe['credit_amount'];
-                    } else {
-                        $pe['amount'] = 0;
-                        $pe['amount_type'] = 'none';
-                        $pe['debit'] = 0;
-                        $pe['credit'] = 0;
+            } catch (Throwable $e) {
+                error_log("Entity ledger bank payments id={$entity_id}: " . $e->getMessage());
+            }
+        }
+    } elseif ($entity_type !== 'chart_account') {
+        // These two queries are deliberately the same source rules used by debtors.php.
+        // In particular, no extra status condition is added here: adding one caused the
+        // list to show a balance while the detail page showed zero transactions.
+        try {
+            $sql = "SELECT r.receipt_date AS transaction_date,
+                           'receipt' AS transaction_type,
+                           r.receipt_no AS reference,
+                           NULL AS related_reference,
+                           r.narration AS description,
+                           r.amount,
+                           r.currency,
+                           r.account_no AS account,
+                           r.account_no AS account_name,
+                           'receipts' AS source_table,
+                           r.id AS source_id,
+                           r.created_at,
+                           r.created_by,
+                           'Receipt' AS source_label
+                    FROM receipts r
+                    WHERE (r.account_of = ? OR (r.account_of = 'O' AND r.source_type = ?))
+                      AND r.name_id = ?
+                      AND r.record_in_financial = 'yes'";
+            $params = [$ledger_code, $entity_type, $entity_id];
+            $addDateScope($sql, $params, 'r.receipt_date');
+            $addSearch($sql, $params, ['r.receipt_no', 'r.narration', 'r.name']);
+            $stmt = $db->prepare($sql);
+            $stmt->execute($params);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $pushReceipt($row);
+            }
+        } catch (Throwable $e) {
+            error_log("Entity ledger receipts type={$entity_type}, id={$entity_id}: " . $e->getMessage());
+        }
+
+        try {
+            $sql = "SELECT p.payment_date AS transaction_date,
+                           'payment' AS transaction_type,
+                           p.payment_no AS reference,
+                           p.trade_reference AS related_reference,
+                           p.narration AS description,
+                           p.amount,
+                           p.currency,
+                           p.account_no AS account,
+                           p.account_no AS account_name,
+                           'payments' AS source_table,
+                           p.id AS source_id,
+                           p.created_at,
+                           p.created_by,
+                           'Payment' AS source_label
+                    FROM payments p
+                    WHERE (p.paid_to = ? OR (p.paid_to = 'O' AND p.source_type = ?))
+                      AND p.name_id = ?
+                      AND p.record_in_financial = 'yes'";
+            $params = [$ledger_code, $entity_type, $entity_id];
+            $addDateScope($sql, $params, 'p.payment_date');
+            $addSearch($sql, $params, ['p.payment_no', 'p.narration', 'p.name', 'p.trade_reference']);
+            $stmt = $db->prepare($sql);
+            $stmt->execute($params);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $pushPayment($row);
+            }
+        } catch (Throwable $e) {
+            error_log("Entity ledger payments type={$entity_type}, id={$entity_id}: " . $e->getMessage());
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Custodian settlement flows from the canonical trades table.
+    // Historical production uploads can have trades.sca_code populated while the
+    // derived custodians_trades table is empty, so the detailed ledger must use the
+    // same canonical source as finance/debtors.php.
+    // ------------------------------------------------------------------
+    if ($entity_type === 'custodian') {
+        $custodian_code = trim((string)($entity['code'] ?? ''));
+        if ($custodian_code !== '') {
+            try {
+                $sql = "SELECT t.trade_date AS transaction_date,
+                               'custodian_trade' AS transaction_type,
+                               t.trade_reference AS reference,
+                               t.exchange_reference AS related_reference,
+                               t.trade_side,
+                               t.consideration AS amount,
+                               COALESCE(NULLIF(t.currency, ''), 'TZS') AS currency,
+                               t.security_id AS account,
+                               COALESCE(NULLIF(t.security_name, ''), t.security_id) AS account_name,
+                               'trades' AS source_table,
+                               t.id AS source_id,
+                               t.created_at,
+                               t.uploaded_by AS created_by,
+                               'Custodian Trade' AS source_label,
+                               t.security_name,
+                               t.security_id,
+                               t.client_name,
+                               t.client_cds_account,
+                               t.settlement_date
+                        FROM trades t
+                        WHERE TRIM(t.sca_code) = ?
+                          AND COALESCE(t.consideration, 0) <> 0
+                          AND (t.status IS NULL OR t.status <> 'cancelled')";
+                $params = [$custodian_code];
+                $addDateScope($sql, $params, 't.trade_date');
+                $addSearch($sql, $params, [
+                    't.trade_reference', 't.exchange_reference', 't.security_id',
+                    't.security_name', 't.client_name', 't.client_cds_account'
+                ]);
+                $sql .= ' ORDER BY t.trade_date ASC, t.id ASC';
+                $stmt = $db->prepare($sql);
+                $stmt->execute($params);
+
+                foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                    $security = trim((string)($row['security_name'] ?? ''));
+                    if ($security === '') {
+                        $security = trim((string)($row['security_id'] ?? ''));
                     }
-                    
-                    try {
-                        $acc_stmt = $db->prepare("SELECT account_name FROM chart_of_accounts WHERE account_code = ?");
-                        $acc_stmt->execute([$pe['account']]);
-                        $acc = $acc_stmt->fetch(PDO::FETCH_ASSOC);
-                        $pe['account_name'] = $acc ? $acc['account_name'] : $pe['account'];
-                    } catch (Exception $e) {
-                        $pe['account_name'] = $pe['account'];
+                    $clientName = trim((string)($row['client_name'] ?? ''));
+                    $settlementDate = trim((string)($row['settlement_date'] ?? ''));
+                    $description = 'Custodian ' . strtoupper((string)($row['trade_side'] ?? '')) . ' trade';
+                    if ($security !== '') {
+                        $description .= ' - ' . $security;
                     }
-                    
-                    $transactions[] = $pe;
+                    if ($clientName !== '') {
+                        $description .= ' - ' . $clientName;
+                    }
+                    if ($settlementDate !== '') {
+                        $description .= ' (settles ' . $settlementDate . ')';
+                    }
+                    $row['description'] = $description;
+                    $pushCustodianTrade($row);
                 }
-            } catch (Exception $e) {
-                error_log("Error getting payroll entries: " . $e->getMessage());
+            } catch (Throwable $e) {
+                error_log("Entity ledger custodian trades code={$custodian_code}, id={$entity_id}: " . $e->getMessage());
             }
         }
     }
-    
-    // Sort transactions by date (newest first)
-    usort($transactions, function($a, $b) {
-        $date_a = strtotime($a['transaction_date'] ?? '1970-01-01');
-        $date_b = strtotime($b['transaction_date'] ?? '1970-01-01');
-        if ($date_a == $date_b) {
-            return strcmp($b['reference'] ?? '', $a['reference'] ?? '');
+
+    // ------------------------------------------------------------------
+    // General ledger records - mirrors debtors.php source-selection rules.
+    // ------------------------------------------------------------------
+    try {
+        if ($entity_type === 'chart_account') {
+            $sql = "SELECT gl.transaction_date,
+                           'gl_entry' AS transaction_type,
+                           gl.reference_no AS reference,
+                           NULL AS related_reference,
+                           gl.description,
+                           gl.debit_amount,
+                           gl.credit_amount,
+                           COALESCE(gl.currency, 'TSH') AS currency,
+                           gl.account_code AS account,
+                           COALESCE(coa.account_name, gl.account_name, gl.account_code) AS account_name,
+                           'general_ledger' AS source_table,
+                           gl.id AS source_id,
+                           gl.created_at,
+                           gl.created_by,
+                           'GL Entry' AS source_label
+                    FROM general_ledger gl
+                    LEFT JOIN chart_of_accounts coa ON gl.account_code = coa.account_code
+                    WHERE gl.account_code = ?";
+            $params = [$entity_id];
+            $addDateScope($sql, $params, 'gl.transaction_date');
+            $addSearch($sql, $params, ['gl.reference_no', 'gl.description']);
+            $sql .= ' ORDER BY gl.transaction_date ASC, gl.id ASC';
+            $stmt = $db->prepare($sql);
+            $stmt->execute($params);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $pushGl($row);
+            }
+        } elseif ($entity_type === 'client') {
+            $cds = trim((string)($entity['cds_account'] ?? $entity['code'] ?? ''));
+            if ($cds !== '' || $entity_name !== '') {
+                $tradeStmt = $db->prepare("SELECT trade_reference FROM trades WHERE client_cds_account = ? OR client_name = ?");
+                $tradeStmt->execute([$cds, $entity_name]);
+                $tradeRefs = array_values(array_filter($tradeStmt->fetchAll(PDO::FETCH_COLUMN), static function ($ref) {
+                    return trim((string)$ref) !== '';
+                }));
+
+                if ($tradeRefs) {
+                    $placeholders = implode(',', array_fill(0, count($tradeRefs), '?'));
+                    $sql = "SELECT gl.transaction_date,
+                                   'gl_entry' AS transaction_type,
+                                   gl.reference_no AS reference,
+                                   NULL AS related_reference,
+                                   gl.description,
+                                   gl.debit_amount,
+                                   gl.credit_amount,
+                                   COALESCE(gl.currency, 'TSH') AS currency,
+                                   gl.account_code AS account,
+                                   COALESCE(coa.account_name, gl.account_name, gl.account_code) AS account_name,
+                                   'general_ledger' AS source_table,
+                                   gl.id AS source_id,
+                                   gl.created_at,
+                                   gl.created_by,
+                                   'GL Entry' AS source_label
+                            FROM general_ledger gl
+                            LEFT JOIN chart_of_accounts coa ON gl.account_code = coa.account_code
+                            WHERE gl.reference_no IN ({$placeholders})";
+                    $params = $tradeRefs;
+                    // debtors.php historically applies no as-of filter to client GL rows.
+                    // Preserve that behavior unless the user explicitly selects a date range.
+                    if ($start_date && $end_date) {
+                        $sql .= ' AND gl.transaction_date BETWEEN ? AND ?';
+                        $params[] = $start_date;
+                        $params[] = $end_date;
+                    }
+                    $addSearch($sql, $params, ['gl.reference_no', 'gl.description']);
+                    $sql .= ' ORDER BY gl.transaction_date ASC, gl.id ASC';
+                    $stmt = $db->prepare($sql);
+                    $stmt->execute($params);
+                    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                        $pushGl($row);
+                    }
+                }
+            }
+        } elseif ($entity_type !== 'bank_account') {
+            $sql = "SELECT gl.transaction_date,
+                           'gl_entry' AS transaction_type,
+                           gl.reference_no AS reference,
+                           NULL AS related_reference,
+                           gl.description,
+                           gl.debit_amount,
+                           gl.credit_amount,
+                           COALESCE(gl.currency, 'TSH') AS currency,
+                           gl.account_code AS account,
+                           COALESCE(coa.account_name, gl.account_name, gl.account_code) AS account_name,
+                           'general_ledger' AS source_table,
+                           gl.id AS source_id,
+                           gl.created_at,
+                           gl.created_by,
+                           CASE WHEN gl.reference_type IN ('payroll', 'salary_payment') THEN 'Payroll' ELSE 'GL Entry' END AS source_label
+                    FROM general_ledger gl
+                    LEFT JOIN chart_of_accounts coa ON gl.account_code = coa.account_code
+                    WHERE ((gl.entity_id = ? AND gl.entity_type = ?)
+                       OR (gl.entity_name != '' AND gl.entity_name IS NOT NULL AND gl.entity_name LIKE ? AND gl.entity_type = ?))";
+            $params = [$entity_id, $entity_type, '%' . $entity_name . '%', $entity_type];
+            $addDateScope($sql, $params, 'gl.transaction_date');
+            $addSearch($sql, $params, ['gl.reference_no', 'gl.description', 'gl.entity_name']);
+            $sql .= ' ORDER BY gl.transaction_date ASC, gl.id ASC';
+            $stmt = $db->prepare($sql);
+            $stmt->execute($params);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $pushGl($row);
+            }
         }
-        return $date_b - $date_a;
+    } catch (Throwable $e) {
+        error_log("Entity ledger GL type={$entity_type}, id={$entity_id}: " . $e->getMessage());
+    }
+
+    // The debtors list intentionally adds every matching source row. Do not collapse
+    // GL/cash rows here: doing so makes the detailed totals disagree with the list.
+    usort($transactions, function ($a, $b) {
+        $dateA = strtotime((string)($a['transaction_date'] ?? '1970-01-01'));
+        $dateB = strtotime((string)($b['transaction_date'] ?? '1970-01-01'));
+        if ($dateA === $dateB) {
+            $sourceCmp = strcmp((string)($a['source_table'] ?? ''), (string)($b['source_table'] ?? ''));
+            if ($sourceCmp !== 0) {
+                return $sourceCmp;
+            }
+            return ((int)($a['source_id'] ?? 0)) <=> ((int)($b['source_id'] ?? 0));
+        }
+        return $dateA <=> $dateB;
     });
-    
-    // Remove duplicate transactions by reference + account + amount
-    $unique_transactions = [];
-    $seen_keys = [];
-    
-    foreach ($transactions as $t) {
-        $key = ($t['reference'] ?? '') . '|' . ($t['account'] ?? '') . '|' . ($t['debit'] ?? 0) . '|' . ($t['credit'] ?? 0);
-        if (!in_array($key, $seen_keys)) {
-            $seen_keys[] = $key;
-            $unique_transactions[] = $t;
-        }
-    }
-    
-    $transactions = $unique_transactions;
-    
-    // Calculate running balance (oldest to newest)
-    $running_balance = 0;
-    $debit_total = 0;
-    $credit_total = 0;
-    
-    // Reverse for balance calculation (oldest first)
-    $reversed = array_reverse($transactions);
-    
-    foreach ($reversed as &$transaction) {
-        $is_debit = false;
-        $is_credit = false;
-        
-        if (isset($transaction['debit']) && $transaction['debit'] > 0) {
-            $is_debit = true;
-            $debit_total += $transaction['debit'];
-        } elseif (isset($transaction['credit']) && $transaction['credit'] > 0) {
-            $is_credit = true;
-            $credit_total += $transaction['credit'];
-        }
-        
-        // For bank accounts: debit = money out, credit = money in
-        // For other entities: debit = we owe, credit = they owe us
+
+    $runningBalance = 0.0;
+    $debitTotal = 0.0;
+    $creditTotal = 0.0;
+
+    foreach ($transactions as &$transaction) {
+        $debit = (float)($transaction['debit'] ?? 0);
+        $credit = (float)($transaction['credit'] ?? 0);
+        $debitTotal += $debit;
+        $creditTotal += $credit;
+
+        // This is the exact list-view sign convention: payments/GL credits are positive,
+        // receipts/GL debits are negative for ordinary entities.
         if ($entity_type === 'bank_account') {
-            if ($is_debit) {
-                $running_balance -= $transaction['debit'];
-                $transaction['balance_impact'] = -$transaction['debit'];
-            } elseif ($is_credit) {
-                $running_balance += $transaction['credit'];
-                $transaction['balance_impact'] = $transaction['credit'];
-            } else {
-                $transaction['balance_impact'] = 0;
-            }
+            $runningBalance += $debit - $credit;
+            $transaction['balance_impact'] = $debit - $credit;
         } else {
-            if ($is_debit) {
-                $running_balance += $transaction['debit'];
-                $transaction['balance_impact'] = $transaction['debit'];
-            } elseif ($is_credit) {
-                $running_balance -= $transaction['credit'];
-                $transaction['balance_impact'] = -$transaction['credit'];
-            } else {
-                $transaction['balance_impact'] = 0;
-            }
+            $runningBalance += $credit - $debit;
+            $transaction['balance_impact'] = $credit - $debit;
         }
-        
-        $transaction['running_balance'] = $running_balance;
+        $transaction['running_balance'] = $runningBalance;
     }
-    
-    // Reverse back to newest first for display
-    $transactions = array_reverse($reversed);
-    
+    unset($transaction);
+
+    $transactions = array_reverse($transactions);
+
+    // The list view treats the configured current bank balance as authoritative.
+    $balance = $entity_type === 'bank_account'
+        ? (float)($entity['current_balance'] ?? $runningBalance)
+        : $runningBalance;
+
     return [
         'transactions' => $transactions,
-        'debit_total' => $debit_total,
-        'credit_total' => $credit_total,
-        'balance' => $running_balance
+        'debit_total' => $debitTotal,
+        'credit_total' => $creditTotal,
+        'balance' => $balance,
     ];
 }
 
@@ -667,12 +624,12 @@ if (!validateDate($as_of_date)) $as_of_date = date('Y-m-d');
 $entity = getEntityDetails($db, $entity_type, $entity_id);
 
 if (!$entity) {
-    header('Location: debtors.php?error=Entity not found');
+    header('Location: ' . BASE_URL . 'finance/debtors?error=' . rawurlencode('Entity not found'));
     exit;
 }
 
 // Get transactions
-$ledger_data = getEntityTransactions($db, $entity_type, $entity_id, $start_date, $end_date, $search);
+$ledger_data = getEntityTransactions($db, $entity_type, $entity_id, $start_date, $end_date, $search, $entity, $as_of_date);
 $transactions = $ledger_data['transactions'];
 $debit_total = $ledger_data['debit_total'];
 $credit_total = $ledger_data['credit_total'];
@@ -1358,6 +1315,11 @@ include '../includes/header.php';
             color: #3730A3;
         }
 
+        .source-badge.custodian_trade {
+            background: #CFFAFE;
+            color: #155E75;
+        }
+
         .text-debit {
             color: var(--danger);
             font-weight: 600;
@@ -1729,13 +1691,17 @@ include '../includes/header.php';
                 <h6>
                     <i class="bi bi-list-ul"></i>
                     Transaction History
-                    <?php if ($entity_type === 'client'): ?>
+                    <?php if ($entity_type === 'chart_account'): ?>
                         <small style="font-weight:400;color:var(--gray-400);font-size:12px;">
-                            (Receipts, Payments & GL Entries)
+                            (GL Entries)
+                        </small>
+                    <?php elseif ($entity_type === 'bank_account'): ?>
+                        <small style="font-weight:400;color:var(--gray-400);font-size:12px;">
+                            (Receipts & Payments for this bank account)
                         </small>
                     <?php else: ?>
                         <small style="font-weight:400;color:var(--gray-400);font-size:12px;">
-                            (GL Entries Only)
+                            (Receipts, Payments & GL Entries)
                         </small>
                     <?php endif; ?>
                 </h6>
@@ -1785,6 +1751,7 @@ include '../includes/header.php';
                                 $source_class = 'gl_entry';
                                 if ($source === 'Receipt') $source_class = 'receipt';
                                 elseif ($source === 'Payment') $source_class = 'payment';
+                                elseif ($source === 'Custodian Trade') $source_class = 'custodian_trade';
                                 
                                 $debit = isset($transaction['debit']) && $transaction['debit'] > 0 ? $transaction['debit'] : 0;
                                 $credit = isset($transaction['credit']) && $transaction['credit'] > 0 ? $transaction['credit'] : 0;

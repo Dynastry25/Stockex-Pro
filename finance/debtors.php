@@ -148,6 +148,17 @@ function getEntityTypeColor($type) {
     return $colors[$type] ?? '#6B7280';
 }
 
+function buildEntityLedgerUrl($type, $id, $return_to = '') {
+    $params = [
+        'type' => $type,
+        'id' => (string)$id,
+    ];
+    if ($return_to !== '') {
+        $params['return_to'] = $return_to;
+    }
+    return BASE_URL . 'finance/entity_ledger?' . http_build_query($params);
+}
+
 // Function to get all balances with aging
 function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_date = null, $end_date = null, $limit = null, $offset = 0) {
     $as_of_date = $as_of_date ?: date('Y-m-d');
@@ -168,8 +179,8 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
     if (!$entity_type || $entity_type === 'custodian') {
         $entity_queries[] = [
             'type' => 'custodian',
-            'query' => "SELECT id, custodian_name as name, custodian_code as code, contact_person, phone, email FROM custodians WHERE status = 'active' AND is_active = 1",
-            'count_query' => "SELECT COUNT(*) as total FROM custodians WHERE status = 'active' AND is_active = 1",
+            'query' => "SELECT id, custodian_name as name, custodian_code as code, contact_person, phone, email FROM custodians WHERE is_active = 1 AND (status = 'active' OR status = '' OR status IS NULL)",
+            'count_query' => "SELECT COUNT(*) as total FROM custodians WHERE is_active = 1 AND (status = 'active' OR status = '' OR status IS NULL)",
             'params' => []
         ];
     }
@@ -195,8 +206,8 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
     if (!$entity_type || $entity_type === 'broker') {
         $entity_queries[] = [
             'type' => 'broker',
-            'query' => "SELECT id, broker_name as name, broker_code as code, contact_person, phone, email FROM brokers WHERE status = 'active' AND is_active = 1",
-            'count_query' => "SELECT COUNT(*) as total FROM brokers WHERE status = 'active' AND is_active = 1",
+            'query' => "SELECT id, broker_name as name, broker_code as code, contact_person, phone, email FROM brokers WHERE is_active = 1 AND (status = 'active' OR status = '' OR status IS NULL)",
+            'count_query' => "SELECT COUNT(*) as total FROM brokers WHERE is_active = 1 AND (status = 'active' OR status = '' OR status IS NULL)",
             'params' => []
         ];
     }
@@ -297,6 +308,47 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
             $payments_stmt = $db->prepare($payments_query);
             $payments_stmt->execute($payments_params);
             $payments = $payments_stmt->fetchAll();
+
+            // Custodian cash-flow transactions are stored canonically in trades.sca_code.
+            // The legacy custodians_trades table is not reliable in older production schemas
+            // (historical uploads can exist in trades while that derived table is empty).
+            // Treat BUY-side custodian trades as payments/outflows and SELL-side trades as
+            // receipts/inflows so the list and detailed ledger use the same source of truth.
+            $custodian_trades = [];
+            if ($entity_type === 'custodian') {
+                $custodian_code = trim((string)($entity['code'] ?? ''));
+                if ($custodian_code !== '') {
+                    try {
+                        $custodian_trade_query = "SELECT id, trade_reference, exchange_reference,
+                                                        asset_class, security_id, security_name,
+                                                        client_cds_account, client_name, trade_side,
+                                                        consideration, currency, trade_date,
+                                                        settlement_date, created_at, uploaded_by
+                                                 FROM trades
+                                                 WHERE TRIM(sca_code) = ?
+                                                   AND COALESCE(consideration, 0) <> 0
+                                                   AND (status IS NULL OR status <> 'cancelled')";
+                        $custodian_trade_params = [$custodian_code];
+
+                        if ($start_date && $end_date) {
+                            $custodian_trade_query .= " AND trade_date BETWEEN ? AND ?";
+                            $custodian_trade_params[] = $start_date;
+                            $custodian_trade_params[] = $end_date;
+                        } elseif ($as_of_date) {
+                            $custodian_trade_query .= " AND trade_date <= ?";
+                            $custodian_trade_params[] = $as_of_date;
+                        }
+
+                        $custodian_trade_query .= " ORDER BY trade_date ASC, id ASC";
+                        $custodian_trade_stmt = $db->prepare($custodian_trade_query);
+                        $custodian_trade_stmt->execute($custodian_trade_params);
+                        $custodian_trades = $custodian_trade_stmt->fetchAll(PDO::FETCH_ASSOC);
+                    } catch (Throwable $e) {
+                        error_log("Error getting custodian trades for {$custodian_code}: " . $e->getMessage());
+                        $custodian_trades = [];
+                    }
+                }
+            }
             
             // Get GL entries for this entity
             $gl_entries = [];
@@ -383,9 +435,22 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
                 }
             }
             
+            // Custodian trade-side totals use the same direction as the custodian settlement
+            // report: BUY => money payable to the custodian, SELL => money receivable.
+            $custodian_receipts_total = 0;
+            $custodian_payments_total = 0;
+            foreach ($custodian_trades as $custodian_trade) {
+                $custodian_amount = (float)($custodian_trade['consideration'] ?? 0);
+                if (($custodian_trade['trade_side'] ?? '') === 'buy') {
+                    $custodian_payments_total += $custodian_amount;
+                } elseif (($custodian_trade['trade_side'] ?? '') === 'sell') {
+                    $custodian_receipts_total += $custodian_amount;
+                }
+            }
+
             // Calculate totals
-            $total_receipts = array_sum(array_column($receipts, 'amount')) + $gl_receipts_total;
-            $total_payments = array_sum(array_column($payments, 'amount')) + $gl_payments_total;
+            $total_receipts = array_sum(array_column($receipts, 'amount')) + $gl_receipts_total + $custodian_receipts_total;
+            $total_payments = array_sum(array_column($payments, 'amount')) + $gl_payments_total + $custodian_payments_total;
             
             // For bank accounts, use current_balance as authoritative
             if ($entity_type === 'bank_account') {
@@ -430,6 +495,42 @@ function getAllBalances($db, $entity_type = null, $as_of_date = null, $start_dat
                 ];
             }
             
+            foreach ($custodian_trades as $custodian_trade) {
+                $custodian_amount = (float)($custodian_trade['consideration'] ?? 0);
+                $trade_side = strtolower((string)($custodian_trade['trade_side'] ?? ''));
+                if ($trade_side !== 'buy' && $trade_side !== 'sell') {
+                    continue;
+                }
+
+                $security = trim((string)($custodian_trade['security_name'] ?? ''));
+                if ($security === '') {
+                    $security = trim((string)($custodian_trade['security_id'] ?? ''));
+                }
+                $client_name = trim((string)($custodian_trade['client_name'] ?? ''));
+                $settlement_date = trim((string)($custodian_trade['settlement_date'] ?? ''));
+                $description = 'Custodian ' . strtoupper($trade_side) . ' trade';
+                if ($security !== '') {
+                    $description .= ' - ' . $security;
+                }
+                if ($client_name !== '') {
+                    $description .= ' - ' . $client_name;
+                }
+                if ($settlement_date !== '') {
+                    $description .= ' (settles ' . $settlement_date . ')';
+                }
+
+                $transactions[] = [
+                    'date' => $custodian_trade['trade_date'],
+                    'type' => 'custodian_trade',
+                    'description' => $description,
+                    'reference' => $custodian_trade['trade_reference'],
+                    'amount' => $trade_side === 'buy' ? $custodian_amount : -$custodian_amount,
+                    'currency' => $custodian_trade['currency'] ?: 'TZS',
+                    'bank_account' => trim((string)($custodian_trade['security_id'] ?? '')),
+                    'running_balance' => 0
+                ];
+            }
+
             // Add GL entries as transactions
             foreach ($gl_entries as $gl) {
                 $gl_amount = 0;
@@ -1848,7 +1949,7 @@ include '../includes/header.php';
                                         </code>
                                     </td>
                                     <td>
-                                        <a href="entity_ledger.php?type=<?php echo urlencode($entity_info['type']); ?>&id=<?php echo urlencode($entity_info['id']); ?><?php echo isset($_GET['entity_type']) ? '&return_to=' . urlencode(http_build_query(['entity_type' => $_GET['entity_type']])) : ''; ?>" 
+                                        <a href="<?php echo htmlspecialchars(buildEntityLedgerUrl($entity_info['type'], $entity_info['id'], http_build_query(array_diff_key($_GET, ['export' => ''])))); ?>"
                                            class="entity-name-link">
                                             <?php echo htmlspecialchars($entity_info['name']); ?>
                                             <i class="bi bi-box-arrow-up-right"></i>
@@ -1918,7 +2019,7 @@ include '../includes/header.php';
                                     </td>
                                     <td class="text-center">
                                         <div class="action-buttons" style="justify-content: center;">
-                                            <a href="entity_ledger.php?type=<?php echo urlencode($entity_info['type']); ?>&id=<?php echo urlencode($entity_info['id']); ?><?php echo isset($_GET['entity_type']) ? '&return_to=' . urlencode(http_build_query(['entity_type' => $_GET['entity_type']])) : ''; ?>" 
+                                            <a href="<?php echo htmlspecialchars(buildEntityLedgerUrl($entity_info['type'], $entity_info['id'], http_build_query(array_diff_key($_GET, ['export' => ''])))); ?>"
                                                class="action-btn view" title="View Ledger">
                                                 <i class="bi bi-eye"></i>
                                             </a>
@@ -2068,6 +2169,8 @@ include '../includes/header.php';
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    const entityLedgerBaseUrl = <?php echo json_encode(BASE_URL . 'finance/entity_ledger'); ?>;
+    const entityLedgerReturnTo = <?php echo json_encode(http_build_query(array_diff_key($_GET, ['export' => '']))); ?>;
     // Update per page
     window.updatePerPage = function(value) {
         document.querySelector('input[name="page"]').value = 1;
@@ -2190,7 +2293,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     </div>
                 </div>
                 <div style="margin-top: 12px; text-align: right;">
-                    <a href="entity_ledger.php?type=${type}&id=${id}" class="btn-modern btn-modern-primary" style="font-size: 13px;">
+                    <a href="${entityLedgerBaseUrl}?type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}${entityLedgerReturnTo ? `&return_to=${encodeURIComponent(entityLedgerReturnTo)}` : ''}" class="btn-modern btn-modern-primary" style="font-size: 13px;">
                         <i class="bi bi-eye"></i> View Full Ledger
                     </a>
                 </div>
