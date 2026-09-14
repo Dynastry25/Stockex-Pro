@@ -68,8 +68,24 @@ $today = date('Y-m-d');
 $tab_active = in_array($filter_status, ['pending', 'overdue', 'today', 'paid', 'linked', 'failed']);
 $has_date_filters = !empty($filter_date_from) || !empty($filter_date_to);
 
+// Rebuild the settlement page URL with the current tab/filters so redirects
+// (e.g. "no trades found") return to the same view the user was on.
+function settlement_return_url_from_post() {
+    $keep = ['tab', 'filter_status', 'filter_client', 'filter_security', 'filter_side',
+             'filter_date_from', 'filter_date_to', 'filter_amount_min', 'filter_amount_max',
+             'page', 'side', 'hide_buy'];
+    $p = [];
+    foreach ($keep as $k) {
+        if (isset($_POST[$k]) && $_POST[$k] !== '') {
+            $p[$k] = $_POST[$k];
+        }
+    }
+    return 'settlement.php' . (!empty($p) ? '?' . http_build_query($p) : '');
+}
+
 if (!in_array($export_type, ['contract_notes', 'client_list'])) {
-    header('Location: settlement.php?message=' . urlencode('Invalid export type selected.') . '&type=danger');
+    $url = settlement_return_url_from_post();
+    header('Location: ' . $url . (strpos($url, '?') !== false ? '&' : '?') . 'message=' . urlencode('Invalid export type selected.') . '&type=danger');
     exit;
 }
 
@@ -172,7 +188,8 @@ $trades = array_values(array_filter($trades, function ($trade) use ($filter_stat
 }));
 
 if (empty($trades)) {
-    header('Location: settlement.php?message=' . urlencode('No trades found for the selected date.' . (!empty($cds_filter) ? ' CDS: ' . $cds_filter : '')) . '&type=warning');
+    $url = settlement_return_url_from_post();
+    header('Location: ' . $url . (strpos($url, '?') !== false ? '&' : '?') . 'message=' . urlencode('No trades found for the selected date.' . (!empty($cds_filter) ? ' CDS: ' . $cds_filter : '')) . '&type=warning');
     exit;
 }
 

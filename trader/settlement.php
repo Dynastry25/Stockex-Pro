@@ -618,6 +618,25 @@ try {
 }
 
 // ============================================
+// RETURN-URL HELPER: preserve the current tab,
+// filters and page so action POSTs (pay / link /
+// unlink / unpaid / failed / retry) redirect back
+// to the same view instead of the default page.
+// ============================================
+function redirectBackToSettlement($success_message, $error_message) {
+    $parts = [];
+    parse_str($_SERVER['QUERY_STRING'] ?? '', $parts);
+    unset($parts['message'], $parts['type']);
+    $scroll = isset($_POST['scroll_y']) ? (int)$_POST['scroll_y'] : 0;
+    if ($scroll > 0) {
+        $parts['scroll_y'] = $scroll;
+    }
+    $qs = http_build_query($parts);
+    header('Location: settlement.php' . ($qs !== '' ? '?' . $qs . '&' : '?') . 'message=' . urlencode($success_message ?: $error_message) . '&type=' . ($success_message ? 'success' : 'danger'));
+    exit;
+}
+
+// ============================================
 // HANDLE SINGLE PAYMENT
 // ============================================
 if (isset($_POST['single_payment']) && isset($_POST['trade_id'])) {
@@ -768,8 +787,7 @@ if (isset($_POST['single_payment']) && isset($_POST['trade_id'])) {
         $error_message = 'Trade not found.';
     }
     
-    header('Location: settlement.php?message=' . urlencode($success_message ?: $error_message) . '&type=' . ($success_message ? 'success' : 'danger'));
-    exit;
+    redirectBackToSettlement($success_message, $error_message);
 }
 
 // ============================================
@@ -882,8 +900,7 @@ if (isset($_POST['link_trade']) && isset($_POST['trade_id']) && isset($_POST['li
         error_log("Link trade error: " . $e->getMessage());
     }
     
-    header('Location: settlement.php?message=' . urlencode($success_message ?: $error_message) . '&type=' . ($success_message ? 'success' : 'danger'));
-    exit;
+    redirectBackToSettlement($success_message, $error_message);
 }
 
 // ============================================
@@ -954,8 +971,7 @@ if (isset($_POST['unlink_trade']) && isset($_POST['trade_id'])) {
         error_log("Unlink trade error: " . $e->getMessage());
     }
     
-    header('Location: settlement.php?message=' . urlencode($success_message ?: $error_message) . '&type=' . ($success_message ? 'success' : 'danger'));
-    exit;
+    redirectBackToSettlement($success_message, $error_message);
 }
 
 // ============================================
@@ -1005,8 +1021,7 @@ if (isset($_POST['mark_unpaid']) && isset($_POST['trade_id'])) {
         $error_message = 'Error: ' . $e->getMessage();
     }
     
-    header('Location: settlement.php?message=' . urlencode($success_message ?: $error_message) . '&type=' . ($success_message ? 'success' : 'danger'));
-    exit;
+    redirectBackToSettlement($success_message, $error_message);
 }
 
 // ============================================
@@ -1043,8 +1058,7 @@ if (isset($_POST['mark_failed']) && isset($_POST['trade_id'])) {
         $error_message = 'Error: ' . $e->getMessage();
     }
     
-    header('Location: settlement.php?message=' . urlencode($success_message ?: $error_message) . '&type=' . ($success_message ? 'success' : 'danger'));
-    exit;
+    redirectBackToSettlement($success_message, $error_message);
 }
 
 // ============================================
@@ -1078,8 +1092,7 @@ if (isset($_POST['retry_failed']) && isset($_POST['trade_id'])) {
         $error_message = 'Error: ' . $e->getMessage();
     }
     
-    header('Location: settlement.php?message=' . urlencode($success_message ?: $error_message) . '&type=' . ($success_message ? 'success' : 'danger'));
-    exit;
+    redirectBackToSettlement($success_message, $error_message);
 }
 
 // ============================================
@@ -2364,6 +2377,20 @@ $linkRef = (!empty($trade['ds_trade_reference'])) ? $trade['ds_trade_reference']
 </form>
 
 <script>
+// Preserve scroll position across action POSTs (pay / link / unlink / unpaid /
+// failed / retry) so the page returns exactly where it was.
+function preserveScrollOnSubmit(formId) {
+    var f = document.getElementById(formId);
+    if (!f) { return; }
+    var field = f.querySelector('input[name="scroll_y"]');
+    if (!field) {
+        field = document.createElement('input');
+        field.type = 'hidden';
+        field.name = 'scroll_y';
+        f.appendChild(field);
+    }
+    field.value = window.scrollY;
+}
 // Remove filter handler
 document.addEventListener('DOMContentLoaded', function() {
     document.querySelectorAll('.remove-filter').forEach(function(el) {
@@ -2395,6 +2422,20 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Reapply any saved client/security search values on load (no reload needed)
     liveFilterSettlement();
+
+    // Attach scroll preservation to the modal forms (Pay / Bulk / Link / Failed).
+    ['paymentForm', 'bulkPaymentForm', 'linkTradeForm', 'failureForm'].forEach(function(id) {
+        var f = document.getElementById(id);
+        if (f) {
+            f.addEventListener('submit', function() { preserveScrollOnSubmit(id); });
+        }
+    });
+
+    // If we were redirected back from an action, restore the scroll position.
+    var scrollY = <?php echo isset($_GET['scroll_y']) ? (int)$_GET['scroll_y'] : 0; ?>;
+    if (scrollY > 0) {
+        window.scrollTo(0, scrollY);
+    }
 });
 
 // Live (no-reload) client-side filter for the Client and Security fields.
@@ -2666,7 +2707,7 @@ function showGroupedTrades(tradeId) {
 // Show linked details
 function showLinkedDetails(tradeId) {
     document.getElementById('unlinkTradeId').value = tradeId;
-    document.getElementById('unlinkForm').action = window.location.pathname;
+    document.getElementById('unlinkForm').action = window.location.pathname + window.location.search;
     var saleEl = document.getElementById('linkedSaleDetails');
     var buyEl = document.getElementById('linkedBuyDetails');
     saleEl.innerHTML = '<span class="text-muted">Loading...</span>';
@@ -2722,7 +2763,8 @@ function confirmUnlink() {
     }
     if (confirm('Unlink this sale trade from its linked buy trade(s)? This will clear the link and settlement linkage data.')) {
         let unlinkForm = document.getElementById('unlinkForm');
-        unlinkForm.action = window.location.pathname;
+        unlinkForm.action = window.location.pathname + window.location.search;
+        preserveScrollOnSubmit('unlinkForm');
         unlinkForm.submit();
     }
 }
@@ -2731,6 +2773,7 @@ function confirmUnlink() {
 function markAsUnpaid(tradeId) {
     if (confirm('Are you sure you want to undo this payment? This will mark the trade as unpaid.')) {
         document.getElementById('unpaidTradeId').value = tradeId;
+        preserveScrollOnSubmit('unpaidForm');
         document.getElementById('unpaidForm').submit();
     }
 }
@@ -2745,6 +2788,7 @@ function markAsFailed(tradeId) {
 function retryFailed(tradeId) {
     if (confirm('Are you sure you want to retry this failed trade? It will be marked as unpaid and ready for payment.')) {
         document.getElementById('retryTradeId').value = tradeId;
+        preserveScrollOnSubmit('retryFailedForm');
         document.getElementById('retryFailedForm').submit();
     }
 }
@@ -2800,7 +2844,7 @@ function showBulkPaymentModal() {
 
 // Reset filters
 function resetFilters() {
-    window.location.href = 'settlement.php?tab=all&side=sell_only&hide_buy=1';
+    window.location.href = 'settlement.php?tab=pending&side=sell_only&hide_buy=1';
 }
 </script>
 
