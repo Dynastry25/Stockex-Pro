@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 // ============================================
 // SETTLEMENT.PHP - COMPLETE WITH AUTO-FILTER
 // ============================================
@@ -637,6 +637,70 @@ function redirectBackToSettlement($success_message, $error_message) {
 }
 
 // ============================================
+// AJAX HELPERS: the Pay / Link forms are now
+// submitted in-page (fetch + X-Requested-With)
+// so the row disappears without a page reload.
+// ============================================
+function isAjaxRequest() {
+    return strtolower($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'xmlhttprequest';
+}
+
+function respondAjax($success, $message, $extra = []) {
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+    header('Content-Type: application/json');
+    echo json_encode(array_merge(['success' => (bool)$success, 'message' => $message], $extra));
+    exit;
+}
+
+// After a trade is paid/linked, return what is left of its settlement group
+// (same client + security + side + trade date) so the client can mirror a
+// reload: remove the row when the group is fully settled, or refresh the
+// row to show the remaining trades when only part of the group is done.
+function getGroupRemainingAfterSettlement($db, $trade) {
+    $st = $db->prepare("
+        SELECT
+            COUNT(*) AS remaining,
+            IFNULL(SUM(t.quantity), 0) AS remaining_qty,
+            IFNULL(AVG(t.price), 0) AS remaining_avg_price,
+            IFNULL(SUM(t.consideration), 0) AS remaining_amount,
+            MIN(t.id) AS next_trade_id
+        FROM trades t
+        WHERE t.status = 'active'
+          AND t.client_cds_account = ?
+          AND t.security_id = ?
+          AND t.trade_side = ?
+          AND DATE(t.trade_date) = DATE(?)
+          AND (t.settlement_status IS NULL OR t.settlement_status NOT IN ('paid','linked','failed','cancelled'))
+    ");
+    $st->execute([
+        $trade['client_cds_account'] ?? '',
+        $trade['security_id'],
+        $trade['trade_side'],
+        $trade['trade_date']
+    ]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    $remaining = (int)($row['remaining'] ?? 0);
+    $next_trade_ref = '';
+    if ($remaining > 0) {
+        $r2 = $db->prepare("SELECT trade_reference FROM trades WHERE id = ?");
+        $r2->execute([(int)$row['next_trade_id']]);
+        $next_trade_ref = (string)$r2->fetchColumn();
+    }
+    return [
+        'group_remaining' => $remaining,
+        'remaining_qty' => (float)($row['remaining_qty'] ?? 0),
+        'remaining_avg_price' => (float)($row['remaining_avg_price'] ?? 0),
+        'remaining_amount' => (float)($row['remaining_amount'] ?? 0),
+        'remaining_amount_str' => number_format((float)($row['remaining_amount'] ?? 0), 2),
+        'next_trade_id' => $remaining > 0 ? (int)$row['next_trade_id'] : 0,
+        'next_trade_ref' => $next_trade_ref,
+        'asset_class' => $trade['asset_class'] ?? '',
+    ];
+}
+
+// ============================================
 // HANDLE SINGLE PAYMENT
 // ============================================
 if (isset($_POST['single_payment']) && isset($_POST['trade_id'])) {
@@ -773,6 +837,7 @@ if (isset($_POST['single_payment']) && isset($_POST['trade_id'])) {
                     }
                     
                     $db->commit();
+                    $remaining_data = getGroupRemainingAfterSettlement($db, $trade);
                     $success_message = 'Payment recorded successfully! Payment No: ' . $payment_no;
                 } else {
                     throw new Exception("Error updating trade as paid.");
@@ -787,6 +852,9 @@ if (isset($_POST['single_payment']) && isset($_POST['trade_id'])) {
         $error_message = 'Trade not found.';
     }
     
+    if (isAjaxRequest()) {
+        respondAjax(!empty($success_message), $success_message ?: $error_message, array_merge(['trade_id' => $trade_id], $remaining_data ?? []));
+    }
     redirectBackToSettlement($success_message, $error_message);
 }
 
@@ -892,6 +960,7 @@ if (isset($_POST['link_trade']) && isset($_POST['trade_id']) && isset($_POST['li
         syncSettlementTradeToDealingSheetSafely($db, $trade_id, $current_user);
         
         $db->commit();
+        $remaining_data = getGroupRemainingAfterSettlement($db, $trade);
         $success_message = "Trade successfully linked! Sale trade #$trade_id linked to " . count($linked_trade_ids) . " buy trade(s).";
         
     } catch (Exception $e) {
@@ -900,6 +969,12 @@ if (isset($_POST['link_trade']) && isset($_POST['trade_id']) && isset($_POST['li
         error_log("Link trade error: " . $e->getMessage());
     }
     
+    if (isAjaxRequest()) {
+        respondAjax(!empty($success_message), $success_message ?: $error_message, array_merge([
+            'trade_id' => $trade_id,
+            'linked_ids' => $linked_ids,
+        ], $remaining_data ?? []));
+    }
     redirectBackToSettlement($success_message, $error_message);
 }
 
@@ -1422,8 +1497,8 @@ include '../includes/header.php';
                     <div class="row no-gutters align-items-center">
                         <div class="col mr-2">
                             <div class="text-xs fw-bold text-primary text-uppercase mb-1">Total Value</div>
-                            <div class="h5 mb-0 fw-bold text-gray-800">TZS <?php echo number_format($stats['total_value'], 2); ?></div>
-                            <div class="mt-2 text-muted small"><?php echo $stats['total_count']; ?> trade groups</div>
+                            <div class="h5 mb-0 fw-bold text-gray-800" id="statTotalValue">TZS <?php echo number_format($stats['total_value'], 2); ?></div>
+                            <div class="mt-2 text-muted small" id="statTotalCount"><?php echo $stats['total_count']; ?> trade groups</div>
                         </div>
                         <div class="col-auto">
                             <i class="bi bi-currency-exchange fa-2x text-gray-300"></i>
@@ -1439,8 +1514,8 @@ include '../includes/header.php';
                     <div class="row no-gutters align-items-center">
                         <div class="col mr-2">
                             <div class="text-xs fw-bold text-danger text-uppercase mb-1">Overdue</div>
-                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $stats['overdue_count']; ?></div>
-                            <div class="mt-2 text-muted small">TZS <?php echo number_format($stats['overdue_value'], 2); ?></div>
+                            <div class="h5 mb-0 fw-bold text-gray-800" id="statOverdueCount"><?php echo $stats['overdue_count']; ?></div>
+                            <div class="mt-2 text-muted small" id="statOverdueValue">TZS <?php echo number_format($stats['overdue_value'], 2); ?></div>
                         </div>
                         <div class="col-auto">
                             <i class="bi bi-exclamation-triangle fa-2x text-gray-300"></i>
@@ -1456,8 +1531,8 @@ include '../includes/header.php';
                     <div class="row no-gutters align-items-center">
                         <div class="col mr-2">
                             <div class="text-xs fw-bold text-warning text-uppercase mb-1">Due Today</div>
-                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $stats['today_count']; ?></div>
-                            <div class="mt-2 text-muted small">TZS <?php echo number_format($stats['today_value'], 2); ?></div>
+                            <div class="h5 mb-0 fw-bold text-gray-800" id="statTodayCount"><?php echo $stats['today_count']; ?></div>
+                            <div class="mt-2 text-muted small" id="statTodayValue">TZS <?php echo number_format($stats['today_value'], 2); ?></div>
                         </div>
                         <div class="col-auto">
                             <i class="bi bi-calendar-day fa-2x text-gray-300"></i>
@@ -1473,8 +1548,8 @@ include '../includes/header.php';
                     <div class="row no-gutters align-items-center">
                         <div class="col mr-2">
                             <div class="text-xs fw-bold text-success text-uppercase mb-1">Paid</div>
-                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $stats['paid_count']; ?></div>
-                            <div class="mt-2 text-muted small">TZS <?php echo number_format($stats['paid_value'], 2); ?></div>
+                            <div class="h5 mb-0 fw-bold text-gray-800" id="statPaidCount"><?php echo $stats['paid_count']; ?></div>
+                            <div class="mt-2 text-muted small" id="statPaidValue">TZS <?php echo number_format($stats['paid_value'], 2); ?></div>
                         </div>
                         <div class="col-auto">
                             <i class="bi bi-check-circle fa-2x text-gray-300"></i>
@@ -1490,8 +1565,8 @@ include '../includes/header.php';
                     <div class="row no-gutters align-items-center">
                         <div class="col mr-2">
                             <div class="text-xs fw-bold text-info text-uppercase mb-1">Linked</div>
-                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $stats['linked_count']; ?></div>
-                            <div class="mt-2 text-muted small">TZS <?php echo number_format($stats['linked_value'], 2); ?></div>
+                            <div class="h5 mb-0 fw-bold text-gray-800" id="statLinkedCount"><?php echo $stats['linked_count']; ?></div>
+                            <div class="mt-2 text-muted small" id="statLinkedValue">TZS <?php echo number_format($stats['linked_value'], 2); ?></div>
                         </div>
                         <div class="col-auto">
                             <i class="bi bi-link fa-2x text-gray-300"></i>
@@ -1507,8 +1582,8 @@ include '../includes/header.php';
                     <div class="row no-gutters align-items-center">
                         <div class="col mr-2">
                             <div class="text-xs fw-bold text-dark text-uppercase mb-1">Failed</div>
-                            <div class="h5 mb-0 fw-bold text-gray-800"><?php echo $stats['failed_count']; ?></div>
-                            <div class="mt-2 text-muted small">TZS <?php echo number_format($stats['failed_value'], 2); ?></div>
+                            <div class="h5 mb-0 fw-bold text-gray-800" id="statFailedCount"><?php echo $stats['failed_count']; ?></div>
+                            <div class="mt-2 text-muted small" id="statFailedValue">TZS <?php echo number_format($stats['failed_value'], 2); ?></div>
                         </div>
                         <div class="col-auto">
                             <i class="bi bi-x-circle fa-2x text-gray-300"></i>
@@ -1654,43 +1729,43 @@ include '../includes/header.php';
                 <li class="nav-item">
                     <a class="nav-link <?php echo $filter_tab === 'pending' ? 'active' : ''; ?>" href="?tab=pending&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" role="tab">
                         <i class="bi bi-hourglass-split me-2"></i>Pending
-                        <span class="badge bg-secondary ms-2"><?php echo $stats['pending_count']; ?></span>
+                        <span class="badge bg-secondary ms-2" id="tabBadgePending"><?php echo $stats['pending_count']; ?></span>
                     </a>
                 </li>
                 <li class="nav-item">
                     <a class="nav-link <?php echo $filter_tab === 'overdue' ? 'active' : ''; ?>" href="?tab=overdue&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" role="tab">
                         <i class="bi bi-exclamation-triangle me-2"></i>Overdue
-                        <span class="badge bg-danger ms-2"><?php echo $stats['overdue_count']; ?></span>
+                        <span class="badge bg-danger ms-2" id="tabBadgeOverdue"><?php echo $stats['overdue_count']; ?></span>
                     </a>
                 </li>
                 <li class="nav-item">
                     <a class="nav-link <?php echo $filter_tab === 'today' ? 'active' : ''; ?>" href="?tab=today&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" role="tab">
                         <i class="bi bi-calendar-day me-2"></i>Due Today
-                        <span class="badge bg-warning ms-2"><?php echo $stats['today_count']; ?></span>
+                        <span class="badge bg-warning ms-2" id="tabBadgeToday"><?php echo $stats['today_count']; ?></span>
                     </a>
                 </li>
                 <li class="nav-item">
                     <a class="nav-link <?php echo $filter_tab === 'paid' ? 'active' : ''; ?>" href="?tab=paid&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" role="tab">
                         <i class="bi bi-check-circle me-2"></i>Paid
-                        <span class="badge bg-success ms-2"><?php echo $stats['paid_count']; ?></span>
+                        <span class="badge bg-success ms-2" id="tabBadgePaid"><?php echo $stats['paid_count']; ?></span>
                     </a>
                 </li>
                 <li class="nav-item">
                     <a class="nav-link <?php echo $filter_tab === 'linked' ? 'active' : ''; ?>" href="?tab=linked&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" role="tab">
                         <i class="bi bi-link me-2"></i>Linked
-                        <span class="badge bg-info ms-2"><?php echo $stats['linked_count']; ?></span>
+                        <span class="badge bg-info ms-2" id="tabBadgeLinked"><?php echo $stats['linked_count']; ?></span>
                     </a>
                 </li>
                 <li class="nav-item">
                     <a class="nav-link <?php echo $filter_tab === 'failed' ? 'active' : ''; ?>" href="?tab=failed&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" role="tab">
                         <i class="bi bi-x-circle me-2"></i>Failed
-                        <span class="badge bg-dark ms-2"><?php echo $stats['failed_count']; ?></span>
+                        <span class="badge bg-dark ms-2" id="tabBadgeFailed"><?php echo $stats['failed_count']; ?></span>
                     </a>
                 </li>
                 <li class="nav-item">
                     <a class="nav-link <?php echo $filter_tab === 'all' ? 'active' : ''; ?>" href="?tab=all&side=<?php echo urlencode($trade_side_filter); ?>&hide_buy=<?php echo urlencode($hide_buy_orders); ?><?php echo !empty($filter_client) ? '&filter_client=' . urlencode($filter_client) : ''; ?><?php echo !empty($filter_security) ? '&filter_security=' . urlencode($filter_security) : ''; ?><?php echo !empty($filter_side) ? '&filter_side=' . urlencode($filter_side) : ''; ?><?php echo !empty($filter_date_from) ? '&filter_date_from=' . urlencode($filter_date_from) : ''; ?><?php echo !empty($filter_date_to) ? '&filter_date_to=' . urlencode($filter_date_to) : ''; ?><?php echo $filter_amount_min > 0 ? '&filter_amount_min=' . $filter_amount_min : ''; ?><?php echo $filter_amount_max > 0 ? '&filter_amount_max=' . $filter_amount_max : ''; ?>" role="tab">
                         <i class="bi bi-list-check me-2"></i>All Settlements
-                        <span class="badge bg-primary ms-2"><?php echo $stats['total_count']; ?></span>
+                        <span class="badge bg-primary ms-2" id="tabBadgeAll"><?php echo $stats['total_count']; ?></span>
                     </a>
                 </li>
             </ul>
@@ -1707,7 +1782,7 @@ include '../includes/header.php';
                         </div>
                     <?php else: ?>
                         <div class="mb-2">
-                            <small class="text-muted" id="liveFilterCountWrap">Showing <span id="liveFilterCount"><?php echo $total_records; ?></span> of <?php echo $total_records; ?> rows (live search)</small>
+                            <small class="text-muted" id="liveFilterCountWrap">Showing <span id="liveFilterCount"><?php echo $total_records; ?></span> of <span id="liveFilterTotal"><?php echo $total_records; ?></span> rows (live search)</small>
                         </div>
                         <div class="table-responsive">
                             <table class="table table-hover" id="allSettlementsTable">
@@ -1769,7 +1844,7 @@ $linkRef = (!empty($trade['ds_trade_reference'])) ? $trade['ds_trade_reference']
                                             }
                                         }
                                     ?>
-                                        <tr>
+                                        <tr data-trade-id="<?php echo (int)$trade['id']; ?>">
                                             <td>
                                                 <input type="checkbox" class="trade-checkbox" value="<?php echo $trade['id']; ?>" onchange="updateBulkActions()">
                                             </td>
@@ -2423,8 +2498,19 @@ document.addEventListener('DOMContentLoaded', function() {
     // Reapply any saved client/security search values on load (no reload needed)
     liveFilterSettlement();
 
-    // Attach scroll preservation to the modal forms (Pay / Bulk / Link / Failed).
-    ['paymentForm', 'bulkPaymentForm', 'linkTradeForm', 'failureForm'].forEach(function(id) {
+    // Pay and Link are now submitted in-page (AJAX): the row disappears
+    // without a page reload so the user can continue with the next row.
+    // Bulk Payment and Failed keep the classic full-page POST.
+    ['paymentForm', 'linkTradeForm'].forEach(function(id) {
+        var f = document.getElementById(id);
+        if (f) {
+            f.addEventListener('submit', function(ev) {
+                ev.preventDefault();
+                submitFormAjax(f, id === 'paymentForm' ? onPaymentSuccess : onLinkSuccess);
+            });
+        }
+    });
+    ['bulkPaymentForm', 'failureForm'].forEach(function(id) {
         var f = document.getElementById(id);
         if (f) {
             f.addEventListener('submit', function() { preserveScrollOnSubmit(id); });
@@ -2437,6 +2523,259 @@ document.addEventListener('DOMContentLoaded', function() {
         window.scrollTo(0, scrollY);
     }
 });
+
+// ============================================================
+// AJAX Pay / Link: submit in-page (no page reload), then update
+// the table so the user can keep working on the next row.
+// ============================================================
+function getActiveSettlementTab() {
+    return (new URLSearchParams(window.location.search).get('tab') || 'pending');
+}
+
+function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+}
+
+function submitFormAjax(form, successCallback) {
+    var submitBtn = form.querySelector('button[type="submit"]');
+    var originalLabel = submitBtn ? submitBtn.innerHTML : '';
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Processing...';
+    }
+    var fd = new FormData(form);
+    fetch(window.location.href, {
+        method: 'POST',
+        body: fd,
+        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    })
+    .then(function(resp) { return resp.json(); })
+    .then(function(data) {
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = originalLabel; }
+        if (data && data.success) {
+            successCallback(data);
+        } else {
+            showToast((data && data.message) ? data.message : 'Action failed. Please try again.', 'danger');
+        }
+    })
+    .catch(function() {
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = originalLabel; }
+        showToast('Network error - the action did not complete. Please try again.', 'danger');
+    });
+}
+
+function closeModal(modalEl) {
+    if (!modalEl) { return; }
+    if (window.bootstrap) {
+        var inst = bootstrap.Modal.getInstance(modalEl);
+        if (!inst) { inst = new bootstrap.Modal(modalEl); }
+        inst.hide();
+    } else {
+        modalEl.classList.remove('show');
+        modalEl.style.display = 'none';
+        document.body.classList.remove('modal-open');
+    }
+}
+
+function onPaymentSuccess(data) {
+    var tradeId = data.trade_id || parseInt(document.getElementById('paymentTradeId').value, 10) || 0;
+    closeModal(document.getElementById('paymentModal'));
+    markSettlementRowDone(tradeId, 'paid', data);
+    showToast(data.message || 'Payment recorded successfully.', 'success');
+}
+
+function onLinkSuccess(data) {
+    var tradeId = data.trade_id || parseInt(document.getElementById('linkTradeId').value, 10) || 0;
+    closeModal(document.getElementById('linkTradeModal'));
+    markSettlementRowDone(tradeId, 'linked', data);
+    showToast(data.message || 'Trades linked successfully.', 'success');
+}
+
+function markSettlementRowDone(tradeId, newStatus, data) {
+    var tab = getActiveSettlementTab();
+    var row = document.querySelector('#allSettlementsTable tbody tr[data-trade-id="' + tradeId + '"]');
+    if (!row) { return; }
+    var amount = parseAmountFromRow(row);
+
+    // group_remaining > 0 means other trades in this group are still
+    // unsettled – mirror the reload by keeping the row but refreshing
+    // its quantity, amount and action buttons to show what is left.
+    if (data.group_remaining > 0) {
+        rebuildRowRemaining(row, tradeId, data);
+        return;
+    }
+
+    if (tab === 'pending' || tab === 'overdue' || tab === 'today') {
+        removeSettlementRow(row, tab, amount);
+    } else if (tab === 'all') {
+        rebuildRowAsSettled(row, tradeId, newStatus, data.linked_ids || []);
+    } else {
+        removeSettlementRow(row, tab, amount);
+    }
+}
+
+function parseAmountFromRow(row) {
+    if (!row.cells[6]) { return 0; }
+    var v = parseFloat((row.cells[6].textContent || '').replace(/[^0-9.\-]/g, ''));
+    return isNaN(v) ? 0 : v;
+}
+
+function removeSettlementRow(row, tab, amount) {
+    row.style.transition = 'opacity 0.35s ease';
+    row.style.opacity = '0';
+    setTimeout(function() {
+        if (row.parentNode) { row.parentNode.removeChild(row); }
+        updateCountsAfterRemoval(tab, amount || 0);
+        var table = document.getElementById('allSettlementsTable');
+        if (table && table.querySelectorAll('tbody tr').length === 0 && !document.getElementById('emptyAfterAjaxMsg')) {
+            var tbody = table.querySelector('tbody');
+            if (tbody) {
+                var msg = document.createElement('tr');
+                msg.id = 'emptyAfterAjaxMsg';
+                msg.innerHTML = '<td colspan="10" class="text-center py-5 text-muted">'
+                    + '<i class="bi bi-check-circle" style="font-size:3rem;opacity:0.3;"></i><br>'
+                    + 'All trades in this view have been settled.</td>';
+                tbody.appendChild(msg);
+            }
+        }
+        var totalEl = document.getElementById('liveFilterTotal');
+        if (totalEl) {
+            var n = parseInt(totalEl.textContent.replace(/[^0-9]/g, ''), 10);
+            if (!isNaN(n)) { totalEl.textContent = Math.max(0, n - 1); }
+        }
+        if (typeof liveFilterSettlement === 'function') { liveFilterSettlement(); }
+    }, 350);
+}
+
+function addToCount(el, delta) {
+    if (!el) { return; }
+    var n = parseInt(el.textContent.replace(/[^0-9]/g, ''), 10);
+    if (isNaN(n)) { n = 0; }
+    el.textContent = Math.max(0, n + delta);
+}
+
+function addToValue(el, delta) {
+    if (!el || !delta) { return; }
+    var n = parseFloat(el.textContent.replace(/[^0-9.\-]/g, ''));
+    if (isNaN(n)) { return; }
+    el.textContent = 'TZS ' + Math.max(0, n + delta).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function updateCountsAfterRemoval(tab, amount) {
+    addToCount(document.getElementById('tabBadgeAll'), -1);
+    addToValue(document.getElementById('statTotalValue'), -amount);
+    var totalCount = document.getElementById('statTotalCount');
+    if (totalCount) {
+        var n = parseInt(totalCount.textContent.replace(/[^0-9]/g, ''), 10);
+        if (!isNaN(n)) { totalCount.textContent = Math.max(0, n - 1) + ' trade groups'; }
+    }
+    if (tab === 'overdue') {
+        addToCount(document.getElementById('tabBadgeOverdue'), -1);
+        addToCount(document.getElementById('statOverdueCount'), -1);
+        addToValue(document.getElementById('statOverdueValue'), -amount);
+    } else if (tab === 'today') {
+        addToCount(document.getElementById('tabBadgeToday'), -1);
+        addToCount(document.getElementById('statTodayCount'), -1);
+        addToValue(document.getElementById('statTodayValue'), -amount);
+    } else {
+        addToCount(document.getElementById('tabBadgePending'), -1);
+    }
+}
+
+function buildPendingSellActions(id) {
+    return '<div class="btn-group btn-group-sm">'
+        + '<button type="button" class="btn btn-outline-success" onclick="showPaymentModal(' + id + ')"><i class="bi bi-cash-coin"></i> Pay</button>'
+        + '<button type="button" class="btn btn-outline-info" onclick="showLinkTradeModal(' + id + ')"><i class="bi bi-link"></i> Link</button>'
+        + '<button type="button" class="btn btn-outline-danger" onclick="markAsFailed(' + id + ')"><i class="bi bi-x-lg"></i> Cancel</button>'
+        + '<a href="trades.php?action=contract_note&id=' + id + '" class="btn btn-outline-primary btn-sm" title="Generate Contract Note"><i class="bi bi-file-earmark-text"></i></a>'
+        + '</div>';
+}
+
+function rebuildRowRemaining(row, tradeId, data) {
+    // Ref cell: show the next unpaid trade ref + remaining count badge
+    if (row.cells[1]) {
+        var ref = escapeHtml(data.next_trade_ref || '');
+        var more = (data.group_remaining || 1) - 1;
+        var html = '<div class="fw-semibold">' + ref;
+        if (more > 0) { html += ' <span class="badge-group">+' + more + ' more</span>'; }
+        html += '</div>';
+        row.cells[1].innerHTML = html;
+    }
+    // Quantity cell
+    if (row.cells[5]) {
+        var qty = parseFloat(data.remaining_qty || 0);
+        var qtyStr;
+        if (data.asset_class === 'bond') {
+            qtyStr = 'TZS ' + qty.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        } else {
+            qtyStr = Math.round(qty).toLocaleString('en-US');
+        }
+        if (data.group_remaining > 1) {
+            var avg = parseFloat(data.remaining_avg_price || 0);
+            qtyStr += '<br><small class="text-muted">avg: ' + avg.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</small>';
+        }
+        row.cells[5].innerHTML = qtyStr;
+    }
+    // Amount cell
+    if (row.cells[6]) {
+        row.cells[6].innerHTML = '<div class="fw-bold text-success">TZS ' + data.remaining_amount_str + '</div>';
+    }
+    // Data attribute + checkbox: point at the new representative trade id
+    row.setAttribute('data-trade-id', data.next_trade_id);
+    var cb = row.querySelector('.trade-checkbox');
+    if (cb) { cb.value = data.next_trade_id; }
+    // Actions: rebuild the pending-sell buttons for the new trade
+    if (row.cells[9] && data.next_trade_id) {
+        row.cells[9].innerHTML = buildPendingSellActions(data.next_trade_id);
+    }
+}
+
+function rebuildRowAsSettled(row, tradeId, newStatus, linkedIds) {
+    if (row.cells[8]) {
+        if (newStatus === 'paid') {
+            row.cells[8].innerHTML = '<span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Paid</span>';
+        } else if (newStatus === 'linked') {
+            row.cells[8].innerHTML = '<span class="badge bg-info"><i class="bi bi-link me-1"></i>Linked</span>';
+        }
+    }
+    if (!row.cells[9]) { return; }
+    var linkedId = (linkedIds && linkedIds.length) ? linkedIds[0] : tradeId;
+    var undoSale = '<button type="button" class="btn btn-outline-secondary btn-sm" onclick="markAsUnpaid(' + tradeId + ')">'
+        + '<i class="bi bi-arrow-counterclockwise"></i> Undo</button>';
+    var cnSale = '<a href="trades.php?action=contract_note&id=' + tradeId + '" class="btn btn-outline-primary btn-sm" title="Generate Contract Note">'
+        + '<i class="bi bi-file-earmark-text"></i></a>';
+    if (newStatus === 'paid') {
+        row.cells[9].innerHTML = '<div class="btn-group btn-group-sm">' + undoSale + cnSale + '</div>';
+    } else if (newStatus === 'linked') {
+        var cnBought = '<a href="trades.php?action=contract_note&id=' + linkedId + '" class="btn btn-outline-success btn-sm" title="Contract Note - Bought">'
+            + '<i class="bi bi-file-earmark-text"></i></a>';
+        row.cells[9].innerHTML = '<div class="btn-group btn-group-sm">'
+            + '<button type="button" class="btn btn-outline-info btn-sm" onclick="showLinkedDetails(' + tradeId + ')"><i class="bi bi-eye"></i> View Link</button>'
+            + cnSale + cnBought + '</div>';
+    }
+}
+
+function showToast(message, type) {
+    var container = document.getElementById('toastContainer');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toastContainer';
+        container.style.cssText = 'position:fixed;top:20px;right:20px;z-index:99999;';
+        document.body.appendChild(container);
+    }
+    var el = document.createElement('div');
+    el.className = 'toast show align-items-center text-bg-' + (type === 'danger' ? 'danger' : 'success') + ' border-0 shadow';
+    el.style.cssText = 'min-width:260px;';
+    el.innerHTML = '<div class="d-flex"><div class="toast-body"></div>'
+        + '<button type="button" class="btn-close btn-close-white me-2 m-auto" onclick="this.closest(\'.toast\').remove()"></button></div>';
+    el.querySelector('.toast-body').textContent = message;
+    container.appendChild(el);
+    setTimeout(function() {
+        if (el.parentNode) { el.parentNode.removeChild(el); }
+    }, 6000);
+}
 
 // Live (no-reload) client-side filter for the Client and Security fields.
 // Shows/hides table rows instantly as the user types, and persists the value
