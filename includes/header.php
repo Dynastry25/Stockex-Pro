@@ -290,6 +290,12 @@
                         </a>
                     </li>
                     <li class="nav-item">
+                        <a class="nav-link" href="<?php echo BASE_URL; ?>trader/trades">
+                            <i class="bi bi-list-ul"></i>
+                            <span>All Trades</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link" href="<?php echo BASE_URL; ?>trader/dealing_sheet.php">
                             <i class="bi bi-journal-check"></i>
                             <span>Dealing Sheet</span>
